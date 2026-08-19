@@ -400,6 +400,9 @@ Object.assign(CodemanApp.prototype, {
       if (mode === 'antigravity') {
         return await this.runAntigravity();
       }
+      if (mode === 'omp') {
+        return await this.runOmp();
+      }
       if (mode === 'pi') {
         return await this.runPi();
       }
@@ -408,9 +411,6 @@ Object.assign(CodemanApp.prototype, {
       }
       if (mode === 'deepseek') {
         return await this.runDeepSeek();
-      }
-      if (mode === 'omp') {
-        return await this.runOmp();
       }
       if (mode === 'shell') {
         return await this.runShell();
@@ -708,6 +708,9 @@ Object.assign(CodemanApp.prototype, {
     const label = document.getElementById('runBtnLabel');
     if (runBtn) {
       runBtn.className = `btn-toolbar btn-run mode-${mode}`;
+    }
+    if (gearBtn) {
+      gearBtn.className = `btn-toolbar btn-run-gear mode-${mode}`;
     }
     if (label) {
       label.textContent = mode === 'opencode' ? 'Run OC' : mode === 'codex' ? 'Run CX' : mode === 'gemini' ? 'Run GM' : mode === 'antigravity' ? 'Run AG' : mode === 'pi' ? 'Run PI' : mode === 'grok' ? 'Run GK' : mode === 'deepseek' ? 'Run DS' : mode === 'omp' ? 'Run OMP' : mode === 'shell' ? 'Run SH' : 'Run';
@@ -1383,24 +1386,17 @@ Object.assign(CodemanApp.prototype, {
     const isRemote = _runLoc === 'remote' || _runLoc === 'docker';
 
     const ownsLaunchTerminal = this._beginSessionLaunchStatus(`Starting Pi session in ${caseName}...`);
-  async runOmp() {
-    const caseName = document.getElementById('quickStartCase').value || 'testcase';
-    // Remote/docker cases run omp on the OTHER side — skip the local status probe
-    // and the local-only config below (quick-start rejects them for remote cases).
-    const _runLoc = (this.cases || []).find(c => c.name === caseName)?.location;
-    const isRemote = _runLoc === 'remote' || _runLoc === 'docker';
-
-    const ownsLaunchTerminal = this._beginSessionLaunchStatus(`Starting OMP session in ${caseName}...`);    this.terminal.focus();
+    this.terminal.focus();
 
     try {
       if (!isRemote) {
         const statusRes = await fetch('/api/pi/status');
-        const statusRes = await fetch('/api/omp/status');        const status = (await statusRes.json()).data;
+        const status = (await statusRes.json()).data;
         if (!status.available) {
           this._reportSessionLaunchError(
             ownsLaunchTerminal,
             'Pi CLI not found. Install with: npm install -g --ignore-scripts @earendil-works/pi-coding-agent'
-            'OMP CLI not found. Install with: curl -fsSL https://omp.sh/install | sh'          );
+          );
           return;
         }
       }
@@ -1418,6 +1414,47 @@ Object.assign(CodemanApp.prototype, {
       });
       const data = await res.json();
       if (!data.success) throw new Error(data.error || 'Failed to start Pi');
+      await this._ensureCreatedSessionVisible(data.data.sessionId, data.data.session);
+
+      if (data.data.sessionId) {
+        await this.selectSession(data.data.sessionId);
+      }
+
+      this.terminal.focus();
+    } catch (err) {
+      this._reportSessionLaunchError(ownsLaunchTerminal, err.message);
+    }
+  },
+
+  async runOmp() {
+    const caseName = document.getElementById('quickStartCase').value || 'testcase';
+    // Remote/docker cases run omp on the OTHER side — skip the local status probe
+    // and the local-only config below (quick-start rejects them for remote cases).
+    const _runLoc = (this.cases || []).find(c => c.name === caseName)?.location;
+    const isRemote = _runLoc === 'remote' || _runLoc === 'docker';
+
+    const ownsLaunchTerminal = this._beginSessionLaunchStatus(`Starting OMP session in ${caseName}...`);
+    this.terminal.focus();
+
+    try {
+      if (!isRemote) {
+        const statusRes = await fetch('/api/omp/status');
+        const status = (await statusRes.json()).data;
+        if (!status.available) {
+          this._reportSessionLaunchError(
+            ownsLaunchTerminal,
+            'OMP CLI not found. Install with: curl -fsSL https://omp.sh/install | sh'
+          );
+          return;
+        }
+      }
+
+      const envOverrides = this.buildEnvOverrides(this.getCaseSettings(caseName), this.loadAppSettingsFromStorage());
+      const res = await fetch('/api/quick-start', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          caseName,
           mode: 'omp',
           sessionName: `w${this._nextCaseSessionStartNumber(caseName)}-${caseName}`,
           ...(isRemote ? {} : {
@@ -1426,7 +1463,8 @@ Object.assign(CodemanApp.prototype, {
         })
       });
       const data = await res.json();
-      if (!data.success) throw new Error(data.error || 'Failed to start OMP');      await this._ensureCreatedSessionVisible(data.data.sessionId, data.data.session);
+      if (!data.success) throw new Error(data.error || 'Failed to start OMP');
+      await this._ensureCreatedSessionVisible(data.data.sessionId, data.data.session);
 
       if (data.data.sessionId) {
         await this.selectSession(data.data.sessionId);
@@ -1644,6 +1682,7 @@ Object.assign(CodemanApp.prototype, {
     const isAltMode = session.mode === 'opencode' || session.mode === 'codex' || session.mode === 'gemini' || session.mode === 'antigravity' || session.mode === 'pi' || session.mode === 'grok' || session.mode === 'deepseek' || session.mode === 'omp';
     this.switchOptionsTab(isAltMode ? 'summary' : 'respawn');
 
+    // Update respawn status display and buttons
     const respawnStatus = document.getElementById('sessionRespawnStatus');
     const enableBtn = document.getElementById('modalEnableRespawnBtn');
     const stopBtn = document.getElementById('modalStopRespawnBtn');
@@ -1673,6 +1712,7 @@ Object.assign(CodemanApp.prototype, {
     const isExternalCli = session.mode === 'opencode' || session.mode === 'codex' || session.mode === 'gemini' || session.mode === 'antigravity' || session.mode === 'pi' || session.mode === 'grok' || session.mode === 'deepseek' || session.mode === 'omp';
     const claudeOnlyEls = document.querySelectorAll('[data-claude-only]');
     claudeOnlyEls.forEach(el => { el.style.display = isExternalCli ? 'none' : ''; });
+
     // Reset duration presets to default (unlimited)
     this.selectDurationPreset('');
 
