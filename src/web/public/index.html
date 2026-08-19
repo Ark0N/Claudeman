@@ -24,6 +24,9 @@
   <!-- Preload critical resources — lets browser discover these during HTML parse
        instead of waiting until <script> tags at bottom-of-body are reached. -->
   <link rel="preload" href="vendor/xterm.min.js" as="script">
+  <!-- Symbols font before the terminal first paints — a late-loading icon font
+       leaves tofu in xterm's glyph atlas until something forces a re-render. -->
+  <link rel="preload" href="fonts/symbols-nerd-font-mono.woff2" as="font" type="font/woff2" crossorigin>
   <link rel="preload" href="constants.js" as="script">
   <link rel="preload" href="app.js" as="script">
   <!-- Self-hosted xterm.js — eliminates CDN DNS/TLS latency (~100ms).
@@ -1620,6 +1623,19 @@
                       <span class="set-row-desc">Extra phone keys: Tab, Shift+Tab, Esc, arrows, Ctrl+O.</span>
                     </div>
                     <label class="switch switch-sm"><input type="checkbox" id="appSettingsExtendedKeyboardBar"><span class="slider"></span></label>
+                  </div>
+                </div>
+              </div>
+
+              <div class="set-group">
+                <div class="set-group-head"><h4>Font</h4><span class="set-scope">device</span></div>
+                <div class="set-group-body">
+                  <div class="set-row has-field" data-search="terminal font family nerd custom typeface">
+                    <div class="set-row-text">
+                      <span class="set-row-label">Terminal font</span>
+                      <span class="set-row-desc">Prepended to the built-in stack, so fallbacks (including bundled Nerd Font symbols) keep working. Must be installed on this device. Leave empty for the default.</span>
+                    </div>
+                    <input type="text" id="appSettingsTerminalFont" class="set-input" placeholder='e.g. JetBrainsMono Nerd Font'>
                   </div>
                 </div>
               </div>

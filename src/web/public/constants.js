@@ -527,6 +527,41 @@ function sortSessionsByActivity(rows) {
   return (Array.isArray(rows) ? rows.slice() : []).sort(compareSessionActivity);
 }
 
+// Terminal font stack — the single source for every xterm surface (the main
+// terminal in terminal-ui.js, the log-viewer terminal in panels-ui.js).
+// "Symbols Nerd Font Mono" is a bundled icons-only webfont (fonts/ +
+// @font-face in styles.css): browsers fall back PER GLYPH, so Nerd Font
+// prompt icons (powerline segments, folder/git glyphs from p10k, starship,
+// oh-my-posh) render even though the text fonts carry no private-use-area
+// symbols — while all readable text keeps coming from the text fonts.
+const TERMINAL_FONT_DEFAULT_STACK =
+  '"Fira Code", "Cascadia Code", "JetBrains Mono", "SF Mono", Monaco, "Symbols Nerd Font Mono", monospace';
+
+/**
+ * Resolve the xterm fontFamily from the per-device `terminalFontFamily`
+ * setting. A user-set family (or comma-separated list) is PREPENDED to the
+ * built-in stack, never a replacement — the symbols fallback and a final
+ * `monospace` must survive whatever the user types. Blank input yields the
+ * default. Unquoted names that need quoting for CSS (spaces, digits leading,
+ * etc.) are quoted; embedded quotes are stripped rather than escaped, since
+ * a font name cannot contain them anyway.
+ */
+function resolveTerminalFontFamily(custom) {
+  const raw = typeof custom === 'string' ? custom.trim() : '';
+  if (!raw) return TERMINAL_FONT_DEFAULT_STACK;
+  const families = raw
+    .split(',')
+    .map((f) => f.trim().replace(/^["']|["']$/g, '').replace(/["']/g, '').trim())
+    .filter(Boolean)
+    // Drop generic families the user may append — the default stack already
+    // ends in `monospace`, and a duplicate earlier entry would shadow the
+    // symbols fallback behind it.
+    .filter((f) => !/^(monospace|serif|sans-serif|system-ui)$/i.test(f))
+    .map((f) => (/^[A-Za-z][A-Za-z0-9-]*$/.test(f) ? f : `"${f}"`));
+  if (!families.length) return TERMINAL_FONT_DEFAULT_STACK;
+  return `${families.join(', ')}, ${TERMINAL_FONT_DEFAULT_STACK}`;
+}
+
 if (typeof window !== 'undefined') {
   window.WEBGL_FALLBACK = WEBGL_FALLBACK;
   window.evaluateWebGLLongTaskTrip = evaluateWebGLLongTaskTrip;
@@ -559,6 +594,10 @@ if (typeof window !== 'undefined') {
     anchor: sessionActivityAnchor,
     compare: compareSessionActivity,
     sort: sortSessionsByActivity,
+  };
+  window.CodemanTerminalFont = {
+    DEFAULT_STACK: TERMINAL_FONT_DEFAULT_STACK,
+    resolve: resolveTerminalFontFamily,
   };
 }
 

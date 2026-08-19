@@ -225,7 +225,7 @@ Object.assign(CodemanApp.prototype, {
 
     this.terminal = new Terminal({
       theme: { ...window.codemanCurrentXtermTheme() },
-      fontFamily: '"Fira Code", "Cascadia Code", "JetBrains Mono", "SF Mono", Monaco, monospace',
+      fontFamily: window.CodemanTerminalFont.resolve(this.loadAppSettingsFromStorage?.().terminalFontFamily),
       // Use smaller font on mobile to fit more columns (prevents wrapping of Claude's status line)
       fontSize: MobileDetection.getDeviceType() === 'mobile' ? 10 : 14,
       lineHeight: 1.2,
@@ -4118,6 +4118,22 @@ Object.assign(CodemanApp.prototype, {
     this.fitAddon.fit();
     localStorage.setItem('codeman-font-size', size);
     // Update overlay font cache and re-render at new cell dimensions
+    this._localEchoOverlay?.refreshFont();
+    this._predictiveEcho?.refreshFont();
+  },
+
+  /**
+   * Apply the per-device `terminalFontFamily` setting to the live terminal.
+   * The custom family is resolved against the built-in stack (constants.js),
+   * so passing '' / undefined restores the default. Mirrors setFontSize():
+   * refit for the new cell metrics, then refresh the echo overlays' cached
+   * font so predictions keep landing on the right cells.
+   */
+  applyTerminalFontFamily(custom) {
+    const resolved = window.CodemanTerminalFont.resolve(custom);
+    if (!this.terminal || this.terminal.options.fontFamily === resolved) return;
+    this.terminal.options.fontFamily = resolved;
+    this.fitAddon?.fit();
     this._localEchoOverlay?.refreshFont();
     this._predictiveEcho?.refreshFont();
   },

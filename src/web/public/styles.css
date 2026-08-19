@@ -16,6 +16,19 @@
   font-weight: 400 700;
   src: url('fonts/jetbrains-mono-variable.woff2') format('woff2');
 }
+/* Icons-only per-glyph fallback for the terminal (Symbols Nerd Font Mono, MIT,
+   fonts/LICENSE-nerd-fonts.txt). Sits BEHIND the text fonts in the xterm stack
+   (constants.js: TERMINAL_FONT_DEFAULT_STACK), so it only ever supplies the
+   private-use-area glyphs shell prompts draw (powerline, p10k/starship folder
+   and git icons) — text rendering is untouched. `block` display, not `swap`:
+   there is no fallback that CAN render these glyphs, so swapping in tofu first
+   would poison xterm's glyph atlas until the next re-render. */
+@font-face {
+  font-family: 'Symbols Nerd Font Mono';
+  font-style: normal;
+  font-display: block;
+  src: url('fonts/symbols-nerd-font-mono.woff2') format('woff2');
+}
 
 :root {
   /* Dark is the safe fallback. Light skins override this so native selects,

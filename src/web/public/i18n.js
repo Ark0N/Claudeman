@@ -326,6 +326,10 @@
 
     // Input settings
     Input: '输入',
+    Font: '字体',
+    'Terminal font': '终端字体',
+    'Prepended to the built-in stack, so fallbacks (including bundled Nerd Font symbols) keep working. Must be installed on this device. Leave empty for the default.':
+      '置于内置字体栈之前，回退字体（包括内置的 Nerd Font 图标）仍然生效。需已安装在本设备上。留空使用默认值。',
     'Local Echo': '本地回显',
     'CJK Input': '中日韩输入',
     'Extended Keyboard Bar': '扩展键盘栏',
