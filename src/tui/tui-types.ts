@@ -120,7 +120,6 @@ export interface TuiMessage {
 export interface TuiConfirmState {
   sessionId: string;
   name: string;
-  typed: string;
 }
 
 export interface TuiPickerItem {

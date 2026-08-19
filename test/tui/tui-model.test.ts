@@ -267,11 +267,17 @@ describe('the store', () => {
   it('tracks the confirm-kill overlay, keyed to the name it showed', () => {
     const model = createTuiModel();
     model.replaceSessions([session({ sessionId: 'a', name: 'w4-api' })]);
-    model.beginConfirmKill(model.rows()[0]);
+    model.beginConfirmKill(model.rows()[0], 'w4-api');
     expect(model.mode).toBe('confirm-kill');
-    expect(model.confirm).toEqual({ sessionId: 'a', name: 'w4-api', typed: '' });
-    model.setConfirmInput('w4-ap');
-    expect(model.confirm?.typed).toBe('w4-ap');
+    // The name is the whole payload: it is what the dialog shows so the user
+    // knows WHICH session a `y` is about to destroy.
+    expect(model.confirm).toEqual({ sessionId: 'a', name: 'w4-api' });
+
+    // Regression: the label is supplied by the caller. Deriving it here with
+    // `name ?? id` let an EMPTY name through, and the dialog read "Kill ?".
+    model.replaceSessions([session({ sessionId: 'b', name: '' })]);
+    model.beginConfirmKill(model.rows()[0], 'mirofish');
+    expect(model.confirm?.name).toBe('mirofish');
     model.closeOverlay();
     expect(model.mode).toBe('list');
     expect(model.confirm).toBeNull();

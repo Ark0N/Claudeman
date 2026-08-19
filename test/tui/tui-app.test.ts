@@ -15,7 +15,6 @@ import {
   applyMuxNames,
   buildAttachBanner,
   buildListLines,
-  confirmAccepts,
   confirmKillStep,
   detachChord,
   heldCtrlAlias,
@@ -135,37 +134,25 @@ describe('isSelfSession', () => {
 describe('the kill confirmation', () => {
   const state: TuiConfirmState = { sessionId: 'abcdef01-2345', name: 'w4-api', typed: '' };
 
-  it('accepts the shown name or the id prefix a mux name carries, and nothing else', () => {
-    expect(confirmAccepts(state, 'w4-api')).toBe(true);
-    expect(confirmAccepts(state, '  w4-api  ')).toBe(true);
-    expect(confirmAccepts(state, 'abcdef01')).toBe(true);
-    expect(confirmAccepts(state, 'w4')).toBe(false);
-    expect(confirmAccepts(state, 'W4-API')).toBe(false);
-    expect(confirmAccepts(state, '')).toBe(false);
-    expect(confirmAccepts(state, '   ')).toBe(false);
+  it('kills on y, upper or lower', () => {
+    // Was: type the session's full name. The tester's verdict on that was
+    // "thats stupid, just make me type Y to confirm", and they were right —
+    // `x` then `y` is already two deliberate keystrokes on a selected row.
+    expect(confirmKillStep(state, { type: 'char', value: 'y' })).toEqual({ kind: 'confirm' });
+    expect(confirmKillStep(state, { type: 'char', value: 'Y' })).toEqual({ kind: 'confirm' });
   });
 
-  it('types, backspaces and cancels', () => {
-    expect(confirmKillStep({ ...state, typed: 'w4' }, { type: 'char', value: '-' })).toEqual({
-      kind: 'typing',
-      typed: 'w4-',
-    });
-    expect(confirmKillStep({ ...state, typed: 'w4-' }, { type: 'backspace' })).toEqual({ kind: 'typing', typed: 'w4' });
-    expect(confirmKillStep({ ...state, typed: '' }, { type: 'backspace' })).toEqual({ kind: 'typing', typed: '' });
+  it('cancels on every other key, rather than leaving the prompt armed', () => {
+    // A dialog that ignores unknown keys sits there consuming whatever the
+    // user types next, which for a destructive prompt is the wrong default.
+    expect(confirmKillStep(state, { type: 'char', value: 'n' })).toEqual({ kind: 'cancel' });
+    expect(confirmKillStep(state, { type: 'char', value: 'x' })).toEqual({ kind: 'cancel' });
     expect(confirmKillStep(state, { type: 'escape' })).toEqual({ kind: 'cancel' });
     expect(confirmKillStep(state, { type: 'ctrl', key: 'c' })).toEqual({ kind: 'cancel' });
-    expect(confirmKillStep(state, { type: 'ctrl', key: 'a' })).toEqual({ kind: 'ignore' });
-    expect(confirmKillStep(state, { type: 'tab' })).toEqual({ kind: 'ignore' });
   });
 
-  it('confirms only on a match, and says so rather than doing nothing otherwise', () => {
-    expect(confirmKillStep({ ...state, typed: 'w4-api' }, { type: 'enter' })).toEqual({ kind: 'confirm' });
-    expect(confirmKillStep({ ...state, typed: 'w4' }, { type: 'enter' })).toEqual({ kind: 'reject' });
-    expect(confirmKillStep({ ...state, typed: '' }, { type: 'enter' })).toEqual({ kind: 'reject' });
-  });
-
-  it('backspaces one whole character, not one code unit', () => {
-    expect(confirmKillStep({ ...state, typed: 'a🙂' }, { type: 'backspace' })).toEqual({ kind: 'typing', typed: 'a' });
+  it('does NOT kill on Enter, the key most likely to be hit by reflex', () => {
+    expect(confirmKillStep(state, { type: 'enter' })).toEqual({ kind: 'cancel' });
   });
 });
 
@@ -215,7 +202,7 @@ describe('footerKeysFor', () => {
       expect.arrayContaining([
         'attach — on a RECENT row, resume that conversation',
         'new session',
-        'kill (typed confirmation)',
+        'kill (y to confirm)',
         'quit',
       ])
     );
@@ -227,7 +214,7 @@ describe('footerKeysFor', () => {
 
   it('follows the overlay that owns the keyboard', () => {
     expect(footerKeysFor('help', GLYPHS, { server: true })).toEqual(['esc close']);
-    expect(footerKeysFor('confirm-kill', GLYPHS, { server: true }).join(' ')).toContain('type the name');
+    expect(footerKeysFor('confirm-kill', GLYPHS, { server: true }).join(' ')).toContain('y kill');
     expect(footerKeysFor('message', GLYPHS, { server: true })).toEqual(['esc dismiss']);
     expect(footerKeysFor('new-session', GLYPHS, { server: true }).join(' ')).toContain('type to filter');
     expect(footerKeysFor('prompt', GLYPHS, { server: true }).join(' ')).toContain('send');

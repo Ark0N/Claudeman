@@ -508,33 +508,30 @@ export function isSelfSession(sessionId: string, env: { CODEMAN_SESSION_ID?: str
 // Kill confirmation (pure)
 // ─────────────────────────────────────────────────────────────────────────────
 
-export type TuiConfirmStep =
-  | { kind: 'typing'; typed: string }
-  | { kind: 'confirm' }
-  | { kind: 'reject' }
-  | { kind: 'cancel' }
-  | { kind: 'ignore' };
-
-/** Does the typed text authorize the kill? The shown name, or the id prefix a mux name carries. */
-export function confirmAccepts(state: TuiConfirmState, typed = state.typed): boolean {
-  const value = typed.trim();
-  if (value === '') return false;
-  return value === state.name || value === state.sessionId.slice(0, 8);
-}
+export type TuiConfirmStep = { kind: 'confirm' } | { kind: 'cancel' } | { kind: 'ignore' };
 
 /**
- * One keystroke of the typed confirmation. Enter on text that does not match is
- * a `reject`, never a silent no-op: a confirmation that appears to do nothing
- * reads as a broken key.
+ * One keystroke of the kill confirmation: `y` kills, anything else does not.
+ *
+ * ⚠️ It used to demand the session's NAME typed out in full. That is the right
+ * ceremony for deleting a production database and the wrong one for closing a
+ * pane you are looking at: the beta tester's verdict was "thats stupid, just
+ * make me type Y to confirm". Kill is already two deliberate keystrokes (`x`
+ * then `y`) on a row the user selected, and the session's work lives in its
+ * transcript, which a kill does not touch.
+ *
+ * Everything that is NOT `y` cancels rather than being ignored, so a stray key
+ * closes the dialog instead of leaving a live kill prompt waiting for whatever
+ * the user types next.
  */
-export function confirmKillStep(state: TuiConfirmState, event: TuiInputEvent): TuiConfirmStep {
+export function confirmKillStep(_state: TuiConfirmState, event: TuiInputEvent): TuiConfirmStep {
   switch (event.type) {
     case 'char':
-      return { kind: 'typing', typed: state.typed + event.value };
-    case 'backspace':
-      return { kind: 'typing', typed: [...state.typed].slice(0, -1).join('') };
+      return event.value === 'y' || event.value === 'Y' ? { kind: 'confirm' } : { kind: 'cancel' };
     case 'enter':
-      return confirmAccepts(state) ? { kind: 'confirm' } : { kind: 'reject' };
+      // Enter alone is NOT a confirmation: it is the key most likely to be
+      // pressed by reflex, and this is the one dialog that destroys something.
+      return { kind: 'cancel' };
     case 'escape':
       return { kind: 'cancel' };
     case 'ctrl':
@@ -576,7 +573,7 @@ export function footerKeysFor(mode: TuiUiMode, glyphs: TuiGlyphSet, context: Tui
     case 'help':
       return ['esc close'];
     case 'confirm-kill':
-      return ['type the name', `${glyphs.enter} confirm`, 'esc cancel'];
+      return ['y kill', 'any other key cancels'];
     case 'message':
       return context.resumeOffer ? ['r resume', 'esc dismiss'] : ['esc dismiss'];
     case 'new-session':
@@ -629,7 +626,7 @@ export function helpKeysFor(glyphs: TuiGlyphSet, context: TuiKeymapContext): Arr
       ['/', 'search sessions, events and files'],
       ['g', 'away digest'],
       ['n', 'new session'],
-      ['x', 'kill (typed confirmation)']
+      ['x', 'kill (y to confirm)']
     );
   }
   keys.push(['?', 'this help'], ['esc', 'close an overlay'], ['q', 'quit']);
@@ -1606,14 +1603,8 @@ class TuiApp {
     }
     const step = confirmKillStep(state, event);
     switch (step.kind) {
-      case 'typing':
-        this.model.setConfirmInput(step.typed);
-        return;
       case 'cancel':
         this.model.closeOverlay();
-        return;
-      case 'reject':
-        this.message('warn', `type "${state.name}" exactly, or esc to cancel`);
         return;
       case 'confirm':
         void this.killSession(state.sessionId, state.name);
@@ -2134,7 +2125,7 @@ class TuiApp {
       this.message('warn', 'that is the session this TUI is running in');
       return;
     }
-    this.model.beginConfirmKill(row);
+    this.model.beginConfirmKill(row, rowLabel(row.session));
   }
 
   private async killSession(sessionId: string, name: string): Promise<void> {

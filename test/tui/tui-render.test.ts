@@ -300,15 +300,15 @@ describe('overlays', () => {
     expect(lines[lines.length - 1]).toContain('close');
   });
 
-  it('draws the typed confirmation for a kill', () => {
+  it('names what a kill would destroy, and asks for one key', () => {
     const model = fixture();
-    model.beginConfirmKill(model.rows()[0]);
-    model.setConfirmInput('w6-d');
+    model.beginConfirmKill(model.rows()[0], 'w6-docs');
     const text = frameLines(render(model, 100, 30)).join('\n');
     expect(text).toContain('Kill w6-docs?');
-    expect(text).toContain('Type the name to confirm:');
-    expect(text).toContain('w6-d_');
-    expect(text).toContain('esc cancel');
+    expect(text).toContain('press y to kill, any other key cancels');
+    // The name is the point of the dialog: it is what tells the user WHICH
+    // session a keystroke is about to destroy.
+    expect(text).not.toContain('Type the name to confirm');
   });
 
   it('draws a message box', () => {

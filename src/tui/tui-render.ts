@@ -614,7 +614,7 @@ const FOOTER_KEYS: Record<string, (glyphs: TuiGlyphSet) => string> = {
       'q quit',
     ].join(` ${g.separator} `),
   help: (g) => `esc ${g.separator} ? close`,
-  'confirm-kill': (g) => `type the name ${g.separator} ${g.enter} confirm ${g.separator} esc cancel`,
+  'confirm-kill': (g) => `y kill ${g.separator} any other key cancels`,
   message: () => 'esc dismiss',
   prompt: (g) => `${g.enter} send ${g.separator} esc cancel`,
   search: (g) => `${g.updown} results ${g.separator} ${g.enter} open ${g.separator} esc close`,
@@ -805,10 +805,9 @@ function overlayContent(
     }
     case 'confirm-kill': {
       if (!model.confirm) return null;
-      const { name, typed } = model.confirm;
       return {
         title: 'Kill session',
-        lines: [`Kill ${name}?`, '', 'Type the name to confirm:', `  ${typed}_`],
+        lines: [`Kill ${model.confirm.name}?`, '', 'press y to kill, any other key cancels'],
       };
     }
     case 'message':

@@ -442,19 +442,19 @@ export class TuiModelStore implements TuiRenderModel {
    * for every caller: a second copy here answered the same question differently
    * (it refused the id prefix a mux name carries) and nothing consulted it.
    */
-  beginConfirmKill(row: TuiRow): void {
+  beginConfirmKill(row: TuiRow, label: string): void {
     this.confirm = {
       sessionId: row.session.sessionId,
-      name: row.session.name ?? row.session.sessionId.slice(0, 8),
-      typed: '',
+      // ⚠️ Passed in, not derived here. `row.session.name ?? id.slice(0,8)`
+      // used to compute it, and `??` falls back only on null/undefined: a
+      // session whose name is the EMPTY STRING (every session the server did
+      // not name) sailed through it and the dialog read "Kill ?". A destructive
+      // prompt that cannot say what it is about to destroy is worse than no
+      // prompt, and it is now one keystroke. The caller passes the same label
+      // the LIST shows, so the dialog names the row the user is looking at.
+      name: label,
     };
     this.mode = 'confirm-kill';
-    this.touch();
-  }
-
-  setConfirmInput(typed: string): void {
-    if (!this.confirm) return;
-    this.confirm = { ...this.confirm, typed };
     this.touch();
   }
 

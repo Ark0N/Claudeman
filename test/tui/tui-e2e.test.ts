@@ -556,21 +556,30 @@ describe('codeman tui (under a pty)', () => {
   it('opens and closes the help overlay', async () => {
     term.write('?');
     await waitFor(() => frameLines(output).some((line) => line.includes('Keys')), 'the help overlay');
-    expect(frameLines(output).join('\n')).toContain('kill (typed confirmation)');
+    expect(frameLines(output).join('\n')).toContain('kill (y to confirm)');
 
     term.write('\u001b');
     await waitFor(() => !frameLines(output).some((line) => line.includes('Keys')), 'escape to close the overlay');
   });
 
-  it('asks for the session name before killing anything', async () => {
+  it('asks for a y before killing anything, and names what it would kill', async () => {
     term.write('x');
     await waitFor(() => frameLines(output).some((line) => line.includes('Kill session')), 'the kill confirmation');
     const overlay = frameLines(output).join('\n');
-    expect(overlay).toContain('Type the name to confirm');
+    expect(overlay).toContain('press y to kill');
     expect(overlay).toContain('w2-beta');
 
     term.write('\u001b');
     await waitFor(() => !frameLines(output).some((line) => line.includes('Kill session')), 'escape to cancel the kill');
+  });
+
+  it('cancels the kill on any key that is not y, and kills nothing', async () => {
+    term.write('x');
+    await waitFor(() => frameLines(output).some((line) => line.includes('Kill session')), 'the kill confirmation');
+    term.write('n');
+    await waitFor(() => !frameLines(output).some((line) => line.includes('Kill session')), 'the dialog to close');
+    // The session is still listed: `n` cancelled rather than killed.
+    await waitFor(() => frameLines(output).some((line) => line.includes('w2-beta')), 'w2-beta to still be listed');
   });
 
   it('sends a one-line prompt with p', async () => {
