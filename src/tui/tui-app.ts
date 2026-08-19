@@ -260,9 +260,22 @@ export function formatPrefixKey(prefix: string | undefined): string {
   return raw;
 }
 
-/** The whole chord: prefix, then `d`. */
-export function detachChord(prefix?: string): string {
-  return `${formatPrefixKey(prefix)} D`;
+/** tmux's stock `detach-client` binding, used when `list-keys` cannot be read. */
+export const DEFAULT_DETACH_KEY = 'd';
+
+/**
+ * The chord that ends an attach: the prefix, then the key bound to
+ * `detach-client`.
+ *
+ * ⚠️ Case is load-bearing here and this shipped wrong once. tmux binds
+ * LOWERCASE `d` to `detach-client` and CAPITAL `D` to `choose-client`, so a bar
+ * advertising `Ctrl+B D` opened a client chooser and nothing detached (reported
+ * from the beta: the way out was on screen and still did not work). The key is
+ * therefore READ from tmux exactly like the prefix already is, and never passed
+ * through `formatPrefixKey`, which uppercases.
+ */
+export function detachChord(prefix?: string, key?: string): string {
+  return `${formatPrefixKey(prefix)} then ${key || DEFAULT_DETACH_KEY}`;
 }
 
 /** `#` opens `#[…]`/`#{…}` in a tmux format, so a name carrying one must double it. */
@@ -280,12 +293,20 @@ function escapeTmuxFormat(value: string): string {
  * pane behind on the first try). The bar exists for the length of the attach
  * and is put back exactly as it was on detach.
  *
- * `reverse` rather than a palette: the TUI paints its own selected row with the
- * same SGR 7, so the bar inherits whatever theme the terminal has instead of
- * guessing at light or dark.
+ * ⚠️ `status-style` is set EXPLICITLY and is not optional. Styling only
+ * `status-format[0]` leaves tmux's stock `status-style` (`bg=green,fg=black`)
+ * underneath it, which paints a full-width bright green slab across the bottom
+ * of the pane, `#[reverse]` on top of it included (reported from the beta as
+ * "a big green line"). `bg=default,fg=default` lets the bar sit on the
+ * terminal's own background so it reads as a hint line rather than a banner,
+ * and the chord alone carries emphasis.
  */
-export function buildAttachBanner(options: { prefix?: string; label?: string }): Record<string, string> {
-  const chord = escapeTmuxFormat(detachChord(options.prefix));
+export function buildAttachBanner(options: {
+  prefix?: string;
+  label?: string;
+  detachKey?: string;
+}): Record<string, string> {
+  const chord = escapeTmuxFormat(detachChord(options.prefix, options.detachKey));
   const label = escapeTmuxFormat(truncateLabel((options.label ?? '').trim(), ATTACH_BANNER_LABEL_MAX));
   // ONE option, not `status-left`/`status-right`/`status-style`: `status-format[0]`
   // owns the whole line, which is what removes tmux's window list (`0:bash*`)
@@ -294,7 +315,8 @@ export function buildAttachBanner(options: { prefix?: string; label?: string }):
   const right = label ? `#[align=right] ${label} ` : '';
   return {
     status: 'on',
-    'status-format[0]': `#[reverse] #[bold]${chord}#[nobold] detach, back to the codeman dashboard${right}#[default]`,
+    'status-style': 'bg=default,fg=default',
+    'status-format[0]': `#[align=left] press #[bold]${chord}#[nobold] to detach, back to the codeman dashboard${right}#[default]`,
   };
 }
 
@@ -361,6 +383,8 @@ export interface TuiAttachHandoff {
  */
 export async function beginAttachHandoff(client: TuiClient, muxName: string, label: string): Promise<TuiAttachHandoff> {
   const prefix = (await client.readPrefixKey(muxName)) ?? undefined;
+  // Read, not assumed: see detachChord() for the `d` vs `D` mix-up this closes.
+  const detachKey = (await client.readDetachKey()) ?? undefined;
   // Codeman pins its windows to the size the BROWSER dictates (`window-size
   // manual` + `resize-window`, tmux-manager.ts), so a terminal of any other
   // shape attaches to a window that does not fill it and tmux pads the gap with
@@ -369,11 +393,15 @@ export async function beginAttachHandoff(client: TuiClient, muxName: string, lab
   // and the caller is blocked in `spawnSync`.
   const sizing = await client.readWindowSizing(muxName);
   await client.followAttachingClient(muxName);
-  const banner = buildAttachBanner({ ...(prefix ? { prefix } : {}), label });
+  const banner = buildAttachBanner({
+    ...(prefix ? { prefix } : {}),
+    ...(detachKey ? { detachKey } : {}),
+    label,
+  });
   const options = await client.readSessionOptions(muxName, Object.keys(banner));
   await client.applySessionOptions(muxName, banner);
   return {
-    chord: detachChord(prefix),
+    chord: detachChord(prefix, detachKey),
     async restore(): Promise<void> {
       // Options first, then the size: dropping the status bar gives its row
       // back to the pane, and the resize is what re-pins the browser's

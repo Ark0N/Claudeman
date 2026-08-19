@@ -471,20 +471,45 @@ describe('the way out of an attach', () => {
   });
 
   it('names the chord, not just the prefix', () => {
-    expect(detachChord('C-a')).toBe('Ctrl+A D');
-    expect(detachChord()).toBe('Ctrl+B D');
+    expect(detachChord('C-a', 'd')).toBe('Ctrl+A then d');
+    expect(detachChord()).toBe('Ctrl+B then d');
+  });
+
+  it('names the LOWERCASE detach key, because capital D is choose-client', () => {
+    // Regression: the bar shipped reading `Ctrl+B D`, and a beta tester pressing
+    // exactly that landed in tmux's client chooser while staying attached. tmux
+    // key tables are case-sensitive and `D` is bound to a different command.
+    expect(detachChord()).not.toContain(' D');
+    expect(detachChord()).toMatch(/ then d$/);
+    expect(buildAttachBanner({})['status-format[0]']).not.toContain('#[bold]Ctrl+B D#[nobold]');
+  });
+
+  it('prints a rebound detach key verbatim, never uppercased like the prefix', () => {
+    // formatPrefixKey() uppercases (`C-a` → `Ctrl+A`); running the detach key
+    // through it would reintroduce the same class of bug on a rebound tmux.
+    expect(detachChord('C-a', 'q')).toBe('Ctrl+A then q');
+    expect(buildAttachBanner({ prefix: 'C-a', detachKey: 'q' })['status-format[0]']).toContain('Ctrl+A then q');
   });
 
   it('builds ONE status-format option, so tmux draws no window list beside it', () => {
     const banner = buildAttachBanner({ prefix: 'C-b', label: 'w3-codeman' });
-    expect(Object.keys(banner).sort()).toEqual(['status', 'status-format[0]']);
+    expect(Object.keys(banner).sort()).toEqual(['status', 'status-format[0]', 'status-style']);
     expect(banner.status).toBe('on');
-    expect(banner['status-format[0]']).toContain('#[bold]Ctrl+B D#[nobold]');
+    expect(banner['status-format[0]']).toContain('#[bold]Ctrl+B then d#[nobold]');
     expect(banner['status-format[0]']).toContain('#[align=right] w3-codeman ');
   });
 
+  it('sets status-style, or tmux paints its stock green bar under the bar', () => {
+    // Regression: styling only status-format[0] left tmux's default
+    // `bg=green,fg=black` status-style underneath, which a beta tester saw as a
+    // full-width bright green slab across the bottom of the pane.
+    const banner = buildAttachBanner({ prefix: 'C-b' });
+    expect(banner['status-style']).toBe('bg=default,fg=default');
+    expect(banner['status-format[0]']).not.toContain('#[reverse]');
+  });
+
   it('carries the remapped prefix into the bar', () => {
-    expect(buildAttachBanner({ prefix: 'C-a' })['status-format[0]']).toContain('Ctrl+A D');
+    expect(buildAttachBanner({ prefix: 'C-a' })['status-format[0]']).toContain('Ctrl+A then d');
   });
 
   it('escapes a label that would otherwise open a tmux format', () => {
@@ -506,11 +531,11 @@ describe('the way out of an attach', () => {
   });
 
   it("tells the help overlay how to get back, in the socket's own prefix", () => {
-    const keys = helpKeysFor(GLYPHS, { server: true, detach: 'Ctrl+A D' });
-    const detach = keys.find(([key]) => key === 'Ctrl+A D');
+    const keys = helpKeysFor(GLYPHS, { server: true, detach: 'Ctrl+A then d' });
+    const detach = keys.find(([key]) => key === 'Ctrl+A then d');
     expect(detach?.[1]).toContain('detach');
     // Degraded mode still attaches, so it still needs the way out.
-    expect(helpKeysFor(GLYPHS, { server: false }).map(([key]) => key)).toContain('Ctrl+B D');
+    expect(helpKeysFor(GLYPHS, { server: false }).map(([key]) => key)).toContain('Ctrl+B then d');
   });
 });
 

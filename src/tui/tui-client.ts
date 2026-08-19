@@ -467,6 +467,28 @@ export function parseSessionOptions(stdout: string, keys: readonly string[]): Tu
   return options;
 }
 
+/**
+ * The key bound to a bare `detach-client` in `list-keys -T prefix` output, or
+ * null when nothing there detaches.
+ *
+ * ⚠️ Read rather than assumed because the two candidates differ only by case:
+ * tmux ships `d` as `detach-client` and `D` as `choose-client`, and advertising
+ * the wrong one leaves a tester attached with the way out on screen. Bindings
+ * that pass ARGUMENTS to `detach-client` (`-a`, `-P`) are skipped: those act on
+ * other clients or kill the pane's process, which is not what the bar promises.
+ * A single-character binding wins over a named key, since that is what a status
+ * line can print literally.
+ */
+export function parseDetachKey(stdout: string): string | null {
+  const candidates: string[] = [];
+  for (const line of stdout.split('\n')) {
+    const match = /^bind-key\s+(?:-\S+\s+)*?-T\s+prefix\s+(\S+)\s+detach-client\s*$/.exec(line.trim());
+    const key = match?.[1];
+    if (key) candidates.push(unquoteTmuxValue(key));
+  }
+  return candidates.find((key) => key.length === 1) ?? candidates[0] ?? null;
+}
+
 /** `status-format[0]` → `status-format`; a plain option name → null. */
 export function arrayOptionBase(key: string): string | null {
   const match = /^([^[\]]+)\[\d+\]$/.exec(key);
@@ -851,6 +873,20 @@ export class TuiClient {
       }
     }
     return null;
+  }
+
+  /**
+   * The key that detaches, straight from tmux's own key table. Key tables are
+   * server-global, so unlike the prefix this takes no session. A failure is
+   * null and the caller falls back to tmux's stock `d`.
+   */
+  async readDetachKey(): Promise<string | null> {
+    try {
+      const { stdout } = await this.exec('tmux', ['-L', this.socket, 'list-keys', '-T', 'prefix']);
+      return parseDetachKey(stdout);
+    } catch {
+      return null;
+    }
   }
 
   /** Snapshot the session-level options an attach is about to overwrite. */

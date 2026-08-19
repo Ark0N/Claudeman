@@ -22,6 +22,7 @@ import {
   parseEnvFile,
   arrayOptionBase,
   parseSessionOptions,
+  parseDetachKey,
   parseTmuxSessionList,
   parseWindowSizing,
   readCodemanCredentials,
@@ -596,6 +597,47 @@ describe('attach window sizing', () => {
     await expect(
       client.restoreWindowSizing('codeman-1a2b3c4d', { cols: 120, rows: 40, mode: 'manual' })
     ).resolves.toBeUndefined();
+  });
+});
+
+describe('parseDetachKey', () => {
+  // Verbatim from `tmux -L codeman list-keys -T prefix` on tmux 3.4, trimmed to
+  // the two lines that matter. They differ only by case, which is the whole
+  // point: `D` is choose-client and advertising it leaves the tester attached.
+  const REAL_TMUX_34 = [
+    'bind-key    -T prefix C-b     send-prefix',
+    'bind-key    -T prefix d       detach-client',
+    'bind-key    -T prefix D       choose-client -Z',
+    'bind-key    -T prefix x       confirm-before -p "kill-pane #P? (y/n)" kill-pane',
+  ].join('\n');
+
+  it('picks the lowercase detach-client binding out of real tmux output', () => {
+    expect(parseDetachKey(REAL_TMUX_34)).toBe('d');
+  });
+
+  it('follows a rebound detach key rather than assuming d', () => {
+    expect(parseDetachKey('bind-key -T prefix Q detach-client')).toBe('Q');
+  });
+
+  it('tolerates the -r repeat flag ahead of -T', () => {
+    expect(parseDetachKey('bind-key -r -T prefix d detach-client')).toBe('d');
+  });
+
+  it('ignores detach-client bindings that carry arguments', () => {
+    // `-a` detaches OTHER clients and `-P` kills the pane's process; neither is
+    // what the bar promises, so a socket with only those reports nothing.
+    expect(parseDetachKey('bind-key -T prefix X detach-client -a')).toBeNull();
+    expect(parseDetachKey('bind-key -T prefix Y detach-client -P')).toBeNull();
+  });
+
+  it('prefers a single-character binding over a named key', () => {
+    const both = 'bind-key -T prefix F1 detach-client\nbind-key -T prefix d detach-client';
+    expect(parseDetachKey(both)).toBe('d');
+  });
+
+  it('is null when nothing detaches, so the caller can fall back', () => {
+    expect(parseDetachKey('')).toBeNull();
+    expect(parseDetachKey('bind-key -T prefix D choose-client -Z')).toBeNull();
   });
 });
 
