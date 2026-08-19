@@ -1,5 +1,20 @@
 # xterm-zerolag-input
 
+## 0.3.1
+
+### Patch Changes
+
+- Mobile catches up: links open from a tap, terminal text can be selected and copied, long prompts stay visible while you type. Plus Files panel search, a bundled Nerd Font symbols fallback, and a per-device terminal font setting.
+  - **Terminal and chat links work on phones** (#321): tapping a URL or file path in terminal output now opens it (new tab, file preview, or log viewer), resolved through the same provider desktop hover uses, so tap and click can never disagree about what is a link. Dialog rows and the composer keep their existing meaning. Response-viewer links open in a new tab with `rel="noopener noreferrer"` instead of navigating the dashboard away. Wrapped links open whole: the logical-line reconstruction now stitches hard wraps through the indent their continuation carries, which also fixes desktop hover-click truncating wrapped URLs.
+  - **Terminal text can be copied on touch devices** (#321): long-press selects the token under the finger, drag or tap the other end to extend, and a small bar offers Copy, Line (the whole logical line, wraps included) and dismiss. Copy works on plain-HTTP installs too. Three guards keep the keyboard down and the selection alive through the browser's own long-press handling.
+  - **A long prompt stays visible on phones** (#321): the local-echo overlay grows upward once it would run past the last visible row (a prompt taller than the screen keeps its tail, where the cursor is), and the keyboard-driven padding shrink can no longer reclaim the space the fixed toolbar and accessory bar stand in.
+  - **Files panel search** (#324): `GET /api/sessions/:id/files?q=...` answers a flat match list (name or path substring, `*`/`?` globs), recursing past non-matching directories with its own match cap on top of the existing bounds; without `q` the response is byte-identical to before. Glob queries are matched without regex so a pathological pattern cannot stall the server.
+  - **Nerd Font prompt glyphs out of the box, custom terminal font** (#320): a bundled icons-only Symbols Nerd Font Mono fallback renders powerlevel10k/starship/oh-my-posh glyphs on every device with no font install, and App Settings gains a per-device terminal font family that is prepended to the built-in stack.
+
+  ### Thanks
+
+  Three contributor PRs in one release: thanks to @rounakdatta (#321), @aakhter (#324) and @comzine (#320).
+
 ## 0.3.0
 
 ### Minor Changes
