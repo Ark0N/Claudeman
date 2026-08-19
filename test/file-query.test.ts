@@ -64,6 +64,24 @@ describe('compileFileQuery', () => {
     expect(m!('session.ts', 'src/session.ts')).toBe(true);
     expect(m!('session.ts', 'lib/session.ts')).toBe(false);
   });
+
+  it('stays fast on a pathological star-heavy pattern (no regex backtracking)', () => {
+    // `*a*a*a…` compiled to `^.*a.*a…$` is the classic backtracking blowup —
+    // as a RegExp this match takes effectively forever and this test fails by
+    // timeout. The two-pointer glob walk answers it in linear-ish time; the
+    // 500ms ceiling is generous so a loaded CI box cannot flake it.
+    const m = compileFileQuery('*a'.repeat(40) + 'b');
+    expect(m).not.toBeNull();
+    const started = performance.now();
+    expect(m!('a'.repeat(200), 'a'.repeat(200))).toBe(false);
+    expect(performance.now() - started).toBeLessThan(500);
+  });
+
+  it('treats an overlong query as no search, like an empty one', () => {
+    // The glob walk is O(text · pattern); the length cap is what bounds it.
+    expect(compileFileQuery('a'.repeat(257))).toBeNull();
+    expect(compileFileQuery('a'.repeat(256))).not.toBeNull();
+  });
 });
 
 describe('matchFileQuery', () => {
