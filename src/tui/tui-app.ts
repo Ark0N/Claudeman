@@ -2297,8 +2297,23 @@ class TuiApp {
       });
       // The row appears with the next resync; remember which one to select.
       this.pendingSelectId = result.sessionId;
-      this.message('info', `started ${mode} in ${caseName}`);
+      this.notice(`starting ${mode} in ${caseName}…`);
+      this.paint(true);
       await this.refresh();
+      // Starting a session is a request to WORK in it, so the terminal goes
+      // there as soon as the pane exists. Leaving the user on the dashboard
+      // next to a session they just asked for reads as the create having
+      // silently failed (reported from the beta as "it doesn't go into it
+      // directly"), and the pane is worth watching while the CLI boots.
+      const fresh = await this.awaitResumedRow(result.sessionId);
+      if (!fresh) {
+        this.message('info', `started ${mode} in ${caseName}; its pane is still starting — press ⏎ on the new row`);
+        this.paint(true);
+        return;
+      }
+      this.pendingSelectId = null;
+      await this.attachToSession(fresh);
+      return;
     } catch (error) {
       this.message('err', `could not start a session in ${caseName}: ${getErrorMessage(error)}`);
     }

@@ -7,7 +7,7 @@
  * NO_COLOR leaves nothing but cursor addressing behind.
  */
 import { describe, it, expect } from 'vitest';
-import { stripStyles, toDisplayLines, visibleWidth } from '../../src/tui/tui-ansi.js';
+import { charWidth, stripStyles, toDisplayLines, visibleWidth } from '../../src/tui/tui-ansi.js';
 import { composerMove, createComposer } from '../../src/tui/tui-composer.js';
 import { computeLayout, needsBanner } from '../../src/tui/tui-layout.js';
 import { createTuiModel, type TuiModelStore } from '../../src/tui/tui-model.js';
@@ -18,6 +18,7 @@ import {
   formatElapsed,
   formatPlanUsage,
   formatTokens,
+  glyphsFor,
   renderFrame,
   rowLabel,
   type TuiRenderOptions,
@@ -130,7 +131,7 @@ describe('renderFrame structure', () => {
     expect(frameLines(render(fixture(), 100, 30))).toEqual([
       ' codeman  ⚠ 2  tnode · v1.19.0 · 4 sessions · 5h 32% wk 61%                          ? help  q quit',
       ' NEEDS YOU ─────────────────────────│ w4-api-refactor · claude · /home/dev/api · blocked',
-      '  1 w6-docs                   ✋ 11m│ ⚠ requests: Bash(git push origin main)',
+      '  1 w6-docs                    ! 11m│ ⚠ requests: Bash(git push origin main)',
       '▶ 2 w4-api-refactor       ⚠ 2m 12.3k│   1. Yes',
       " WORKING ───────────────────────────│   2. Yes, don't ask again",
       '  3 w1-codeman           ✻ 17m 45.2k│   3. No, tell Claude what to do',
@@ -157,7 +158,7 @@ describe('renderFrame structure', () => {
       '                                    │',
       '                                    │',
       '                                    │',
-      ' ↑↓ select · ⏎ attach · 1-9 jump · y/n answer · p prompt · n new · x kill · / search · g digest · ?',
+      ' ↑↓ select · ↵ attach · 1-9 jump · y/n answer · p prompt · n new · x kill · / search · g digest · ?',
     ]);
   });
 
@@ -165,7 +166,7 @@ describe('renderFrame structure', () => {
     expect(frameLines(render(fixture(), 44, 20))).toEqual([
       ' codeman  ⚠ 2  tnode · v1.19.0 · 4 sessions',
       ' NEEDS YOU ─────────────────────────────────',
-      '  1 w6-docs                           ✋ 11m',
+      '  1 w6-docs                            ! 11m',
       '    /home/dev/docs',
       '▶ 2 w4-api-refactor                     ⚠ 2m',
       '    /home/dev/api · 12.3k',
@@ -182,7 +183,7 @@ describe('renderFrame structure', () => {
       '',
       '',
       '',
-      ' ↑↓ select · ⏎ attach · 1-9 jump · y/n answe',
+      ' ↑↓ select · ↵ attach · 1-9 jump · y/n answe',
     ]);
   });
 
@@ -224,7 +225,7 @@ describe('color', () => {
     const frame = render(model, 100, 30, { color: true });
     expect(frame).toContain('\x1b[32m✻');
     expect(frame).toContain('\x1b[31m⚠');
-    expect(frame).toContain('\x1b[33m✋');
+    expect(frame).toContain('\x1b[33m!');
     expect(frame).toContain('\x1b[1mcodeman');
   });
 
@@ -463,7 +464,7 @@ describe('the approval card', () => {
 
     model.select('bbb2');
     const idle = render(model, 100, 30, { color: true });
-    expect(idle).toContain('\x1b[33m ✋');
+    expect(idle).toContain('\x1b[33m !');
     expect(idle).toContain('p to reply');
   });
 
@@ -606,5 +607,51 @@ describe('formatPlanUsage', () => {
     expect(formatPlanUsage(null)).toBe('');
     expect(formatPlanUsage(undefined)).toBe('');
     expect(formatPlanUsage({})).toBe('');
+  });
+});
+
+describe('the unicode glyph set is safe to render', () => {
+  // Two failures this pins, both found on one beta tester's terminal:
+  // a double-width glyph shifting every cell after it, and a codepoint their
+  // font had no glyph for at all.
+  const UNICODE = glyphsFor('unicode');
+  const every = [
+    UNICODE.blockedPermission,
+    UNICODE.blockedQuestion,
+    UNICODE.waiting,
+    ...UNICODE.working,
+    UNICODE.idle,
+    UNICODE.recent,
+    UNICODE.cursor,
+    UNICODE.rule,
+    UNICODE.divider,
+    UNICODE.boxTopLeft,
+    UNICODE.boxTopRight,
+    UNICODE.boxBottomLeft,
+    UNICODE.boxBottomRight,
+    UNICODE.boxHorizontal,
+    UNICODE.boxVertical,
+    UNICODE.enter,
+    UNICODE.separator,
+    UNICODE.ellipsis,
+  ];
+
+  it('has no double-width glyph, which would shift every cell after it', () => {
+    for (const glyph of every) {
+      for (const char of glyph) {
+        expect({ glyph, width: charWidth(char.codePointAt(0) ?? 0) }).toEqual({ glyph, width: 1 });
+      }
+    }
+  });
+
+  it('uses the arrow-block return symbol, not the one fonts lack', () => {
+    // U+23CE rendered as an empty box on a font that drew everything else here.
+    expect(UNICODE.enter).toBe('\u21B5');
+    expect(UNICODE.enter).not.toBe('\u23CE');
+  });
+
+  it('has no emoji where a text glyph belongs', () => {
+    // U+270B is Wide AND emoji-presentation: it drew at emoji size mid-row.
+    expect(every.join('')).not.toContain('\u270B');
   });
 });

@@ -123,10 +123,27 @@ export interface TuiGlyphSet {
   ellipsis: string;
 }
 
+/**
+ * ⚠️ Every glyph here must clear TWO bars that are easy to miss, and both were
+ * failed at once by the first version of this table.
+ *
+ * WIDTH: the renderer addresses cells by column, so a glyph the terminal draws
+ * two cells wide shifts everything after it. `east_asian_width` W or F is
+ * therefore disqualifying. `✋` (U+270B) was Wide, and being an emoji is also
+ * why fonts render it at emoji size in the middle of a text row.
+ *
+ * COVERAGE: a plain terminal font carries far less than the unicode TIER
+ * implies. The tier answers "is the locale UTF-8", which says nothing about
+ * whether a given codepoint has a glyph. A beta tester's font drew `·`, `─`,
+ * `│`, `○`, `▶` and `✔` perfectly while drawing `⏎` (U+23CE) as an empty box.
+ * Prefer Latin-1, Arrows (U+2190–21FF), Box Drawing, Block Elements and
+ * Geometric Shapes, which every monospace font ships; treat Dingbats,
+ * Miscellaneous Symbols and anything with emoji presentation as suspect.
+ */
 const UNICODE_GLYPHS: TuiGlyphSet = {
   blockedPermission: '⚠',
   blockedQuestion: '⚠',
-  waiting: '✋',
+  waiting: '!',
   working: ['·', '✢', '✳', '∗', '✻', '✽'],
   idle: '○',
   recent: '✔',
@@ -139,7 +156,7 @@ const UNICODE_GLYPHS: TuiGlyphSet = {
   boxBottomRight: '┘',
   boxHorizontal: '─',
   boxVertical: '│',
-  enter: '⏎',
+  enter: '↵',
   updown: '↑↓',
   separator: '·',
   ellipsis: '…',
