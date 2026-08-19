@@ -565,7 +565,10 @@ export class ZerolagInputAddon implements XtermAddon {
 
       // Skip redundant re-renders — include text content to detect
       // same-length changes (e.g., setFlushed with different text)
-      const renderKey = `${displayText}:${startCol}:${activePrompt.row}:${activePrompt.col}:${totalCols}:${this._flushedOffset}`;
+      // `rows` is part of the key: the layout is clamped to the visible rows
+      // (see renderOverlay), so a keyboard opening — which changes rows without
+      // changing the text — must not be skipped as a redundant render.
+      const renderKey = `${displayText}:${startCol}:${activePrompt.row}:${activePrompt.col}:${totalCols}:${this._terminal.rows}:${this._flushedOffset}`;
       if (renderKey === this._lastRenderKey && this._overlay.style.display !== 'none') return;
       this._lastRenderKey = renderKey;
 
@@ -612,6 +615,7 @@ export class ZerolagInputAddon implements XtermAddon {
         charTop,
         charHeight,
         promptRow: activePrompt.row,
+        totalRows: this._terminal.rows,
         font: this._font,
         showCursor: this._options.showCursor,
         cursorColor,
