@@ -53,6 +53,7 @@ import {
   type PiConfig,
   type GrokConfig,
   type DeepSeekConfig,
+  type OmpConfig,
   type SessionRemote,
   type SessionDocker,
 } from './types.js';
@@ -180,7 +181,8 @@ export function isExternalCliMode(mode: SessionMode): boolean {
     mode === 'antigravity' ||
     mode === 'pi' ||
     mode === 'grok' ||
-    mode === 'deepseek'
+    mode === 'deepseek' ||
+    mode === 'omp'
   );
 }
 
@@ -200,6 +202,8 @@ function getModeLabel(mode: SessionMode): string {
       return 'Grok';
     case 'deepseek':
       return 'DeepSeek';
+    case 'omp':
+      return 'OMP';
     case 'shell':
       return 'Shell';
     case 'claude':
@@ -528,6 +532,8 @@ export class Session extends EventEmitter {
 
   // DeepSeek Harness configuration (only for mode === 'deepseek')
   private _deepSeekConfig: DeepSeekConfig | undefined;
+  // OMP configuration (only for mode === 'omp')
+  private _ompConfig: OmpConfig | undefined;
   private _resumeSessionId: string | undefined;
 
   // Ephemeral env overrides (e.g., CLAUDE_CODE_EXPERIMENTAL_AGENT_TEAMS). Exported by tmux
@@ -627,6 +633,8 @@ export class Session extends EventEmitter {
       grokConfig?: GrokConfig;
       /** DeepSeek Harness configuration (only for mode === 'deepseek') */
       deepSeekConfig?: DeepSeekConfig;
+      /** OMP configuration (only for mode === 'omp') */
+      ompConfig?: OmpConfig;
       /** Resume a previous Claude conversation (used after server reboot) */
       resumeSessionId?: string;
       /** Extra env vars exported to the CLI at spawn time (no disk persistence) */
@@ -734,6 +742,10 @@ export class Session extends EventEmitter {
     // Apply Pi configuration
     if (config.piConfig) {
       this._piConfig = config.piConfig;
+    }
+    // Apply OMP configuration
+    if (config.ompConfig) {
+      this._ompConfig = config.ompConfig;
     }
 
     // Apply DeepSeek Harness configuration
@@ -1368,6 +1380,7 @@ export class Session extends EventEmitter {
       piConfig: this._piConfig,
       grokConfig: this._grokConfig,
       deepSeekConfig: this._deepSeekConfig,
+      ompConfig: this._ompConfig,
       resumeSessionId: this._resumeSessionId,
       effort: this._effort,
       // COD-118: runtime-only — surfaced so the frontend can require explicit user
@@ -1617,6 +1630,7 @@ export class Session extends EventEmitter {
       piConfig: this._piConfig,
       grokConfig: this._grokConfig,
       deepSeekConfig: this._deepSeekConfig,
+      ompConfig: this._ompConfig,
       resumeSessionId: this._resumeSessionId,
       envOverrides: this._envOverrides,
       effort: this._effort,
@@ -1877,6 +1891,7 @@ export class Session extends EventEmitter {
             piConfig: this._piConfig,
             grokConfig: this._grokConfig,
             deepSeekConfig: this._deepSeekConfig,
+            ompConfig: this._ompConfig,
             resumeSessionId: this._resumeSessionId,
             envOverrides: this._envOverrides,
             effort: this._effort,

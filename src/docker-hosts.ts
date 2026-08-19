@@ -147,6 +147,7 @@ export function defaultDockerCommandForMode(mode: SessionMode): string {
     pi: 'exec pi',
     grok: 'exec grok',
     deepseek: 'exec dsh',
+    omp: 'exec omp',
   };
   return commands[mode as DockerCommandMode] || commands.shell;
 }

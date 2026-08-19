@@ -866,6 +866,7 @@ export function registerSessionRoutes(
       body.mode !== 'pi' &&
       body.mode !== 'grok' &&
       body.mode !== 'deepseek' &&
+      body.mode !== 'omp' &&
       body.envOverrides &&
       Object.keys(body.envOverrides).length > 0 &&
       (workingDir.startsWith(CASES_DIR + '/') || workingDir.startsWith(managedCasesBase + '/'));
@@ -965,6 +966,12 @@ export function registerSessionRoutes(
         return createErrorResponse(ApiErrorCode.OPERATION_FAILED, getGrokNotFoundMessage());
       }
     }
+    if (body.mode === 'omp') {
+      const { isOmpAvailable, getOmpNotFoundMessage } = await import('../../utils/omp-cli-resolver.js');
+      if (!isOmpAvailable()) {
+        return createErrorResponse(ApiErrorCode.OPERATION_FAILED, getOmpNotFoundMessage());
+      }
+    }
 
     // Pre-validate resumeSessionId: check that the conversation file actually exists
     // in Claude's projects directory. If not, skip resume to avoid confusing
@@ -1012,12 +1019,14 @@ export function registerSessionRoutes(
                 ? body.piConfig?.model
                 : mode === 'grok'
                   ? body.grokConfig?.model
-                  : // DeepSeek's model is a composition entry in the profile's config
-                    // tree, not a session flag, so there is deliberately nothing to
-                    // read here (see docs/deepseek-integration.md).
-                    mode !== 'shell' && mode !== 'deepseek'
-                    ? modelConfig?.defaultModel || undefined
-                    : undefined;
+                  : mode === 'omp'
+                    ? body.ompConfig?.model
+                    : // DeepSeek's model is a composition entry in the profile's config
+                      // tree, not a session flag, so there is deliberately nothing to
+                      // read here (see docs/deepseek-integration.md).
+                      mode !== 'shell' && mode !== 'deepseek'
+                      ? modelConfig?.defaultModel || undefined
+                      : undefined;
     const claudeModeConfig = await ctx.getClaudeModeConfig();
     // Section 6.3: force non-granted users to a classifier-guarded mode.
     const effectiveClaudeMode = await resolveClaudeModeForUsername(claudeModeConfig.claudeMode, owner);
@@ -1056,6 +1065,7 @@ export function registerSessionRoutes(
       piConfig: mode === 'pi' ? gatedPiConfig : undefined,
       grokConfig: mode === 'grok' ? gatedGrokConfig : undefined,
       deepSeekConfig: mode === 'deepseek' ? gatedDeepSeekConfig : undefined,
+      ompConfig: mode === 'omp' ? body.ompConfig : undefined,
       resumeSessionId: validatedResumeId,
       envOverrides: await clampEnvOverridesForOwner(owner, body.envOverrides),
       effort: body.effort,
@@ -1289,6 +1299,7 @@ export function registerSessionRoutes(
         session.mode !== 'pi' &&
         session.mode !== 'grok' &&
         session.mode !== 'deepseek' &&
+        session.mode !== 'omp' &&
         ctx.store.getConfig().ralphEnabled &&
         !session.ralphTracker.autoEnableDisabled
       ) {
@@ -2857,6 +2868,7 @@ export function registerSessionRoutes(
       piConfig,
       grokConfig,
       deepSeekConfig,
+      ompConfig,
       envOverrides,
       effort,
       parentSessionId,
@@ -2907,6 +2919,7 @@ export function registerSessionRoutes(
         piConfig ||
         grokConfig ||
         deepSeekConfig ||
+        ompConfig ||
         openCodeConfig
       ) {
         return createErrorResponse(
@@ -2941,6 +2954,7 @@ export function registerSessionRoutes(
         piConfig ||
         grokConfig ||
         deepSeekConfig ||
+        ompConfig ||
         openCodeConfig
       ) {
         return createErrorResponse(
@@ -3042,6 +3056,16 @@ export function registerSessionRoutes(
           return createErrorResponse(ApiErrorCode.OPERATION_FAILED, getPiNotFoundMessage());
         }
       }
+      // Check OMP availability if requested
+      if (mode === 'omp') {
+        const { isOmpAvailable } = await import('../../utils/omp-cli-resolver.js');
+        if (!isOmpAvailable()) {
+          return createErrorResponse(
+            ApiErrorCode.OPERATION_FAILED,
+            'OMP CLI not found. Install with: curl -fsSL https://omp.sh/install | sh'
+          );
+        }
+      }
 
       // Check Grok availability if requested
       if (mode === 'grok') {
@@ -3103,14 +3127,15 @@ export function registerSessionRoutes(
         writeFileSync(join(resolvedCasePath, 'CLAUDE.md'), claudeMd);
 
         // Write .claude/settings.local.json with hooks for desktop notifications
-        // (Claude-specific — OpenCode, Codex, Gemini, Antigravity, Pi and Grok use their own systems)
+        // (Claude-specific — OpenCode, Codex, Gemini, Antigravity, Pi, Grok, DeepSeek and OMP use their own systems)
         if (
           mode !== 'opencode' &&
           mode !== 'codex' &&
           mode !== 'gemini' &&
           mode !== 'antigravity' &&
           mode !== 'pi' &&
-          mode !== 'grok'
+          mode !== 'grok' &&
+          mode !== 'omp'
         ) {
           await writeHooksConfig(resolvedCasePath);
         }
@@ -3150,6 +3175,7 @@ export function registerSessionRoutes(
     // rule the existing-case branch above states; this branch used to exclude just
     // the five external CLIs and let `shell` through).
     if (docker && docker.hooksEnabled && mode === 'claude') {
+      // configured project. Skipped for external CLIs (they use their own systems).
       try {
         if (!existsSync(join(resolvedCasePath, 'CLAUDE.md'))) {
           const templatePath = await ctx.getDefaultClaudeMdPath();
@@ -3185,6 +3211,7 @@ export function registerSessionRoutes(
       mode !== 'pi' &&
       mode !== 'grok' &&
       mode !== 'deepseek' &&
+      mode !== 'omp' &&
       !remote &&
       envOverrides &&
       Object.keys(envOverrides).length > 0
@@ -3209,10 +3236,12 @@ export function registerSessionRoutes(
                 ? piConfig?.model
                 : mode === 'grok'
                   ? grokConfig?.model
-                  : // DeepSeek's model lives in the profile's config tree, not here.
-                    mode !== 'shell' && mode !== 'deepseek'
-                    ? qsModelConfig?.defaultModel || undefined
-                    : undefined;
+                  : mode === 'omp'
+                    ? ompConfig?.model
+                    : // DeepSeek's model lives in the profile's config tree, not here.
+                      mode !== 'shell' && mode !== 'deepseek'
+                      ? qsModelConfig?.defaultModel || undefined
+                      : undefined;
     const qsClaudeModeConfig = await ctx.getClaudeModeConfig();
     const qsEffectiveClaudeMode = await resolveClaudeModeForUsername(qsClaudeModeConfig.claudeMode, owner);
     // Section 6.3: clamp Codex/Gemini/Antigravity bypass switches for a non-granted owner (no-op single-user/granted).
@@ -3252,6 +3281,7 @@ export function registerSessionRoutes(
       piConfig: mode === 'pi' ? qsGatedPiConfig : undefined,
       grokConfig: mode === 'grok' ? qsGatedGrokConfig : undefined,
       deepSeekConfig: mode === 'deepseek' ? qsGatedDeepSeekConfig : undefined,
+      ompConfig: mode === 'omp' ? ompConfig : undefined,
       envOverrides: qsGatedEnvOverrides,
       effort,
       remote,

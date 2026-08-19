@@ -433,6 +433,7 @@ describe('mobile overview run picker (CLI availability gating)', () => {
       'pi',
       'grok',
       'deepseek',
+      'omp',
       'shell',
     ]);
   });
@@ -447,7 +448,7 @@ describe('mobile overview run picker (CLI availability gating)', () => {
       src.indexOf('];', src.indexOf('const MOBILE_OVERVIEW_RUN_MODES')) + 2
     );
     const offered = [...modesBlock.matchAll(/mode: '([^']+)'/g)].map((m) => m[1]);
-    expect(offered).toContain('antigravity');
+    expect(offered).toContain('omp');
     const fn = src.slice(src.indexOf('_buildMobileOverviewRunMenu() {'));
     const gate = fn.slice(0, fn.indexOf('const header'));
     expect(gate).toContain('isCliAvailable');

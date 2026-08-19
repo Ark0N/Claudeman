@@ -191,6 +191,15 @@ export const DEPENDENCY_REGISTRY: ToolDependency[] = [
     ],
   },
   {
+    id: 'omp',
+    label: 'OMP CLI',
+    category: 'core',
+    required: false,
+    usedBy: ['OMP sessions'],
+    resolvers: [{ match: ALL, resolver: { kind: 'path', bins: ['omp'], versionArg: '--version' } }],
+    installHint: { linux: 'curl -fsSL https://omp.sh/install | sh', darwin: 'brew install can1357/tap/omp' },
+  },
+  {
     id: 'libreoffice',
     label: 'LibreOffice',
     category: 'office',

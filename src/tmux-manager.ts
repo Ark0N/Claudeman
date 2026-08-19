@@ -54,6 +54,7 @@ import {
   type PiConfig,
   type GrokConfig,
   type DeepSeekConfig,
+  type OmpConfig,
   type SessionRemote,
   type SessionDocker,
   type DockerCommandMode,
@@ -99,6 +100,8 @@ import {
   resolveDeepSeekDir,
   getDeepSeekNotFoundMessage,
   resolveDefaultDeepSeekProfile,
+  getOmpNotFoundMessage,
+  resolveOmpDir,
   resolveLocalShell,
   loginShellArgs,
 } from './utils/index.js';
@@ -897,6 +900,29 @@ function buildDeepSeekCommand(config?: DeepSeekConfig): string {
 }
 
 /**
+ * Build the OMP CLI command with appropriate flags.
+ *
+ * omp reads its model routing and hooks from ~/.omp (agent dir), so no
+ * trust/permission flags are needed: the CLI's own config governs. The only
+ * CLI flags passed are the per-session overrides Codeman knows about.
+ */
+function buildOmpCommand(config?: OmpConfig): string {
+  const parts = ['omp'];
+
+  if (config?.model) {
+    const safeModel = /^[a-zA-Z0-9._\-/]+$/.test(config.model) ? config.model : undefined;
+    if (safeModel) parts.push('--model', safeModel);
+  }
+
+  if (config?.resumeSessionId) {
+    const safeId = /^[a-zA-Z0-9._-]+$/.test(config.resumeSessionId) ? config.resumeSessionId : undefined;
+    if (safeId) parts.push('--resume', safeId);
+  }
+
+  return parts.join(' ');
+}
+
+/**
  * Build the spawn command for any session mode.
  * Shared by createSession() and respawnPane() to avoid duplication.
  */
@@ -941,6 +967,7 @@ export function buildSpawnCommand(options: {
   piConfig?: PiConfig;
   grokConfig?: GrokConfig;
   deepSeekConfig?: DeepSeekConfig;
+  ompConfig?: OmpConfig;
   resumeSessionId?: string;
   effort?: EffortLevel;
   /** Codeman session name, passed to claude as `--name` (version-gated, sanitized; local spawns only). */
@@ -995,6 +1022,9 @@ export function buildSpawnCommand(options: {
   }
   if (options.mode === 'deepseek') {
     return buildDeepSeekCommand(options.deepSeekConfig);
+  }
+  if (options.mode === 'omp') {
+    return buildOmpCommand(options.ompConfig);
   }
   // #208: NOT the literal '$SHELL'. This string is embedded in the `bash -c "…"`
   // argument of the respawn-pane line, which execSync runs through `/bin/sh -c`,
@@ -1179,7 +1209,6 @@ export function buildRemoteKillCommand(options: { remote: SessionRemote; session
  * adopts/resizes/respawns our session (same defence as the remote socket).
  */
 const DOCKER_TMUX_SOCKET = 'codeman-docker';
-
 /**
  * Deterministic, reattach-stable in-container tmux session name. Derived from the
  * same stable field the local muxName uses (first 8 chars of the sessionId), so a
@@ -1214,6 +1243,7 @@ function appendResumeFlag(modeCommand: string, mode: SessionMode, resumeId: stri
     case 'grok':
       return `${modeCommand} --resume ${resumeId}`;
     case 'deepseek':
+    case 'omp':
       return `${modeCommand} --resume ${resumeId}`;
     default:
       return modeCommand; // shell / opencode: no resume
@@ -1810,7 +1840,8 @@ export class TmuxManager extends EventEmitter implements TerminalMultiplexer {
       mode === 'antigravity' ||
       mode === 'pi' ||
       mode === 'grok' ||
-      mode === 'deepseek'
+      mode === 'deepseek' ||
+      mode === 'omp'
         ? 'export COLORTERM=truecolor'
         : 'unset COLORTERM',
       ...(mode === 'codex' ||
@@ -1818,7 +1849,8 @@ export class TmuxManager extends EventEmitter implements TerminalMultiplexer {
       mode === 'antigravity' ||
       mode === 'pi' ||
       mode === 'grok' ||
-      mode === 'deepseek'
+      mode === 'deepseek' ||
+      mode === 'omp'
         ? ['unset NO_COLOR']
         : []),
       // Stamp each Codex pane with a unique originator so the response-viewer
@@ -1921,6 +1953,10 @@ export class TmuxManager extends EventEmitter implements TerminalMultiplexer {
     }
     if (mode === 'deepseek') {
       const dir = resolveDeepSeekDir();
+      return { pathExport: dir ? `export PATH="${dir}:$PATH" && ` : '', dir };
+    }
+    if (mode === 'omp') {
+      const dir = resolveOmpDir();
       return { pathExport: dir ? `export PATH="${dir}:$PATH" && ` : '', dir };
     }
     return { pathExport: '', dir: null };
@@ -2033,6 +2069,7 @@ export class TmuxManager extends EventEmitter implements TerminalMultiplexer {
       piConfig,
       grokConfig,
       deepSeekConfig,
+      ompConfig,
       resumeSessionId,
       envOverrides,
       effort,
@@ -2099,6 +2136,9 @@ export class TmuxManager extends EventEmitter implements TerminalMultiplexer {
     if (mode === 'grok' && !cliDir) {
       throw new Error(getGrokNotFoundMessage());
     }
+    if (mode === 'omp' && !cliDir) {
+      throw new Error(getOmpNotFoundMessage());
+    }
 
     const envExportsStr = this.buildEnvExports(sessionId, muxName, mode).join(' && ');
 
@@ -2115,6 +2155,7 @@ export class TmuxManager extends EventEmitter implements TerminalMultiplexer {
       piConfig,
       grokConfig,
       deepSeekConfig,
+      ompConfig,
       resumeSessionId,
       effort,
       sessionName: name,

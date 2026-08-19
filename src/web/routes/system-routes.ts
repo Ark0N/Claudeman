@@ -694,6 +694,17 @@ export function registerSystemRoutes(
     };
   });
 
+  // ========== OMP ==========
+
+  app.get('/api/omp/status', async () => {
+    const { isOmpAvailable, resolveOmpDir, getOmpCliVersion } = await import('../../utils/omp-cli-resolver.js');
+    return {
+      available: isOmpAvailable(),
+      path: resolveOmpDir(),
+      version: getOmpCliVersion(),
+    };
+  });
+
   // ═══════════════════════════════════════════════════════════════
   // State & Lifecycle (cleanup, lifecycle log, stats)
   // ═══════════════════════════════════════════════════════════════
