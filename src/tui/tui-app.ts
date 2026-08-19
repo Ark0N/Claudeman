@@ -151,6 +151,16 @@ const SEARCH_DEBOUNCE_MS = 250;
 const SEARCH_LIMIT = 40;
 /** How long a "sent" style notice stays up before it clears itself. */
 const NOTICE_MS = 1_500;
+
+/**
+ * How long a resumed session gets to grow a tmux pane before the TUI stops
+ * waiting and simply selects its row. Generous: `POST /interactive` spawns the
+ * CLI, and a cold claude start is seconds, not milliseconds.
+ */
+const RESUME_PANE_TIMEOUT_MS = 8_000;
+const RESUME_PANE_POLL_MS = 250;
+/** History rows are labelled by their whole opening prompt; the notice shows a slice of it. */
+const RESUME_NOTICE_WIDTH = 48;
 /** Approval ids remembered for the bell before the set is rebuilt from what is pending. */
 const SEEN_APPROVAL_CAP = 500;
 
@@ -171,7 +181,7 @@ const BELL = '\x07';
 export type TuiAttachRefusal = 'no-mux-name' | 'nested-foreign-socket';
 
 export type TuiAttachPlan =
-  | { kind: 'attach'; file: string; args: string[]; hint: string }
+  | { kind: 'attach'; file: string; args: string[] }
   | { kind: 'switch'; file: string; args: string[] }
   | { kind: 'refuse'; reason: TuiAttachRefusal; message: string };
 
@@ -219,7 +229,6 @@ export function planAttach(muxName: string | undefined, context: TuiAttachContex
       kind: 'attach',
       file: 'tmux',
       args: ['-L', context.socket, 'attach-session', '-t', name],
-      hint: 'detach with Ctrl+B D to come back',
     };
   }
   if (inside === context.socket) {
@@ -231,6 +240,147 @@ export function planAttach(muxName: string | undefined, context: TuiAttachContex
     message:
       `this terminal is already inside tmux on socket "${inside}", and Codeman's sessions live on "${context.socket}". ` +
       'Detach first (Ctrl+B D), then run codeman tui again.',
+  };
+}
+
+/**
+ * tmux's prefix key as a human reads it: `C-b` → `Ctrl+B`, `M-a` → `Alt+A`.
+ *
+ * Never hardcoded: the socket reads the user's `~/.tmux.conf`, so a config with
+ * `set -g prefix C-a` makes every "press Ctrl+B" instruction a lie, and the one
+ * instruction that matters here is how to get back OUT of an attach.
+ */
+export function formatPrefixKey(prefix: string | undefined): string {
+  const raw = (prefix ?? '').trim();
+  if (!raw) return 'Ctrl+B';
+  const ctrl = /^C-(.+)$/.exec(raw);
+  if (ctrl) return `Ctrl+${ctrl[1].toUpperCase()}`;
+  const meta = /^M-(.+)$/.exec(raw);
+  if (meta) return `Alt+${meta[1].toUpperCase()}`;
+  return raw;
+}
+
+/** The whole chord: prefix, then `d`. */
+export function detachChord(prefix?: string): string {
+  return `${formatPrefixKey(prefix)} D`;
+}
+
+/** `#` opens `#[…]`/`#{…}` in a tmux format, so a name carrying one must double it. */
+function escapeTmuxFormat(value: string): string {
+  return value.replace(/#/g, '##');
+}
+
+/**
+ * The status line an attached session wears, as tmux option → value.
+ *
+ * Codeman turns the status bar OFF on every pane it owns (tmux-manager.ts): the
+ * web UI carries that information around the terminal instead. A terminal
+ * attach has no such frame, so the way out is invisible, and "how do I get out
+ * of this?" is answered by exiting the agent (measured: a tester left a dead
+ * pane behind on the first try). The bar exists for the length of the attach
+ * and is put back exactly as it was on detach.
+ *
+ * `reverse` rather than a palette: the TUI paints its own selected row with the
+ * same SGR 7, so the bar inherits whatever theme the terminal has instead of
+ * guessing at light or dark.
+ */
+export function buildAttachBanner(options: { prefix?: string; label?: string }): Record<string, string> {
+  const chord = escapeTmuxFormat(detachChord(options.prefix));
+  const label = escapeTmuxFormat(truncateLabel((options.label ?? '').trim(), ATTACH_BANNER_LABEL_MAX));
+  // ONE option, not `status-left`/`status-right`/`status-style`: `status-format[0]`
+  // owns the whole line, which is what removes tmux's window list (`0:bash*`)
+  // from the middle of it. The window-status options that would otherwise hide
+  // it are WINDOW options, so `set-option -t <session>` cannot even reach them.
+  const right = label ? `#[align=right] ${label} ` : '';
+  return {
+    status: 'on',
+    'status-format[0]': `#[reverse] #[bold]${chord}#[nobold] detach, back to the codeman dashboard${right}#[default]`,
+  };
+}
+
+/** Long enough for a session name, short enough to survive a narrow terminal. */
+const ATTACH_BANNER_LABEL_MAX = 28;
+
+/**
+ * What pressing Enter on a RECENT row does, decided from the row alone.
+ *
+ * Resuming is Claude Code's `--resume`, so it is claude-only, needs the
+ * directory the conversation ran in, and needs the CONVERSATION's id
+ * (`claudeSessionId`) rather than the Codeman row's: a `/clear`-respawned or
+ * re-attached session carries a different one, and the server's regex only
+ * accepts the hex-and-dashes shape a real transcript id has.
+ */
+export type TuiResumePlan =
+  | { kind: 'resume'; workingDir: string; resumeSessionId: string; sessionName?: string }
+  | { kind: 'refuse'; message: string };
+
+/** Ids the server's `resumeSessionId` accepts (`/^[a-f0-9-]+$/`), checked before the round trip. */
+const RESUME_ID_PATTERN = /^[a-f0-9-]+$/;
+
+export function planResume(session: TuiSessionRow): TuiResumePlan {
+  const workingDir = (session.workingDir ?? '').trim();
+  if (!workingDir) {
+    return { kind: 'refuse', message: 'that row has no working directory recorded, so there is nothing to resume in' };
+  }
+  const mode = (session.mode ?? 'claude').trim();
+  if (mode !== 'claude') {
+    return {
+      kind: 'refuse',
+      message: `resuming is a Claude Code feature; this row is a ${mode} session, so start a new one with n`,
+    };
+  }
+  const resumeSessionId = (session.claudeSessionId ?? session.sessionId ?? '').trim();
+  if (!RESUME_ID_PATTERN.test(resumeSessionId)) {
+    return { kind: 'refuse', message: 'that row carries no Claude conversation id, so it cannot be resumed' };
+  }
+  const sessionName = (session.name ?? '').trim();
+  return {
+    kind: 'resume',
+    workingDir,
+    resumeSessionId,
+    // Kept rather than synthesized: a resumed session losing its name is how
+    // the web UI's COD-143 bug read.
+    ...(sessionName ? { sessionName } : {}),
+  };
+}
+
+/** A handoff to tmux, set up so it can be left and put back. */
+export interface TuiAttachHandoff {
+  /** The chord that ends it, in the local tmux's own prefix. */
+  chord: string;
+  /** Undo everything the handoff changed. Idempotent enough to call once per attach. */
+  restore(): Promise<void>;
+}
+
+/**
+ * Prepare a tmux window for a human terminal: let it follow the attaching
+ * client's shape, and give it a status bar naming the way out. Both halves are
+ * best-effort and both are put back by `restore()`, so a session that was
+ * `window-size manual` with no status bar (what Codeman creates) is exactly
+ * that again after the detach.
+ */
+export async function beginAttachHandoff(client: TuiClient, muxName: string, label: string): Promise<TuiAttachHandoff> {
+  const prefix = (await client.readPrefixKey(muxName)) ?? undefined;
+  // Codeman pins its windows to the size the BROWSER dictates (`window-size
+  // manual` + `resize-window`, tmux-manager.ts), so a terminal of any other
+  // shape attaches to a window that does not fill it and tmux pads the gap with
+  // dots. `latest` (not a one-off resize to our size) is also what makes a
+  // terminal resized MID-attach follow along: tmux recomputes on every SIGWINCH
+  // and the caller is blocked in `spawnSync`.
+  const sizing = await client.readWindowSizing(muxName);
+  await client.followAttachingClient(muxName);
+  const banner = buildAttachBanner({ ...(prefix ? { prefix } : {}), label });
+  const options = await client.readSessionOptions(muxName, Object.keys(banner));
+  await client.applySessionOptions(muxName, banner);
+  return {
+    chord: detachChord(prefix),
+    async restore(): Promise<void> {
+      // Options first, then the size: dropping the status bar gives its row
+      // back to the pane, and the resize is what re-pins the browser's
+      // authority over the window.
+      if (options) await client.restoreSessionOptions(muxName, options);
+      if (sizing) await client.restoreWindowSizing(muxName, sizing);
+    },
   };
 }
 
@@ -301,6 +451,8 @@ export interface TuiKeymapContext {
   /** False in degraded mode, where the only verb that works is attach. */
   server: boolean;
   approval?: TuiApprovalKeys;
+  /** tmux's detach chord as this socket reports it. Defaults to the stock `Ctrl+B D`. */
+  detach?: string;
 }
 
 /**
@@ -347,8 +499,11 @@ export function footerKeysFor(mode: TuiUiMode, glyphs: TuiGlyphSet, context: Tui
 export function helpKeysFor(glyphs: TuiGlyphSet, context: TuiKeymapContext): Array<[string, string]> {
   const keys: Array<[string, string]> = [
     [`${glyphs.updown} / j k`, 'select'],
-    [glyphs.enter, 'attach'],
+    [glyphs.enter, 'attach — on a RECENT row, resume that conversation'],
     ['1-9', 'jump and attach'],
+    // The one key that is not the TUI's: an attach hands the terminal to tmux,
+    // and leaving it is the question every first attach asks.
+    [context.detach ?? detachChord(), 'detach from an attached session, back to here'],
   ];
   if (context.server) {
     keys.push(
@@ -693,6 +848,14 @@ class TuiApp {
   private readonly glyphTier: TuiGlyphTier;
   private readonly glyphs: TuiGlyphSet;
   private readonly socket = resolveTmuxSocketName();
+  /**
+   * How to leave an attach, in the local tmux's own prefix. Read per attach
+   * (a session can override the prefix) and remembered so the help overlay
+   * names the real chord even before the first attach.
+   */
+  private detachChordLabel = detachChord();
+  /** True for the length of one resume. The only thing standing between a resume and a loop. */
+  private resuming = false;
 
   private stream: TuiEventStream | null = null;
   private tick = 0;
@@ -1069,6 +1232,7 @@ class TuiApp {
     return {
       server: this.model.connection !== 'degraded',
       approval: approval ? (approval.kind === 'idle' ? 'idle' : 'menu') : null,
+      detach: this.detachChordLabel,
     };
   }
 
@@ -1572,14 +1736,116 @@ class TuiApp {
     this.paint();
   }
 
+  /**
+   * Enter on a RECENT row: resume that conversation and hand the terminal to
+   * it, so one key means the same thing everywhere in the list ("put me in
+   * this"). The row itself is history and has no pane, so the resumed session
+   * is a NEW one carrying the old conversation, exactly like the web UI's
+   * Resume Conversation list.
+   */
+  private async resumeSelected(row: TuiRow): Promise<void> {
+    if (this.resuming) return;
+    if (this.model.connection === 'degraded') {
+      this.message('warn', 'resuming needs the server; only attach works while it is down');
+      return;
+    }
+    const plan = planResume(row.session);
+    if (plan.kind === 'refuse') {
+      this.message('warn', plan.message);
+      return;
+    }
+    // The flag is the loop breaker, not decoration: a resume ends in an attach,
+    // and one that could re-enter this method would spawn a session per pass.
+    this.resuming = true;
+    let sessionId: string;
+    try {
+      this.notice(`resuming ${truncateLabel(rowLabel(row.session), RESUME_NOTICE_WIDTH)}…`);
+      this.paint(true);
+      sessionId = await this.client.resumeSession({
+        workingDir: plan.workingDir,
+        resumeSessionId: plan.resumeSessionId,
+        ...(plan.sessionName ? { sessionName: plan.sessionName } : {}),
+      });
+    } catch (error) {
+      this.message('err', `could not resume that conversation: ${getErrorMessage(error)}`);
+      this.paint(true);
+      return;
+    } finally {
+      this.resuming = false;
+    }
+
+    // Selected whichever way the race goes: a row that is not in the model yet
+    // is picked up by the next resync instead.
+    this.pendingSelectId = sessionId;
+    const fresh = await this.awaitResumedRow(sessionId);
+    if (!fresh) {
+      this.message('info', 'resumed; its pane is still starting — press ⏎ on the new row when it appears');
+      this.paint(true);
+      return;
+    }
+    this.pendingSelectId = null;
+    await this.attachToSession(fresh);
+  }
+
+  /**
+   * Wait for the resumed session to exist as a LIVE row with a pane, so the
+   * attach that follows has something to attach to. Bounded, and it gives up by
+   * returning null rather than by trying again from the top.
+   */
+  private async awaitResumedRow(sessionId: string): Promise<TuiRow | null> {
+    const deadline = Date.now() + RESUME_PANE_TIMEOUT_MS;
+    for (;;) {
+      if (await this.awaitPane(sessionId, 0)) {
+        await this.refresh();
+        if (this.model.select(sessionId)) {
+          const row = this.model.selectedSession();
+          if (row && row.group !== 'recent' && (row.session.muxName ?? '').trim()) return row;
+        }
+      }
+      if (Date.now() >= deadline) return null;
+      await new Promise((resolve) => setTimeout(resolve, RESUME_PANE_POLL_MS));
+    }
+  }
+
+  /**
+   * Wait for a just-created session's tmux pane to exist, by the same prefix
+   * join `applyMuxNames()` uses. Enumeration is the only honest evidence the
+   * pane is really there; deriving `codeman-<prefix>` by hand would attach to a
+   * name that may not exist yet.
+   */
+  private async awaitPane(sessionId: string, timeoutMs = RESUME_PANE_TIMEOUT_MS): Promise<string | null> {
+    const deadline = Date.now() + timeoutMs;
+    for (;;) {
+      const tmux = await this.client.enumerateTmuxSessions().catch(() => []);
+      const match = tmux.find((entry) => entry.sessionId === sessionId || sessionId.startsWith(entry.sessionIdPrefix));
+      if (match) return match.muxName;
+      if (Date.now() >= deadline) return null;
+      await new Promise((resolve) => setTimeout(resolve, RESUME_PANE_POLL_MS));
+    }
+  }
+
   private async attachSelected(): Promise<void> {
     const row = this.model.selectedSession();
     if (!row) return;
     if (row.group === 'recent') {
-      this.message('warn', 'that session is not running; resuming a past session is not wired up yet');
+      await this.resumeSelected(row);
       return;
     }
-    const plan = planAttach(row.session.muxName, {
+    await this.attachToSession(row);
+  }
+
+  /**
+   * The attach itself, for a row that is known to be live.
+   *
+   * ⚠️ Deliberately NOT reachable through `attachSelected()`: resuming ends by
+   * attaching, and routing that back through the group dispatch turned one
+   * keystroke into an unbounded resume loop (measured: 35 sessions in 40
+   * seconds before it was killed) whenever the fresh row was not selectable
+   * yet. Nothing here looks at `group` again.
+   */
+  private async attachToSession(row: TuiRow): Promise<void> {
+    const muxName = (row.session.muxName ?? '').trim();
+    const plan = planAttach(muxName, {
       socket: this.socket,
       ...(this.env.TMUX ? { tmux: this.env.TMUX } : {}),
     });
@@ -1595,6 +1861,13 @@ class TuiApp {
     this.stopPreview();
 
     if (plan.kind === 'switch') {
+      // Only the sizing, and no restore: this client keeps showing the other
+      // session after the TUI exits, so snapping the window back to the
+      // browser's size would put the dots on screen at the moment the user
+      // arrives, and a bar reading "back to the dashboard" would point at a
+      // dashboard that is gone. The web UI reclaims the size on its next
+      // resize, which sets `manual` again on its own.
+      await this.client.followAttachingClient(muxName);
       // The client this TUI draws on is about to show another session, so the
       // dashboard has nothing left to draw and no reason to keep polling.
       this.screen.leave();
@@ -1608,9 +1881,15 @@ class TuiApp {
       return;
     }
 
+    // The way OUT, set up before tmux takes the terminal: a status bar that
+    // stays for the whole attach. The line written below is on a screen tmux
+    // repaints a moment later, so it is not what the user reads.
+    const handoff = await beginAttachHandoff(this.client, muxName, rowLabel(row.session));
+    this.detachChordLabel = handoff.chord;
     this.screen.leave();
-    this.stdout.write(`${plan.hint}\n`);
+    this.stdout.write(`${handoff.chord} detaches and brings you back here.\n`);
     const result = spawnSync(plan.file, plan.args, { stdio: 'inherit' });
+    await handoff.restore();
     this.screen.enter();
     // Whatever happened in the pane happened while nobody was reading it, so the
     // first tail after a detach must not be a backed-off one.
@@ -1621,6 +1900,7 @@ class TuiApp {
       this.message('err', `tmux attach failed: ${getErrorMessage(result.error)}`);
       return;
     }
+    this.notice(`detached from ${rowLabel(row.session)} · it keeps running`);
     await this.refresh();
     this.paint(true);
   }
@@ -1955,8 +2235,14 @@ export async function runTuiAttach(position: number, options: TuiRunOptions = {}
       process.stderr.write(`${palette.warn(plan.message)}\n`);
       return 1;
     }
-    if (plan.kind === 'attach') stdout.write(`${palette.muted(plan.hint)}\n`);
+    // Same handoff the dashboard does: the window follows this terminal and
+    // wears a bar naming the way out. This path has no dashboard to come back
+    // to, so the bar's wording is the only thing the detach hint has to carry.
+    const muxName = (row.session.muxName ?? '').trim();
+    const handoff = plan.kind === 'attach' ? await beginAttachHandoff(client, muxName, rowLabel(row.session)) : null;
+    if (handoff) stdout.write(`${palette.muted(`${handoff.chord} detaches and leaves the session running.`)}\n`);
     const result = spawnSync(plan.file, plan.args, { stdio: 'inherit' });
+    await handoff?.restore();
     if (result.error) {
       process.stderr.write(`${palette.err(getErrorMessage(result.error))}\n`);
       return 1;

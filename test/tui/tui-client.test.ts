@@ -20,7 +20,10 @@ import {
   basicAuthHeader,
   enumerateTmuxSessions,
   parseEnvFile,
+  arrayOptionBase,
+  parseSessionOptions,
   parseTmuxSessionList,
+  parseWindowSizing,
   readCodemanCredentials,
   tuiServerCandidates,
   type TuiExecFile,
@@ -489,5 +492,274 @@ describe('degraded-mode tmux enumeration', () => {
       throw new Error('no server running on /tmp/tmux-1000/codeman');
     };
     await expect(enumerateTmuxSessions({ exec })).resolves.toEqual([]);
+  });
+});
+
+describe('attach window sizing', () => {
+  /** A client that only ever needs its injected exec: none of this talks to a server. */
+  function sizingClient(exec: TuiExecFile): TuiClient {
+    return new TuiClient({ baseUrl: BASE_URL, socket: 'codeman-beta', exec });
+  }
+
+  it('parses the sizing format, and rejects a window tmux could not measure', () => {
+    expect(parseWindowSizing('183\t38\tmanual\n')).toEqual({ cols: 183, rows: 38, mode: 'manual' });
+    expect(parseWindowSizing('120\t40\tlatest')).toEqual({ cols: 120, rows: 40, mode: 'latest' });
+    // No mode reported (an ancient tmux) still yields a usable size.
+    expect(parseWindowSizing('120\t40\t')).toEqual({ cols: 120, rows: 40, mode: 'manual' });
+    expect(parseWindowSizing('')).toBeNull();
+    expect(parseWindowSizing("can't find window\n")).toBeNull();
+  });
+
+  it('reads the sizing with an argv array on the client socket', async () => {
+    const calls: Array<readonly string[]> = [];
+    const client = sizingClient(async (_file, args) => {
+      calls.push(args);
+      return { stdout: '120\t40\tmanual', stderr: '' };
+    });
+    await expect(client.readWindowSizing('codeman-1a2b3c4d')).resolves.toEqual({
+      cols: 120,
+      rows: 40,
+      mode: 'manual',
+    });
+    expect(calls[0].slice(0, 6)).toEqual(['-L', 'codeman-beta', 'display-message', '-p', '-t', 'codeman-1a2b3c4d']);
+  });
+
+  it('hands the window to the attaching client with window-size latest', async () => {
+    const calls: Array<readonly string[]> = [];
+    const client = sizingClient(async (_file, args) => {
+      calls.push(args);
+      return { stdout: '', stderr: '' };
+    });
+    await expect(client.followAttachingClient('codeman-1a2b3c4d')).resolves.toBe(true);
+    expect(calls[0]).toEqual([
+      '-L',
+      'codeman-beta',
+      'set-window-option',
+      '-t',
+      'codeman-1a2b3c4d',
+      'window-size',
+      'latest',
+    ]);
+  });
+
+  it('restores a manual window with resize-window alone, which re-pins the mode itself', async () => {
+    const calls: Array<readonly string[]> = [];
+    const client = sizingClient(async (_file, args) => {
+      calls.push(args);
+      return { stdout: '', stderr: '' };
+    });
+    await client.restoreWindowSizing('codeman-1a2b3c4d', { cols: 120, rows: 40, mode: 'manual' });
+    expect(calls).toHaveLength(1);
+    expect(calls[0]).toEqual([
+      '-L',
+      'codeman-beta',
+      'resize-window',
+      '-t',
+      'codeman-1a2b3c4d',
+      '-x',
+      '120',
+      '-y',
+      '40',
+    ]);
+  });
+
+  it('restores a non-manual window by putting its mode back', async () => {
+    const calls: Array<readonly string[]> = [];
+    const client = sizingClient(async (_file, args) => {
+      calls.push(args);
+      return { stdout: '', stderr: '' };
+    });
+    await client.restoreWindowSizing('codeman-1a2b3c4d', { cols: 120, rows: 40, mode: 'latest' });
+    expect(calls).toEqual([
+      ['-L', 'codeman-beta', 'set-window-option', '-t', 'codeman-1a2b3c4d', 'window-size', 'latest'],
+    ]);
+  });
+
+  it('never targets a name Codeman does not own', async () => {
+    const calls: Array<readonly string[]> = [];
+    const client = sizingClient(async (_file, args) => {
+      calls.push(args);
+      return { stdout: '120\t40\tmanual', stderr: '' };
+    });
+    await expect(client.readWindowSizing('codeman-ssh-prod')).resolves.toBeNull();
+    await expect(client.followAttachingClient('other-session')).resolves.toBe(false);
+    await client.restoreWindowSizing('codeman-dkr-box', { cols: 80, rows: 24, mode: 'manual' });
+    expect(calls).toEqual([]);
+  });
+
+  it('swallows a dead tmux: an attach must never fail over cosmetics', async () => {
+    const client = sizingClient(async () => {
+      throw new Error('no server running on /tmp/tmux-1000/codeman-beta');
+    });
+    await expect(client.readWindowSizing('codeman-1a2b3c4d')).resolves.toBeNull();
+    await expect(client.followAttachingClient('codeman-1a2b3c4d')).resolves.toBe(false);
+    await expect(
+      client.restoreWindowSizing('codeman-1a2b3c4d', { cols: 120, rows: 40, mode: 'manual' })
+    ).resolves.toBeUndefined();
+  });
+});
+
+describe('attach status bar options', () => {
+  function optionsClient(exec: TuiExecFile): TuiClient {
+    return new TuiClient({ baseUrl: BASE_URL, socket: 'codeman-beta', exec });
+  }
+
+  const SHOW = [
+    'history-limit 100000',
+    'mouse off',
+    'status off',
+    'status-format[0] "#[reverse] left "',
+    'status-format[1] "#[align=right] second line "',
+    'status-left " plain #[bold]value\\" quoted "',
+  ].join('\n');
+
+  it('reads session-level options, unquoting what tmux quoted', () => {
+    const parsed = parseSessionOptions(SHOW, ['status', 'status-left', 'status-right']);
+    expect(parsed.status).toBe('off');
+    expect(parsed['status-left']).toBe(' plain #[bold]value" quoted ');
+    // Not set on this session: restoring must UNSET it, not write a value back.
+    expect(parsed['status-right']).toBeNull();
+  });
+
+  it('captures a whole array when one index is asked for', () => {
+    const parsed = parseSessionOptions(SHOW, ['status-format[0]']);
+    expect(parsed['status-format[0]']).toBe('#[reverse] left ');
+    // The second status line the user configured comes along, or the restore
+    // would silently delete it.
+    expect(parsed['status-format[1]']).toBe('#[align=right] second line ');
+  });
+
+  it('knows an array element from a plain option', () => {
+    expect(arrayOptionBase('status-format[0]')).toBe('status-format');
+    expect(arrayOptionBase('status')).toBeNull();
+  });
+
+  it('reads the prefix from the session, falling back to the global one', () => {
+    const calls: Array<readonly string[]> = [];
+    const client = optionsClient(async (_file, args) => {
+      calls.push(args);
+      // Session level says nothing; the global answer is the real one.
+      return { stdout: args.includes('-gv') ? 'C-a\n' : '\n', stderr: '' };
+    });
+    return expect(client.readPrefixKey('codeman-1a2b3c4d'))
+      .resolves.toBe('C-a')
+      .then(() => {
+        expect(calls).toHaveLength(2);
+        expect(calls[1]).toContain('-gv');
+      });
+  });
+
+  it('restores an array by dropping it FIRST, then writing the captured indices', async () => {
+    const calls: Array<readonly string[]> = [];
+    const client = optionsClient(async (_file, args) => {
+      calls.push(args);
+      return { stdout: '', stderr: '' };
+    });
+    await client.restoreSessionOptions('codeman-1a2b3c4d', {
+      status: 'off',
+      'status-format[0]': null,
+      'status-format[1]': '#[align=right] second ',
+    });
+    // Unsetting one index leaves an EMPTY array (a blank status bar), so the
+    // base option goes first and the survivors are written back on top.
+    expect(calls[0].slice(2)).toEqual(['set-option', '-u', '-t', 'codeman-1a2b3c4d', 'status-format']);
+    expect(calls.map((args) => args.slice(2))).toContainEqual([
+      'set-option',
+      '-t',
+      'codeman-1a2b3c4d',
+      'status',
+      'off',
+    ]);
+    expect(calls.map((args) => args.slice(2))).toContainEqual([
+      'set-option',
+      '-t',
+      'codeman-1a2b3c4d',
+      'status-format[1]',
+      '#[align=right] second ',
+    ]);
+    // The null index is covered by the array drop; it never gets its own unset.
+    expect(calls.some((args) => args.includes('status-format[0]'))).toBe(false);
+  });
+
+  it('unsets a plain option that was not set on the session', async () => {
+    const calls: Array<readonly string[]> = [];
+    const client = optionsClient(async (_file, args) => {
+      calls.push(args);
+      return { stdout: '', stderr: '' };
+    });
+    await client.restoreSessionOptions('codeman-1a2b3c4d', { status: null });
+    expect(calls[0].slice(2)).toEqual(['set-option', '-u', '-t', 'codeman-1a2b3c4d', 'status']);
+  });
+
+  it('writes the banner one option at a time, and never at a foreign session', async () => {
+    const calls: Array<readonly string[]> = [];
+    const client = optionsClient(async (_file, args) => {
+      calls.push(args);
+      return { stdout: '', stderr: '' };
+    });
+    await client.applySessionOptions('codeman-1a2b3c4d', { status: 'on', 'status-format[0]': 'x' });
+    expect(calls).toHaveLength(2);
+    expect(calls[0].slice(2)).toEqual(['set-option', '-t', 'codeman-1a2b3c4d', 'status', 'on']);
+    calls.length = 0;
+    await client.applySessionOptions('codeman-ssh-prod', { status: 'on' });
+    await client.restoreSessionOptions('codeman-dkr-box', { status: null });
+    await expect(client.readPrefixKey('other-thing')).resolves.toBeNull();
+    expect(calls).toEqual([]);
+  });
+
+  it('keeps going when tmux rejects one option', async () => {
+    let seen = 0;
+    const client = optionsClient(async (_file, args) => {
+      seen += 1;
+      if (args.includes('status-format[0]')) throw new Error('unknown option');
+      return { stdout: '', stderr: '' };
+    });
+    await client.applySessionOptions('codeman-1a2b3c4d', { 'status-format[0]': 'x', status: 'on' });
+    expect(seen).toBe(2);
+  });
+});
+
+describe('resumeSession', () => {
+  it('creates with resumeSessionId and then starts the pane', async () => {
+    recorded.length = 0;
+    responder = (req, res) => {
+      if (req.url === '/api/sessions') {
+        res.writeHead(200, { 'content-type': 'application/json' });
+        res.end(JSON.stringify({ success: true, data: { session: { id: 'new-session-id' } } }));
+        return;
+      }
+      res.writeHead(200, { 'content-type': 'application/json' });
+      res.end(JSON.stringify({ success: true, data: {} }));
+    };
+    const id = await client().resumeSession({
+      workingDir: '/home/dev/codeman',
+      resumeSessionId: 'bbbbbbbb-5555-6666-7777-888888888888',
+      sessionName: 'w7-codeman',
+    });
+    expect(id).toBe('new-session-id');
+    expect(recorded.map((entry) => `${entry.method} ${entry.url}`)).toEqual([
+      'POST /api/sessions',
+      // Creating a session gives it no pane; without this the resumed row would
+      // sit in the list unattachable.
+      'POST /api/sessions/new-session-id/interactive',
+    ]);
+    expect(JSON.parse(recorded[0].body)).toMatchObject({
+      workingDir: '/home/dev/codeman',
+      resumeSessionId: 'bbbbbbbb-5555-6666-7777-888888888888',
+      mode: 'claude',
+      name: 'w7-codeman',
+    });
+  });
+
+  it('does not start a pane when creation answered without an id', async () => {
+    recorded.length = 0;
+    responder = (_req, res) => {
+      res.writeHead(200, { 'content-type': 'application/json' });
+      res.end(JSON.stringify({ success: true, data: {} }));
+    };
+    await expect(client().resumeSession({ workingDir: '/home/dev', resumeSessionId: 'aaaa-bbbb' })).rejects.toThrow(
+      /no session id/
+    );
+    expect(recorded).toHaveLength(1);
   });
 });

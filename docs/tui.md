@@ -168,6 +168,16 @@ terminal to tmux with `stdio: inherit`. Colors, mouse and paste are tmux's, at f
 fidelity. Detach with **`Ctrl+B D`** (tmux's default prefix, which Codeman does not
 change for local sessions) and the dashboard comes back and refreshes.
 
+You do not have to remember that: for as long as the attach lasts, the session wears
+a status bar reading **`Ctrl+B D  detach, back to the codeman dashboard`**, in the
+prefix your own `~/.tmux.conf` sets if you remapped it. Codeman keeps the status bar
+off on its panes (the web UI carries that information around the terminal instead),
+so the TUI turns it on for the attach and puts it back exactly as it was on detach —
+along with the window size, which follows your terminal while you are attached and
+returns to the browser's afterwards. Detaching leaves the agent running; typing
+`exit` or pressing `Ctrl+D` would end it, which is the difference the bar exists to
+make obvious.
+
 Three cases:
 
 | Where you are | What happens |
@@ -176,7 +186,14 @@ Three cases:
 | Already in tmux on Codeman's socket | `switch-client`, so you do not nest |
 | In tmux on a **different** socket | Refused, with an explanation: detach first (`Ctrl+B D`), then run `codeman tui` again |
 
-A RECENT row and a direct-PTY session have no pane to attach to, and say so.
+A direct-PTY session has no pane to attach to, and says so.
+
+**`Enter` on a RECENT row resumes that conversation** instead: there is no pane to
+attach to, so the TUI creates a new claude session carrying the old transcript
+(`resumeSessionId`, exactly what the web UI's "Resume Conversation" list does), in
+the directory it originally ran in and under its old name, then attaches to it. It
+is claude-only, and a row with no working directory or no conversation id says why
+rather than resuming something else.
 
 `x` never bulk-kills: it kills one session, only after you retype its name, never a
 history row, and never the session the TUI itself is running in.

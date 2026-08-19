@@ -13,13 +13,17 @@ import { describe, it, expect } from 'vitest';
 import {
   applyLiveMetrics,
   applyMuxNames,
+  buildAttachBanner,
   buildListLines,
   confirmAccepts,
   confirmKillStep,
+  detachChord,
   footerKeysFor,
+  formatPrefixKey,
   helpKeysFor,
   isSelfSession,
   planAttach,
+  planResume,
   previewIntervalMs,
   previewNoteFor,
   resyncDelayMs,
@@ -72,7 +76,6 @@ describe('planAttach', () => {
       kind: 'attach',
       file: 'tmux',
       args: ['-L', 'codeman', 'attach-session', '-t', 'codeman-abcdef01'],
-      hint: expect.stringContaining('Ctrl+B D'),
     });
   });
 
@@ -206,7 +209,12 @@ describe('footerKeysFor', () => {
   it('keeps the help overlay to the same inventory', () => {
     const help = helpKeysFor(GLYPHS, { server: true });
     expect(help.map(([, description]) => description)).toEqual(
-      expect.arrayContaining(['attach', 'new session', 'kill (typed confirmation)', 'quit'])
+      expect.arrayContaining([
+        'attach — on a RECENT row, resume that conversation',
+        'new session',
+        'kill (typed confirmation)',
+        'quit',
+      ])
     );
     expect(help.flat().join(' ')).toContain('search');
     const degraded = helpKeysFor(GLYPHS, { server: false }).flat().join(' ');
@@ -446,5 +454,105 @@ describe('buildListLines', () => {
     const [line] = buildListLines(model.rows(), 20);
     expect(line.label).toHaveLength(20);
     expect(line.label.endsWith('…')).toBe(true);
+  });
+});
+
+describe('the way out of an attach', () => {
+  it('spells the prefix the way a human reads it, and never assumes C-b', () => {
+    expect(formatPrefixKey('C-b')).toBe('Ctrl+B');
+    // A user who remapped the prefix must not be told to press Ctrl+B.
+    expect(formatPrefixKey('C-a')).toBe('Ctrl+A');
+    expect(formatPrefixKey('M-x')).toBe('Alt+X');
+    // Nothing to go on: the tmux default is the honest guess.
+    expect(formatPrefixKey(undefined)).toBe('Ctrl+B');
+    expect(formatPrefixKey('   ')).toBe('Ctrl+B');
+    // A shape we do not recognise passes through rather than being mangled.
+    expect(formatPrefixKey('F1')).toBe('F1');
+  });
+
+  it('names the chord, not just the prefix', () => {
+    expect(detachChord('C-a')).toBe('Ctrl+A D');
+    expect(detachChord()).toBe('Ctrl+B D');
+  });
+
+  it('builds ONE status-format option, so tmux draws no window list beside it', () => {
+    const banner = buildAttachBanner({ prefix: 'C-b', label: 'w3-codeman' });
+    expect(Object.keys(banner).sort()).toEqual(['status', 'status-format[0]']);
+    expect(banner.status).toBe('on');
+    expect(banner['status-format[0]']).toContain('#[bold]Ctrl+B D#[nobold]');
+    expect(banner['status-format[0]']).toContain('#[align=right] w3-codeman ');
+  });
+
+  it('carries the remapped prefix into the bar', () => {
+    expect(buildAttachBanner({ prefix: 'C-a' })['status-format[0]']).toContain('Ctrl+A D');
+  });
+
+  it('escapes a label that would otherwise open a tmux format', () => {
+    const banner = buildAttachBanner({ label: 'fix #42 #[bold]' });
+    expect(banner['status-format[0]']).toContain('fix ##42 ##[bold]');
+  });
+
+  it('truncates a long label instead of pushing the instruction off the bar', () => {
+    const banner = buildAttachBanner({ label: 'w12-codeman: a very long session label indeed' });
+    const right = (banner['status-format[0]'].split('#[align=right]')[1] ?? '').replace('#[default]', '');
+    // 28 characters of label plus the space either side.
+    expect(right.length).toBeLessThanOrEqual(30);
+    expect(right).toContain('…');
+    expect(banner['status-format[0]']).toContain('detach, back to the codeman dashboard');
+  });
+
+  it('leaves the right side out entirely when there is no label', () => {
+    expect(buildAttachBanner({})['status-format[0]']).not.toContain('#[align=right]');
+  });
+
+  it("tells the help overlay how to get back, in the socket's own prefix", () => {
+    const keys = helpKeysFor(GLYPHS, { server: true, detach: 'Ctrl+A D' });
+    const detach = keys.find(([key]) => key === 'Ctrl+A D');
+    expect(detach?.[1]).toContain('detach');
+    // Degraded mode still attaches, so it still needs the way out.
+    expect(helpKeysFor(GLYPHS, { server: false }).map(([key]) => key)).toContain('Ctrl+B D');
+  });
+});
+
+describe('planResume', () => {
+  const base = { sessionId: 'aaaaaaaa-1111-2222-3333-444444444444', sources: ['transcript'] } as const;
+
+  it('resumes the CONVERSATION id, not the row id', () => {
+    const plan = planResume({
+      ...base,
+      claudeSessionId: 'bbbbbbbb-5555-6666-7777-888888888888',
+      workingDir: '/home/dev/codeman',
+      name: 'w7-codeman',
+    });
+    expect(plan).toEqual({
+      kind: 'resume',
+      workingDir: '/home/dev/codeman',
+      resumeSessionId: 'bbbbbbbb-5555-6666-7777-888888888888',
+      sessionName: 'w7-codeman',
+    });
+  });
+
+  it('falls back to the row id when the row IS the transcript', () => {
+    const plan = planResume({ ...base, workingDir: '/home/dev/codeman' });
+    expect(plan).toMatchObject({ kind: 'resume', resumeSessionId: base.sessionId });
+    // No name to keep: the server names it rather than the TUI inventing one.
+    expect(plan).not.toHaveProperty('sessionName');
+  });
+
+  it('refuses a row with nowhere to run', () => {
+    expect(planResume({ ...base })).toMatchObject({ kind: 'refuse' });
+  });
+
+  it('refuses a non-claude row, since resume is a Claude Code feature', () => {
+    const plan = planResume({ ...base, workingDir: '/home/dev/codeman', mode: 'codex' });
+    expect(plan.kind).toBe('refuse');
+    if (plan.kind === 'refuse') expect(plan.message).toContain('codex');
+  });
+
+  it('refuses an id the server would reject anyway', () => {
+    // The route validates `/^[a-f0-9-]+$/`; a mux-derived row id is not that.
+    expect(planResume({ ...base, sessionId: 'codeman-w1', workingDir: '/home/dev' })).toMatchObject({
+      kind: 'refuse',
+    });
   });
 });

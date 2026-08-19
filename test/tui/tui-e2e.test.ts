@@ -45,6 +45,8 @@ const LIST_WIDTH = computeLayout(COLS, ROWS).list.width;
 const NOW = Date.now();
 
 const ALPHA = 'aaaa1111-0000-0000-0000-000000000000';
+/** The id the fake server hands back for a resumed conversation. */
+const RESUMED = 'dddd4444-0000-0000-0000-000000000000';
 const BETA = 'bbbb2222-0000-0000-0000-000000000000';
 
 /** Mutable so a test can add a session and announce it over SSE. */
@@ -68,6 +70,10 @@ let liveState: Array<Record<string, unknown>> = [];
 let terminalReads = 0;
 /** Everything the TUI posted, so a test can assert on the exact body. */
 const answered: Array<{ id: string; body: Record<string, unknown> }> = [];
+/** `POST /api/sessions` bodies: resuming a RECENT row is the only thing that sends one. */
+const created: Array<Record<string, unknown>> = [];
+/** Sessions the TUI asked to start a pane for, in order. */
+const started: string[] = [];
 const inputs: Array<{ sessionId: string; body: Record<string, unknown> }> = [];
 
 const PLAN_USAGE = {
@@ -282,7 +288,20 @@ beforeAll(async () => {
     }
     if (url.startsWith('/api/sessions/unified')) return sendJson(res, { success: true, data: { sessions } });
     if (url === '/api/sessions' || url.startsWith('/api/sessions?')) {
+      if (req.method === 'POST') {
+        void readBody(req).then((body) => {
+          created.push(body);
+          sendJson(res, { success: true, data: { session: { id: RESUMED } } });
+        });
+        return;
+      }
       return sendJson(res, { success: true, data: liveState });
+    }
+
+    const startFor = sessionRoute(url, 'interactive');
+    if (startFor) {
+      started.push(startFor);
+      return sendJson(res, { success: true, data: {} });
     }
 
     const previewFor = sessionRoute(url, 'terminal');
@@ -660,6 +679,36 @@ describe('codeman tui (under a pty)', () => {
     await waitFor(() => frameLines(output).join('\n').includes('no longer on screen'), 'the gone-dialog message');
     term.write('\u001b');
     await waitFor(() => !frameLines(output).join('\n').includes('no longer on screen'), 'escape to dismiss it');
+  });
+
+  it('resumes a RECENT row exactly ONCE, however long its pane takes to appear', async () => {
+    await waitFor(() => frameLines(output)[ROWS - 1].includes('attach'), 'the list to have focus');
+    for (let i = 0; i < 8 && !rowFor(output, 'w3-gamma').startsWith('>'); i++) {
+      term.write('\u001b[B');
+      await new Promise((done) => setTimeout(done, 120));
+    }
+    await waitFor(() => rowFor(output, 'w3-gamma').startsWith('>'), 'the history row to be selected');
+
+    term.write('\r');
+    await waitFor(() => created.length > 0, 'the resume POST');
+    expect(created[0]).toMatchObject({
+      // The conversation, in the directory it ran in, as a claude session.
+      resumeSessionId: 'cccc3333-0000-0000-0000-000000000000',
+      workingDir: '/tmp/gamma',
+      mode: 'claude',
+      name: 'w3-gamma',
+    });
+    await waitFor(() => started.includes(RESUMED), 'the resumed session to be started');
+
+    // The pane never appears here (the child runs on an empty tmux socket), which
+    // is precisely the case that used to re-enter the resume: one session per
+    // second until something killed it. One press must stay one session.
+    await new Promise((done) => setTimeout(done, 2_500));
+    expect(created).toHaveLength(1);
+    expect(started).toEqual([RESUMED]);
+
+    term.write('\u001b');
+    await waitFor(() => frameLines(output)[ROWS - 1].includes('attach'), 'the list to take focus back');
   });
 
   it('quits on q and restores the screen it took over', async () => {

@@ -100,6 +100,15 @@ export interface TuiServerInfo {
   planUsage?: TuiPlanUsage | null;
 }
 
+/** What `resumeSession()` needs: where the conversation ran, and which one it was. */
+export interface TuiResumeOptions {
+  workingDir: string;
+  /** The Claude conversation id (`claudeSessionId`, else the row's own id). */
+  resumeSessionId: string;
+  /** Kept from the row when it had one, so a resumed session does not lose its name. */
+  sessionName?: string;
+}
+
 export interface TuiClientOptions {
   /** Skip discovery and talk to this origin. */
   baseUrl?: string;
@@ -116,6 +125,8 @@ export interface TuiClientOptions {
   exec?: TuiExecFile;
   /** Read-only source of names/dirs in degraded mode. Defaults to the instance's. */
   statePath?: string;
+  /** tmux socket name. Defaults to the instance's, which is what keeps a beta TUI off prod's sessions. */
+  socket?: string;
 }
 
 /** Plan-usage snapshot as the server broadcasts it (telemetry plus its source). */
@@ -386,6 +397,89 @@ export function parseTmuxSessionList(stdout: string): TuiTmuxSession[] {
 }
 
 /**
+ * How tmux is sizing a session's window, as `readWindowSizing()` found it.
+ *
+ * Codeman pins every window it owns to the size the BROWSER dictates
+ * (`window-size manual` plus an explicit `resize-window`, see
+ * `tmux-manager.ts`), which is what stops a stray attach from shrinking the web
+ * terminal. The cost is paid by the terminal: a client of any other shape
+ * attaches to a window that does not fill it, and tmux pads the difference with
+ * dots. The attach path therefore brackets the handoff with `latest` and puts
+ * this snapshot back afterwards.
+ */
+export interface TuiWindowSizing {
+  cols: number;
+  rows: number;
+  /** tmux's `window-size` option: `manual`, `latest`, `largest` or `smallest`. */
+  mode: string;
+}
+
+const TMUX_SIZING_FORMAT = ['#{window_width}', '#{window_height}', '#{window-size}'].join(TMUX_FIELD_SEPARATOR);
+
+/** Parse the sizing format above. Pure, so the format string is unit-testable. */
+export function parseWindowSizing(stdout: string): TuiWindowSizing | null {
+  const [width = '', height = '', mode = ''] = stdout.trim().split(TMUX_FIELD_SEPARATOR);
+  const cols = Number.parseInt(width, 10);
+  const rows = Number.parseInt(height, 10);
+  if (!Number.isSafeInteger(cols) || !Number.isSafeInteger(rows) || cols <= 0 || rows <= 0) return null;
+  const value = mode.trim();
+  return { cols, rows, ...(value ? { mode: value } : { mode: 'manual' }) };
+}
+
+/**
+ * Session-level tmux options, as `readSessionOptions()` found them. `null` is
+ * "not set on this session", which restores by UNSETTING rather than by writing
+ * a value back: writing tmux's inherited value would pin an option the session
+ * never had, and Codeman's own `status off` is exactly such a session-level
+ * option that must survive the round trip.
+ */
+export type TuiSessionOptions = Record<string, string | null>;
+
+/**
+ * Parse `show-options -t <session>` (session-level options only, one `key value`
+ * per line) for the keys asked about. Values tmux quotes are unquoted here, so
+ * what comes back can be handed straight to `set-option` as an argv element.
+ */
+export function parseSessionOptions(stdout: string, keys: readonly string[]): TuiSessionOptions {
+  const found = new Map<string, string>();
+  for (const line of stdout.split('\n')) {
+    const trimmed = line.trimEnd();
+    if (!trimmed) continue;
+    const space = trimmed.indexOf(' ');
+    const key = space === -1 ? trimmed : trimmed.slice(0, space);
+    const raw = space === -1 ? '' : trimmed.slice(space + 1);
+    found.set(key, unquoteTmuxValue(raw));
+  }
+  const options: TuiSessionOptions = {};
+  for (const key of keys) {
+    const base = arrayOptionBase(key);
+    if (base === null) {
+      options[key] = found.get(key) ?? null;
+      continue;
+    }
+    // An array option is captured WHOLE: restoring `status-format[0]` alone
+    // would silently drop a second status line the user configured.
+    options[key] = found.get(key) ?? null;
+    for (const [name, value] of found) {
+      if (arrayOptionBase(name) === base) options[name] = value;
+    }
+  }
+  return options;
+}
+
+/** `status-format[0]` → `status-format`; a plain option name → null. */
+export function arrayOptionBase(key: string): string | null {
+  const match = /^([^[\]]+)\[\d+\]$/.exec(key);
+  return match ? (match[1] ?? null) : null;
+}
+
+/** tmux quotes a value only when it has to; `"a \"b\""` comes back as `a "b"`. */
+function unquoteTmuxValue(value: string): string {
+  if (value.length < 2 || !value.startsWith('"') || !value.endsWith('"')) return value;
+  return value.slice(1, -1).replace(/\\(["\\])/g, '$1');
+}
+
+/**
  * List Codeman's tmux sessions without a server, decorating them with whatever
  * `state.json` remembers. Attach is all this supports: there are no states, no
  * approvals and no previews when nothing is running the classification.
@@ -441,6 +535,7 @@ export class TuiClient {
   private readonly probeTimeoutMs: number;
   private readonly exec: TuiExecFile;
   private readonly statePath: string;
+  private readonly socket: string;
   private readonly streams = new Set<SseStream>();
   private readonly clientId = `codeman-tui-${process.pid}`;
   private seq = 0;
@@ -457,6 +552,7 @@ export class TuiClient {
     this.probeTimeoutMs = options.probeTimeoutMs ?? DEFAULT_PROBE_TIMEOUT_MS;
     this.exec = options.exec ?? defaultExecFile;
     this.statePath = options.statePath ?? dataPath('state.json');
+    this.socket = options.socket ?? resolveTmuxSocketName();
   }
 
   /** The origin in use, or null before a successful `connect()`. */
@@ -630,6 +726,27 @@ export class TuiClient {
     return data;
   }
 
+  /**
+   * Resume a past Claude conversation as a NEW session, the way the web UI's
+   * "Resume Conversation" list does: `POST /api/sessions` carrying
+   * `resumeSessionId` (quick-start has no such field), then `/interactive` to
+   * give it a pane. Returns the new session's id.
+   */
+  async resumeSession(options: TuiResumeOptions): Promise<string> {
+    const data = await this.requestData<{ session?: { id?: string } }>('POST', '/api/sessions', {
+      workingDir: options.workingDir,
+      resumeSessionId: options.resumeSessionId,
+      mode: 'claude',
+      ...(options.sessionName ? { name: options.sessionName } : {}),
+    });
+    const sessionId = data?.session?.id;
+    if (!sessionId) throw new TuiApiError('resuming returned no session id', 502);
+    // Creating a session does not start one: without this it has no pane, and
+    // the row would sit there unattachable.
+    await this.requestData('POST', `/api/sessions/${encodeURIComponent(sessionId)}/interactive`, {});
+    return sessionId;
+  }
+
   async fetchCases(): Promise<CaseInfo[]> {
     const data = await this.requestData<CaseInfo[]>('GET', '/api/cases');
     return Array.isArray(data) ? data : [];
@@ -669,7 +786,164 @@ export class TuiClient {
 
   /** Sessions straight from tmux, for when no server answered. */
   enumerateTmuxSessions(): Promise<TuiTmuxSession[]> {
-    return enumerateTmuxSessions({ exec: this.exec, statePath: this.statePath });
+    return enumerateTmuxSessions({ exec: this.exec, socket: this.socket, statePath: this.statePath });
+  }
+
+  // ── Attach sizing ──────────────────────────────────────────────────────────────────
+
+  /**
+   * The window's current size and sizing mode, or null when the socket, the
+   * session or tmux itself is not there. Best-effort by design: an attach that
+   * cannot be measured still attaches.
+   */
+  async readWindowSizing(muxName: string): Promise<TuiWindowSizing | null> {
+    if (!MUX_NAME_PATTERN.test(muxName)) return null;
+    try {
+      const { stdout } = await this.exec('tmux', [
+        '-L',
+        this.socket,
+        'display-message',
+        '-p',
+        '-t',
+        muxName,
+        TMUX_SIZING_FORMAT,
+      ]);
+      return parseWindowSizing(stdout);
+    } catch {
+      return null;
+    }
+  }
+
+  /**
+   * Let the window follow whichever client is in front of it, for the length of
+   * an attach. `latest` (rather than a one-off `resize-window` to our own size)
+   * is what makes a terminal resized MID-attach follow along: tmux recomputes
+   * on every SIGWINCH, and the TUI process is blocked in `spawnSync` and cannot.
+   */
+  async followAttachingClient(muxName: string): Promise<boolean> {
+    if (!MUX_NAME_PATTERN.test(muxName)) return false;
+    try {
+      await this.exec('tmux', ['-L', this.socket, 'set-window-option', '-t', muxName, 'window-size', 'latest']);
+      return true;
+    } catch {
+      return false;
+    }
+  }
+
+  /**
+   * tmux's prefix key for a session (`C-b` unless the user's config says
+   * otherwise), or null when tmux cannot say. Session-level first, then global:
+   * `show-options -v` resolves the chain on its own, and an empty answer simply
+   * means "nothing set here".
+   */
+  async readPrefixKey(muxName: string): Promise<string | null> {
+    if (!MUX_NAME_PATTERN.test(muxName)) return null;
+    for (const args of [
+      ['-L', this.socket, 'show-options', '-t', muxName, '-v', 'prefix'],
+      ['-L', this.socket, 'show-options', '-gv', 'prefix'],
+    ]) {
+      try {
+        const { stdout } = await this.exec('tmux', args);
+        const value = stdout.trim();
+        if (value) return value;
+      } catch {
+        return null;
+      }
+    }
+    return null;
+  }
+
+  /** Snapshot the session-level options an attach is about to overwrite. */
+  async readSessionOptions(muxName: string, keys: readonly string[]): Promise<TuiSessionOptions | null> {
+    if (!MUX_NAME_PATTERN.test(muxName)) return null;
+    try {
+      const { stdout } = await this.exec('tmux', ['-L', this.socket, 'show-options', '-t', muxName]);
+      return parseSessionOptions(stdout, keys);
+    } catch {
+      return null;
+    }
+  }
+
+  /**
+   * Write session options, one `set-option` per key. Sequential rather than a
+   * single `;`-chained invocation on purpose: a value tmux rejects then costs
+   * that one option instead of every option after it.
+   */
+  async applySessionOptions(muxName: string, values: Record<string, string>): Promise<void> {
+    if (!MUX_NAME_PATTERN.test(muxName)) return;
+    for (const [key, value] of Object.entries(values)) {
+      try {
+        await this.exec('tmux', ['-L', this.socket, 'set-option', '-t', muxName, key, value]);
+      } catch {
+        /* an option this tmux does not know is not worth failing an attach over */
+      }
+    }
+  }
+
+  /**
+   * Put every snapshotted option back: a value writes, a `null` unsets.
+   *
+   * ⚠️ An ARRAY option (`status-format[0]`) cannot be restored element by
+   * element: `set -u status-format[0]` leaves an EMPTY array rather than
+   * falling back to the inherited default, which renders as a BLANK status bar
+   * on a session that legitimately had one (measured). The whole array is
+   * therefore dropped first, and any indices the snapshot captured are written
+   * back on top.
+   */
+  async restoreSessionOptions(muxName: string, snapshot: TuiSessionOptions): Promise<void> {
+    if (!MUX_NAME_PATTERN.test(muxName)) return;
+    const arrays = new Set<string>();
+    for (const key of Object.keys(snapshot)) {
+      const base = arrayOptionBase(key);
+      if (base) arrays.add(base);
+    }
+    for (const base of arrays) await this.setOption(['-u', '-t', muxName, base]);
+    for (const [key, value] of Object.entries(snapshot)) {
+      if (value === null) {
+        // Indexed nulls are already gone with the array drop above.
+        if (arrayOptionBase(key) === null) await this.setOption(['-u', '-t', muxName, key]);
+        continue;
+      }
+      await this.setOption(['-t', muxName, key, value]);
+    }
+  }
+
+  /** One `set-option`, swallowing failure: the session may be gone by now. */
+  private async setOption(args: readonly string[]): Promise<void> {
+    try {
+      await this.exec('tmux', ['-L', this.socket, 'set-option', ...args]);
+    } catch {
+      /* the user may have exited the agent from inside the attach */
+    }
+  }
+
+  /**
+   * Put a window back the way `readWindowSizing()` found it, so the web UI
+   * keeps the authority it had before the attach. The resize goes last:
+   * `resize-window` sets `window-size manual` on its own, so ordering it after
+   * the option write would silently undo a restored `latest`.
+   */
+  async restoreWindowSizing(muxName: string, sizing: TuiWindowSizing): Promise<void> {
+    if (!MUX_NAME_PATTERN.test(muxName)) return;
+    try {
+      if (sizing.mode === 'manual') {
+        await this.exec('tmux', [
+          '-L',
+          this.socket,
+          'resize-window',
+          '-t',
+          muxName,
+          '-x',
+          String(sizing.cols),
+          '-y',
+          String(sizing.rows),
+        ]);
+        return;
+      }
+      await this.exec('tmux', ['-L', this.socket, 'set-window-option', '-t', muxName, 'window-size', sizing.mode]);
+    } catch {
+      /* the pane may be gone (the user exited the agent from inside the attach) */
+    }
   }
 
   // ── Live updates ───────────────────────────────────────────────────────────
