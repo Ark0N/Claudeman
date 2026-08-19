@@ -55,6 +55,7 @@ import { approvalAnswerForKey, newApprovalIds } from './tui-approvals.js';
 import { composerScroll, composerStep, composerText, createComposer, type TuiComposerState } from './tui-composer.js';
 import { formatAwayDigest } from './tui-digest.js';
 import {
+  ATTACH_BANNER_MARKER,
   TuiClient,
   type TuiApprovalAnswer,
   type TuiEventStream,
@@ -316,7 +317,7 @@ export function buildAttachBanner(options: {
   return {
     status: 'on',
     'status-style': 'bg=default,fg=default',
-    'status-format[0]': `#[align=left] press #[bold]${chord}#[nobold] to detach, back to the codeman dashboard${right}#[default]`,
+    'status-format[0]': `#[align=left] press #[bold]${chord}#[nobold] to detach, ${ATTACH_BANNER_MARKER}${right}#[default]`,
   };
 }
 
@@ -980,6 +981,10 @@ class TuiApp {
 
     await this.refresh();
     if (server) this.subscribe();
+
+    // Fire and forget: a bar stranded by a previous run is cosmetic, so it must
+    // never delay the first frame or fail a start.
+    void this.client.clearLeakedAttachBanners().catch(() => undefined);
 
     return new Promise<number>((resolve) => {
       this.resolveExit = resolve;

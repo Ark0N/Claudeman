@@ -23,6 +23,7 @@ import {
   arrayOptionBase,
   parseSessionOptions,
   parseDetachKey,
+  ATTACH_BANNER_MARKER,
   parseTmuxSessionList,
   parseWindowSizing,
   readCodemanCredentials,
@@ -597,6 +598,61 @@ describe('attach window sizing', () => {
     await expect(
       client.restoreWindowSizing('codeman-1a2b3c4d', { cols: 120, rows: 40, mode: 'manual' })
     ).resolves.toBeUndefined();
+  });
+});
+
+describe('TuiClient.clearLeakedAttachBanners', () => {
+  const OURS = `#[align=left] press #[bold]Ctrl+B then d#[nobold] to detach, ${ATTACH_BANNER_MARKER} #[default]`;
+
+  function sweeper(formats: Record<string, string>): { client: TuiClient; calls: string[][] } {
+    const calls: string[][] = [];
+    const exec: TuiExecFile = async (_file, args) => {
+      calls.push([...args]);
+      if (args.includes('list-sessions')) return { stdout: Object.keys(formats).join('\n'), stderr: '' };
+      if (args.includes('show-options')) {
+        const name = args[args.indexOf('-t') + 1] ?? '';
+        return { stdout: formats[name] ?? '', stderr: '' };
+      }
+      return { stdout: '', stderr: '' };
+    };
+    return { client: new TuiClient({ baseUrl: BASE_URL, socket: 'codeman-beta', exec }), calls };
+  }
+
+  it('takes down a bar a killed TUI left behind, and puts status back off', async () => {
+    // The case that produced this: the tester closed the terminal window while
+    // attached, so restore() never ran and the bar stayed pinned.
+    const { client, calls } = sweeper({ 'codeman-aaaa1111': OURS });
+    expect(await client.clearLeakedAttachBanners()).toBe(1);
+    const sets = calls.filter((args) => args.includes('set-option'));
+    // The array whole, never one index: unsetting `status-format[0]` alone
+    // leaves an EMPTY array, which renders as a blank bar.
+    expect(sets.some((args) => args.includes('-u') && args.includes('status-format'))).toBe(true);
+    expect(sets.some((args) => args.includes('-u') && args.includes('status-style'))).toBe(true);
+    expect(sets.some((args) => args.join(' ').endsWith('status off'))).toBe(true);
+    expect(sets.every((args) => !args.includes('status-format[0]'))).toBe(true);
+  });
+
+  it('never touches a status bar that is not ours', async () => {
+    const { client, calls } = sweeper({ 'codeman-bbbb2222': '#[align=right] my own bar ' });
+    expect(await client.clearLeakedAttachBanners()).toBe(0);
+    expect(calls.filter((args) => args.includes('set-option'))).toEqual([]);
+  });
+
+  it('sweeps only the sessions that leaked, leaving the rest alone', async () => {
+    const { client } = sweeper({
+      'codeman-aaaa1111': OURS,
+      'codeman-bbbb2222': '',
+      'codeman-cccc3333': OURS,
+    });
+    expect(await client.clearLeakedAttachBanners()).toBe(2);
+  });
+
+  it('reports nothing rather than throwing when there is no tmux server', async () => {
+    const exec: TuiExecFile = async () => {
+      throw new Error('no server running on /tmp/tmux-1000/codeman-beta');
+    };
+    const client = new TuiClient({ baseUrl: BASE_URL, socket: 'codeman-beta', exec });
+    await expect(client.clearLeakedAttachBanners()).resolves.toBe(0);
   });
 });
 

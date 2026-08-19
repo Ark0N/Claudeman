@@ -468,6 +468,14 @@ export function parseSessionOptions(stdout: string, keys: readonly string[]): Tu
 }
 
 /**
+ * The phrase the attach status bar carries. It doubles as the marker that tells
+ * OUR bar apart from a user's own when sweeping one that leaked, so
+ * `buildAttachBanner()` composes its text from this constant rather than
+ * repeating the words.
+ */
+export const ATTACH_BANNER_MARKER = 'back to the codeman dashboard';
+
+/**
  * The key bound to a bare `detach-client` in `list-keys -T prefix` output, or
  * null when nothing there detaches.
  *
@@ -945,6 +953,59 @@ export class TuiClient {
   }
 
   /** One `set-option`, swallowing failure: the session may be gone by now. */
+  /**
+   * Drop attach status bars that a previous TUI never got to take down.
+   *
+   * `restore()` runs after `spawnSync` returns, which covers a detach and an
+   * agent exiting inside the pane, but not the terminal DYING while attached:
+   * a closed window or a dropped SSH kills the TUI where it stands, and the bar
+   * it installed stays pinned on the session (observed on the beta, where the
+   * tester closed the window instead of detaching and the next attach still
+   * wore a stale bar naming the wrong session). One sweep at startup makes that
+   * self-healing.
+   *
+   * Only a bar carrying our own marker is touched, and it is put back the way
+   * Codeman creates its panes (`status off`), which is the only state this bar
+   * is ever applied over.
+   */
+  async clearLeakedAttachBanners(): Promise<number> {
+    let names: string[];
+    try {
+      const { stdout } = await this.exec('tmux', ['-L', this.socket, 'list-sessions', '-F', '#{session_name}']);
+      names = stdout
+        .split('\n')
+        .map((line) => line.trim())
+        .filter((line) => MUX_NAME_PATTERN.test(line));
+    } catch {
+      return 0;
+    }
+    let cleared = 0;
+    for (const name of names) {
+      let current = '';
+      try {
+        ({ stdout: current } = await this.exec('tmux', [
+          '-L',
+          this.socket,
+          'show-options',
+          '-t',
+          name,
+          '-v',
+          'status-format[0]',
+        ]));
+      } catch {
+        continue;
+      }
+      if (!current.includes(ATTACH_BANNER_MARKER)) continue;
+      // The array WHOLE, for the same reason restoreSessionOptions() does it:
+      // unsetting one index leaves an empty array, which renders as a blank bar.
+      await this.setOption(['-u', '-t', name, 'status-format']);
+      await this.setOption(['-u', '-t', name, 'status-style']);
+      await this.setOption(['-t', name, 'status', 'off']);
+      cleared += 1;
+    }
+    return cleared;
+  }
+
   private async setOption(args: readonly string[]): Promise<void> {
     try {
       await this.exec('tmux', ['-L', this.socket, 'set-option', ...args]);
