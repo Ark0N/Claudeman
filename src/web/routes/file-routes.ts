@@ -21,6 +21,7 @@ import type {
   FileWriteData,
 } from '../../types.js';
 import { ApiErrorCode, createErrorResponse, getErrorMessage } from '../../types.js';
+import { compileFileQuery } from '../../utils/file-query.js';
 import { fileStreamManager } from '../../file-stream-manager.js';
 import {
   AUDIO_ATTACHMENT_EXTENSIONS,
@@ -937,12 +938,15 @@ export function registerFileRoutes(app: FastifyInstance, ctx: SessionPort & Even
   // File tree listing
   app.get('/api/sessions/:id/files', async (req) => {
     const { id } = req.params as { id: string };
-    const { depth, showHidden } = req.query as { depth?: string; showHidden?: string };
+    const { depth, showHidden, q } = req.query as { depth?: string; showHidden?: string; q?: string };
     const session = findSessionOrFail(ctx, id, req);
 
     const maxDepth = Math.min(parseInt(depth || '5', 10), 10);
     const includeHidden = showHidden === 'true';
     const workingDir = session.workingDir;
+    // null for an empty/whitespace query, which is what keeps the default
+    // tree response byte-identical when no search is requested.
+    const matcher = compileFileQuery(q ?? '');
 
     // Default excludes - large/generated directories
     const excludeDirs = new Set([
@@ -975,6 +979,92 @@ export function registerFileRoutes(app: FastifyInstance, ctx: SessionPort & Even
     let totalDirectories = 0;
     let truncated = false;
     const maxFiles = 5000;
+
+    // ===== Search mode =====
+    // A query turns this endpoint into a FLAT match list rather than a nested
+    // tree. It recurses past non-matching directories on purpose — the whole
+    // point of searching is to reach a file whose ancestors do not match — so
+    // it is bounded independently by maxMatches on top of the shared maxFiles
+    // and maxDepth caps, and reports `truncated` when it stops early.
+    if (matcher) {
+      const matches: FileTreeNode[] = [];
+      const maxMatches = 1000;
+
+      const searchDirectory = async (dirPath: string, currentDepth: number): Promise<void> => {
+        if (currentDepth > maxDepth || totalFiles + totalDirectories > maxFiles || matches.length >= maxMatches) {
+          truncated = true;
+          return;
+        }
+
+        let entries: import('node:fs').Dirent[];
+        try {
+          entries = await fs.readdir(dirPath, { withFileTypes: true });
+        } catch {
+          // Can't read directory (permission denied, etc.)
+          return;
+        }
+        entries.sort((a, b) => {
+          if (a.isDirectory() && !b.isDirectory()) return -1;
+          if (!a.isDirectory() && b.isDirectory()) return 1;
+          return a.name.localeCompare(b.name);
+        });
+
+        for (const entry of entries) {
+          if (totalFiles + totalDirectories > maxFiles || matches.length >= maxMatches) {
+            truncated = true;
+            break;
+          }
+          if (!includeHidden && entry.name.startsWith('.')) continue;
+          if (entry.isDirectory() && excludeDirs.has(entry.name)) continue;
+
+          const fullPath = join(dirPath, entry.name);
+          const relativePath = relative(workingDir, fullPath);
+
+          if (entry.isDirectory()) {
+            totalDirectories++;
+            if (matcher(entry.name, relativePath)) {
+              matches.push({ name: entry.name, path: relativePath, type: 'directory' });
+            }
+            // Always recurse, even when this directory does not match.
+            await searchDirectory(fullPath, currentDepth + 1);
+          } else {
+            totalFiles++;
+            if (matcher(entry.name, relativePath)) {
+              let size: number | undefined;
+              try {
+                size = (await fs.stat(fullPath)).size;
+              } catch {
+                // Skip size if we can't stat the match.
+              }
+              matches.push({
+                name: entry.name,
+                path: relativePath,
+                type: 'file',
+                size,
+                extension: entry.name.includes('.') ? entry.name.split('.').pop()?.toLowerCase() : undefined,
+              });
+            }
+          }
+        }
+      };
+
+      await searchDirectory(workingDir, 1);
+
+      return {
+        success: true,
+        data: {
+          root: workingDir,
+          tree: [],
+          matches,
+          totalFiles,
+          totalDirectories,
+          truncated,
+          matchCount: matches.length,
+          query: (q ?? '').trim(),
+          mode: 'search' as const,
+        },
+      };
+    }
 
     const scanDirectory = async (dirPath: string, currentDepth: number): Promise<FileTreeNode[]> => {
       if (currentDepth > maxDepth || totalFiles + totalDirectories > maxFiles) {
