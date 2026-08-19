@@ -897,6 +897,36 @@ export class TuiClient {
     }
   }
 
+  /**
+   * Is this session's active pane DEAD — the process it ran has exited and tmux
+   * is holding the corpse on screen?
+   *
+   * Codeman sets `remain-on-exit on` for every pane it owns, so a session whose
+   * agent exited does not disappear: it stays listed, the server still reports
+   * it `idle`, and attaching hands the terminal to a pane that reads no input.
+   * A beta tester hit exactly that and could not type or get out.
+   *
+   * Fails OPEN (`false`): a probe that cannot run must never block an attach to
+   * a pane that is perfectly alive.
+   */
+  async isPaneDead(muxName: string): Promise<boolean> {
+    if (!MUX_NAME_PATTERN.test(muxName)) return false;
+    try {
+      const { stdout } = await this.exec('tmux', [
+        '-L',
+        this.socket,
+        'display-message',
+        '-p',
+        '-t',
+        muxName,
+        '#{pane_dead}',
+      ]);
+      return stdout.trim() === '1';
+    } catch {
+      return false;
+    }
+  }
+
   /** Snapshot the session-level options an attach is about to overwrite. */
   async readSessionOptions(muxName: string, keys: readonly string[]): Promise<TuiSessionOptions | null> {
     if (!MUX_NAME_PATTERN.test(muxName)) return null;

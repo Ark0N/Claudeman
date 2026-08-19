@@ -254,9 +254,17 @@ export function formatPlanUsage(usage: StatusTelemetry | null | undefined, separ
  */
 export function rowLabel(session: TuiSessionRow): string {
   if (session.name) return session.name;
+  const base = (session.workingDir ?? '').split('/').filter(Boolean).pop();
+  // ⚠️ A LIVE pane (it has a mux name) is identified by WHERE it runs, never by
+  // a line scraped out of its transcript. A session created before the user has
+  // typed anything has no prompt to be named after, so the fallback took
+  // whatever the CLI happened to print first: a beta tester's new session
+  // appeared in the list called "Login interrupted", which reads like a failure
+  // report and was in fact a healthy session. A history row is the opposite
+  // case, where the prompt IS the identity, so it keeps the old order.
+  if (session.muxName && base) return base;
   const prompt = (session.firstPrompt ?? '').trim();
   if (prompt && prompt !== '(no content)') return prompt;
-  const base = (session.workingDir ?? '').split('/').filter(Boolean).pop();
   return base || session.sessionId.slice(0, 8);
 }
 

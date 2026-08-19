@@ -325,6 +325,24 @@ export function buildAttachBanner(options: {
 const ATTACH_BANNER_LABEL_MAX = 28;
 
 /**
+ * The name a newly started session gets: `w<n>-<case>`, the same convention the
+ * web UI uses, with `n` one past the highest already in use.
+ *
+ * A session created with no name at all is not merely unlabelled: rowLabel()
+ * falls back to the transcript's first line, and a session that has not been
+ * prompted yet gets named after whatever its CLI printed while starting up.
+ */
+export function nextSessionName(caseName: string, existing: readonly string[]): string {
+  let highest = 0;
+  for (const name of existing) {
+    const match = /^w(\d+)-/.exec((name ?? '').trim());
+    const index = match ? Number.parseInt(match[1] ?? '', 10) : Number.NaN;
+    if (Number.isSafeInteger(index) && index > highest) highest = index;
+  }
+  return `w${highest + 1}-${caseName}`;
+}
+
+/**
  * What pressing Enter on a RECENT row does, decided from the row alone.
  *
  * Resuming is Claude Code's `--resume`, so it is claude-only, needs the
@@ -1887,6 +1905,23 @@ class TuiApp {
       return;
     }
 
+    // A dead pane still LISTS, because Codeman keeps `remain-on-exit on`: the
+    // row looks ordinary and the server still calls it idle. Attaching to one
+    // hands the terminal to a pane that reads nothing, which a beta tester
+    // experienced as the TUI freezing with no way out.
+    if (await this.client.isPaneDead(muxName)) {
+      this.message(
+        'err',
+        `${rowLabel(row.session)} has exited — its pane is dead, so there is nothing there to type into. ` +
+          'Close the row with x, or start a fresh session with n.'
+      );
+      // ⚠️ message() only sets state. The keypress that got us here painted
+      // BEFORE this await resolved, so without a paint of our own the refusal
+      // is invisible and Enter looks like it did nothing at all.
+      this.paint();
+      return;
+    }
+
     // tmux is about to own this terminal. The dashboard is not on screen, and
     // the pane the preview would keep re-reading is the one the user is now
     // looking at directly, so the poll stops for the whole handoff (an attach
@@ -2078,7 +2113,19 @@ class TuiApp {
 
   private async startSession(caseName: string, mode: TuiRunMode): Promise<void> {
     try {
-      const result = await this.client.quickStart({ caseName, mode });
+      const result = await this.client.quickStart({
+        caseName,
+        mode,
+        // Named here rather than left to the server: an unnamed session falls
+        // back to whatever rowLabel() can find, and before the user has typed
+        // anything that was the CLI's first line of output. `w<n>-<case>` is
+        // the web UI's own convention, so a session started from either surface
+        // reads the same in both.
+        sessionName: nextSessionName(
+          caseName,
+          this.model.sessions().map((session) => session.name ?? '')
+        ),
+      });
       // The row appears with the next resync; remember which one to select.
       this.pendingSelectId = result.sessionId;
       this.message('info', `started ${mode} in ${caseName}`);

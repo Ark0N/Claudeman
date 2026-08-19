@@ -18,6 +18,7 @@ import {
   confirmAccepts,
   confirmKillStep,
   detachChord,
+  nextSessionName,
   footerKeysFor,
   formatPrefixKey,
   helpKeysFor,
@@ -454,6 +455,25 @@ describe('buildListLines', () => {
     const [line] = buildListLines(model.rows(), 20);
     expect(line.label).toHaveLength(20);
     expect(line.label.endsWith('…')).toBe(true);
+  });
+});
+
+describe('naming a session the TUI starts', () => {
+  it("follows the web UI's w<n>-<case> convention", () => {
+    expect(nextSessionName('mirofish', [])).toBe('w1-mirofish');
+    expect(nextSessionName('mirofish', ['w1-codeman', 'w2-codeman'])).toBe('w3-mirofish');
+  });
+
+  it('counts past names that are not w<n>- at all', () => {
+    // A session named by hand, or by another surface, must not reset the run.
+    expect(nextSessionName('demo', ['tui-demo-agent', 'w4-codeman', ''])).toBe('w5-demo');
+  });
+
+  it('never returns an empty name, which is what caused the bad label', () => {
+    // An unnamed session falls through rowLabel() to the transcript's first
+    // line, which put "Login interrupted" in the list as a session name.
+    expect(nextSessionName('c', [])).not.toBe('');
+    expect(nextSessionName('c', ['w9007199254740991-x'])).toMatch(/^w\d+-c$/);
   });
 });
 

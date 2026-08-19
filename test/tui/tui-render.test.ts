@@ -410,6 +410,39 @@ describe('formatting helpers', () => {
     );
     expect(rowLabel({ sessionId: 'abcdef1234', sources: [] })).toBe('abcdef12');
   });
+
+  it('names a LIVE pane after its case, never after scraped output', () => {
+    // Regression: a session started from the TUI before the user typed anything
+    // had no name and no prompt, so the fallback took the CLI's first line of
+    // output. A healthy new session showed up in the list called
+    // "Login interrupted", which reads like a failure.
+    expect(
+      rowLabel({
+        sessionId: 'abcdef12',
+        firstPrompt: 'Login interrupted',
+        workingDir: '/home/u/codeman-cases/mirofish',
+        muxName: 'codeman-abcdef12',
+        sources: [],
+      })
+    ).toBe('mirofish');
+  });
+
+  it('still names a HISTORY row by its prompt, where the prompt IS the identity', () => {
+    expect(
+      rowLabel({
+        sessionId: 'abcdef12',
+        firstPrompt: 'do the thing',
+        workingDir: '/home/u/codeman-cases/mirofish',
+        sources: [],
+      })
+    ).toBe('do the thing');
+  });
+
+  it('prefers a real name over both, on a live row and a history row alike', () => {
+    const base = { sessionId: 'abcdef12', firstPrompt: 'Login interrupted', workingDir: '/a/b/case', sources: [] };
+    expect(rowLabel({ ...base, name: 'w2-case' })).toBe('w2-case');
+    expect(rowLabel({ ...base, name: 'w2-case', muxName: 'codeman-abcdef12' })).toBe('w2-case');
+  });
 });
 
 describe('the approval card', () => {
