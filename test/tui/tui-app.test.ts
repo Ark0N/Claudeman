@@ -460,6 +460,16 @@ describe('buildListLines', () => {
   });
 });
 
+describe('the dead-row resume offer', () => {
+  it('advertises r on the message footer only while an offer is armed', () => {
+    const base = { server: true } as const;
+    expect(footerKeysFor('message', GLYPHS, { ...base, resumeOffer: true })).toEqual(['r resume', 'esc dismiss']);
+    // Without an offer the card is a plain notice, and a footer promising `r`
+    // would be advertising a key that does nothing.
+    expect(footerKeysFor('message', GLYPHS, base)).toEqual(['esc dismiss']);
+  });
+});
+
 describe('the one-key way out', () => {
   it('names a single key with no modifier at all', () => {
     // The whole point: three beta rounds died on a chord that had to be typed

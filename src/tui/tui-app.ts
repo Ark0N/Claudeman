@@ -561,6 +561,8 @@ export interface TuiKeymapContext {
   approval?: TuiApprovalKeys;
   /** tmux's detach chord as this socket reports it. Defaults to the stock `Ctrl+B D`. */
   detach?: string;
+  /** A dead-row card is offering `r` to resume, so the footer has to say so. */
+  resumeOffer?: boolean;
 }
 
 /**
@@ -576,7 +578,7 @@ export function footerKeysFor(mode: TuiUiMode, glyphs: TuiGlyphSet, context: Tui
     case 'confirm-kill':
       return ['type the name', `${glyphs.enter} confirm`, 'esc cancel'];
     case 'message':
-      return ['esc dismiss'];
+      return context.resumeOffer ? ['r resume', 'esc dismiss'] : ['esc dismiss'];
     case 'new-session':
       return [`${glyphs.updown} select`, `${glyphs.enter} choose`, 'type to filter', 'esc cancel'];
     case 'prompt':
@@ -1339,12 +1341,24 @@ class TuiApp {
     });
   }
 
+  /**
+   * The session a dead-row error card is offering to resume, by id.
+   *
+   * An id rather than the row: by the time the key is pressed the model has
+   * resynced at least once, and acting on a captured row would resume whatever
+   * that stale object still pointed at. Armed only while the card is up, and
+   * cleared the moment anything else happens, so `r` can never resume a session
+   * the user is no longer looking at.
+   */
+  private resumeOffer: string | null = null;
+
   private keymapContext(): TuiKeymapContext {
     const approval = this.model.selectedSession()?.approval;
     return {
       server: this.model.connection !== 'degraded',
       approval: approval ? (approval.kind === 'idle' ? 'idle' : 'menu') : null,
       detach: this.detachChordLabel,
+      resumeOffer: this.resumeOffer !== null,
     };
   }
 
@@ -1437,8 +1451,18 @@ class TuiApp {
       case 'digest':
         this.handleDigest(event);
         return;
-      case 'help':
       case 'message':
+        // ⚠️ `r` is checked BEFORE the dismiss, because a message overlay is
+        // dismissed by ANY key: without this branch the offer would be consumed
+        // as "some key was pressed" and the card would just close.
+        if (this.resumeOffer && event.type === 'char' && event.value === 'r') {
+          this.takeResumeOffer();
+          return;
+        }
+        this.resumeOffer = null;
+        if (event.type !== 'mouse') this.model.closeOverlay();
+        return;
+      case 'help':
         // Any key dismisses; the footer says esc because that is the one key
         // every overlay in the app answers to.
         if (event.type !== 'mouse') this.model.closeOverlay();
@@ -1971,10 +1995,17 @@ class TuiApp {
     // hands the terminal to a pane that reads nothing, which a beta tester
     // experienced as the TUI freezing with no way out.
     if (await this.client.isPaneDead(muxName)) {
+      // Its conversation usually survives the pane: tmux's own dead-pane screen
+      // says `claude --resume "<name>"`. Offering that turns a dead end into
+      // recovery, instead of telling the user to throw the work away.
+      const offer = planResume(row.session).kind === 'resume';
+      this.resumeOffer = offer ? row.session.sessionId : null;
       this.message(
         'err',
         `${rowLabel(row.session)} has exited — its pane is dead, so there is nothing there to type into. ` +
-          'Close the row with x, or start a fresh session with n.'
+          (offer
+            ? 'Press r to resume the conversation in a fresh pane, or x to close the row.'
+            : 'Close the row with x, or start a fresh session with n.')
       );
       // ⚠️ message() only sets state. The keypress that got us here painted
       // BEFORE this await resolved, so without a paint of our own the refusal
@@ -2170,6 +2201,29 @@ class TuiApp {
     this.picker = null;
     this.model.closeOverlay();
     if (caseName && mode) void this.startSession(caseName, mode.id);
+  }
+
+  /**
+   * Act on the dead-row card's offer: resume the conversation whose pane died.
+   *
+   * ⚠️ Re-resolved from the model by id and disarmed BEFORE anything async, so
+   * a second `r` cannot start a second resume. `resumeSelected()` owns the rest
+   * of the loop safety (its own `resuming` flag, and it ends in
+   * `attachToSession`, never the group dispatch that once produced 35 sessions
+   * in 40 seconds).
+   */
+  private takeResumeOffer(): void {
+    const sessionId = this.resumeOffer;
+    this.resumeOffer = null;
+    this.model.closeOverlay();
+    if (!sessionId) return;
+    const row = this.model.rows().find((candidate) => candidate.session.sessionId === sessionId);
+    if (!row) {
+      this.message('warn', 'that row is gone; the list has moved on since the card opened');
+      this.paint();
+      return;
+    }
+    void this.resumeSelected(row);
   }
 
   private async startSession(caseName: string, mode: TuiRunMode): Promise<void> {
