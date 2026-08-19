@@ -265,6 +265,23 @@ export function formatPrefixKey(prefix: string | undefined): string {
 export const DEFAULT_DETACH_KEY = 'd';
 
 /**
+ * The ONE key that leaves an attach, bound in tmux's prefix-less `root` table.
+ *
+ * ⚠️ Everything else here is a fallback. tmux's native way out is a chord typed
+ * in a particular order — press the prefix, LET GO of the modifier, then a
+ * letter — and three rounds of beta testing died on it: first the bar named the
+ * wrong letter, then the right letter failed because the modifier was held.
+ * The instruction itself was the problem ("release Ctrl and THEN d" is, in the
+ * tester's words, very unclear), so the way out stopped being a chord.
+ *
+ * F12 because it is a single keystroke with no modifier to hold or release, and
+ * because no CLI that runs in these panes wants it: claude, codex, a shell and
+ * vim all leave it alone, and tmux ships an EMPTY root table apart from mouse
+ * bindings, so claiming it shadows nothing.
+ */
+export const ONE_KEY_DETACH = 'F12';
+
+/**
  * The key a user produces when they DON'T let go of Ctrl: `d` becomes `C-d`.
  *
  * ⚠️ This is the single most reported way the way-out fails. "Ctrl+B then d"
@@ -326,6 +343,8 @@ export function buildAttachBanner(options: {
   detachKey?: string;
   /** The held-Ctrl form, when the attach managed to claim it. */
   heldAlias?: string;
+  /** The prefix-less key, when the attach managed to claim it. Preferred over every chord. */
+  oneKey?: string;
 }): Record<string, string> {
   const chord = escapeTmuxFormat(detachChord(options.prefix, options.detachKey));
   // Named on the bar because it is what people actually type: keeping Ctrl held
@@ -341,7 +360,12 @@ export function buildAttachBanner(options: {
   return {
     status: 'on',
     'status-style': 'bg=default,fg=default',
-    'status-format[0]': `#[align=left] press #[bold]${chord}#[nobold]${alias} to detach, ${ATTACH_BANNER_MARKER}${right}#[default]`,
+    // One key when we have one, the chord only as a fallback. The bar is the
+    // ONLY instruction a user gets during an attach, so it names the simplest
+    // thing that is known to work, never a menu of ways.
+    'status-format[0]': options.oneKey
+      ? `#[align=left] press #[bold]${escapeTmuxFormat(options.oneKey)}#[nobold] to get ${ATTACH_BANNER_MARKER}${right}#[default]`
+      : `#[align=left] press #[bold]${chord}#[nobold]${alias} to detach, ${ATTACH_BANNER_MARKER}${right}#[default]`,
   };
 }
 
@@ -440,17 +464,24 @@ export async function beginAttachHandoff(client: TuiClient, muxName: string, lab
   // binding the user put in their own config.
   const alias = heldCtrlAlias(detachKey ?? DEFAULT_DETACH_KEY);
   const claimed = alias && (await client.readPrefixBinding(alias)) === null ? await client.bindDetachKey(alias) : false;
+  // The one-key way out, in the prefix-less table. Same rule: only if free.
+  const oneKey =
+    (await client.readPrefixBinding(ONE_KEY_DETACH, 'root')) === null
+      ? await client.bindDetachKey(ONE_KEY_DETACH, 'root')
+      : false;
   const banner = buildAttachBanner({
     ...(prefix ? { prefix } : {}),
     ...(detachKey ? { detachKey } : {}),
     ...(claimed && alias ? { heldAlias: alias } : {}),
+    ...(oneKey ? { oneKey: ONE_KEY_DETACH } : {}),
     label,
   });
   const options = await client.readSessionOptions(muxName, Object.keys(banner));
   await client.applySessionOptions(muxName, banner);
   return {
-    chord: detachChord(prefix, detachKey),
+    chord: oneKey ? ONE_KEY_DETACH : detachChord(prefix, detachKey),
     async restore(): Promise<void> {
+      if (oneKey) await client.unbindDetachKey(ONE_KEY_DETACH, 'root');
       if (claimed && alias) await client.unbindDetachKey(alias);
       // Options first, then the size: dropping the status bar gives its row
       // back to the pane, and the resize is what re-pins the browser's

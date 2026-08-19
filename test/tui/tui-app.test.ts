@@ -19,6 +19,7 @@ import {
   confirmKillStep,
   detachChord,
   heldCtrlAlias,
+  ONE_KEY_DETACH,
   nextSessionName,
   footerKeysFor,
   formatPrefixKey,
@@ -456,6 +457,35 @@ describe('buildListLines', () => {
     const [line] = buildListLines(model.rows(), 20);
     expect(line.label).toHaveLength(20);
     expect(line.label.endsWith('…')).toBe(true);
+  });
+});
+
+describe('the one-key way out', () => {
+  it('names a single key with no modifier at all', () => {
+    // The whole point: three beta rounds died on a chord that had to be typed
+    // in the right order with the modifier released at the right moment.
+    expect(ONE_KEY_DETACH).toBe('F12');
+    expect(ONE_KEY_DETACH).not.toContain('C-');
+    expect(ONE_KEY_DETACH).not.toContain('+');
+  });
+
+  it('puts ONE instruction on the bar, not a menu of ways out', () => {
+    const banner = buildAttachBanner({ prefix: 'C-b', detachKey: 'd', heldAlias: 'C-d', oneKey: 'F12' });
+    const bar = banner['status-format[0]'];
+    expect(bar).toContain('press #[bold]F12#[nobold] to get back to the codeman dashboard');
+    // Even though both fallbacks still work, the bar must not offer them: a bar
+    // listing three ways to leave is what the tester called way too complicated.
+    expect(bar).not.toContain('Ctrl+B');
+    expect(bar).not.toContain('or Ctrl+D');
+  });
+
+  it('falls back to the chord when the key could not be claimed', () => {
+    // Never advertise a key we did not get: a bar naming an inert key is the
+    // original bug, in a new costume.
+    const bar = buildAttachBanner({ prefix: 'C-b', detachKey: 'd', heldAlias: 'C-d' })['status-format[0]'];
+    expect(bar).toContain('Ctrl+B then d');
+    expect(bar).toContain('(or Ctrl+D)');
+    expect(bar).not.toContain('F12');
   });
 });
 

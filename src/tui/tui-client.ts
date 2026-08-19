@@ -472,9 +472,10 @@ export function parseSessionOptions(stdout: string, keys: readonly string[]): Tu
  * key appears nowhere in the table. The command is returned verbatim, so a
  * caller can insist on an exact match rather than a prefix of one.
  */
-export function parsePrefixBinding(stdout: string, key: string): string | null {
+export function parsePrefixBinding(stdout: string, key: string, table: TuiKeyTable = 'prefix'): string | null {
+  const pattern = new RegExp(`^bind-key\\s+(?:-\\S+\\s+)*?-T\\s+${table}\\s+(\\S+)\\s+(.+)$`);
   for (const line of stdout.split('\n')) {
-    const match = /^bind-key\s+(?:-\S+\s+)*?-T\s+prefix\s+(\S+)\s+(.+)$/.exec(line.trim());
+    const match = pattern.exec(line.trim());
     if (!match) continue;
     if (unquoteTmuxValue(match[1] ?? '') !== key) continue;
     return (match[2] ?? '').trim();
@@ -489,6 +490,13 @@ export function parsePrefixBinding(stdout: string, key: string): string | null {
  * repeating the words.
  */
 export const ATTACH_BANNER_MARKER = 'back to the codeman dashboard';
+
+/**
+ * The tmux key tables an attach touches. `root` is the one without a prefix:
+ * a key bound there is delivered on its own, which is what makes a one-key way
+ * out possible at all.
+ */
+export type TuiKeyTable = 'prefix' | 'root';
 
 /**
  * The key bound to a bare `detach-client` in `list-keys -T prefix` output, or
@@ -917,19 +925,26 @@ export class TuiClient {
    * free. Used to check a key is unbound BEFORE claiming it, so the attach can
    * never shadow a binding the user relies on.
    */
-  async readPrefixBinding(key: string): Promise<string | null> {
+  async readPrefixBinding(key: string, table: TuiKeyTable = 'prefix'): Promise<string | null> {
     try {
-      const { stdout } = await this.exec('tmux', ['-L', this.socket, 'list-keys', '-T', 'prefix']);
-      return parsePrefixBinding(stdout, key);
+      const { stdout } = await this.exec('tmux', ['-L', this.socket, 'list-keys', '-T', table]);
+      return parsePrefixBinding(stdout, key, table);
     } catch {
       return null;
     }
   }
 
-  /** Claim a prefix key for `detach-client`. Best effort; a failure is not fatal to an attach. */
-  async bindDetachKey(key: string): Promise<boolean> {
+  /**
+   * Claim a key for `detach-client`. Best effort; a failure is not fatal to an
+   * attach, and the caller advertises the key only if this returned true.
+   *
+   * The `root` table is the one that matters for a way OUT: a key bound there
+   * needs no prefix at all, so leaving a session is one keypress rather than a
+   * chord typed in the right order.
+   */
+  async bindDetachKey(key: string, table: TuiKeyTable = 'prefix'): Promise<boolean> {
     try {
-      await this.exec('tmux', ['-L', this.socket, 'bind-key', '-T', 'prefix', key, 'detach-client']);
+      await this.exec('tmux', ['-L', this.socket, 'bind-key', '-T', table, key, 'detach-client']);
       return true;
     } catch {
       return false;
@@ -937,14 +952,14 @@ export class TuiClient {
   }
 
   /**
-   * Give a prefix key back, but ONLY while it still means `detach-client`.
-   * Anything else there is the user's, arrived after we bound ours, and must
-   * not be removed.
+   * Give a key back, but ONLY while it still means `detach-client`. Anything
+   * else there is the user's, arrived after we bound ours, and must not be
+   * removed.
    */
-  async unbindDetachKey(key: string): Promise<void> {
-    if ((await this.readPrefixBinding(key)) !== 'detach-client') return;
+  async unbindDetachKey(key: string, table: TuiKeyTable = 'prefix'): Promise<void> {
+    if ((await this.readPrefixBinding(key, table)) !== 'detach-client') return;
     try {
-      await this.exec('tmux', ['-L', this.socket, 'unbind-key', '-T', 'prefix', key]);
+      await this.exec('tmux', ['-L', this.socket, 'unbind-key', '-T', table, key]);
     } catch {
       /* a key we cannot give back is a stray convenience binding, not a failure */
     }

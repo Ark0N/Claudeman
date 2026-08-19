@@ -621,6 +621,15 @@ describe('parsePrefixBinding', () => {
   it('is case-sensitive, like tmux itself', () => {
     expect(parsePrefixBinding('bind-key -T prefix D choose-client', 'd')).toBeNull();
   });
+
+  it('reads the prefix-less root table too, where the one-key exit lives', () => {
+    const root = ['bind-key -T root MouseDown1Pane select-pane -t =', 'bind-key -T root F12 detach-client'].join('\n');
+    expect(parsePrefixBinding(root, 'F12', 'root')).toBe('detach-client');
+    // Stock tmux has no F12 there, which is what makes it safe to claim.
+    expect(parsePrefixBinding('bind-key -T root MouseDown1Pane select-pane -t =', 'F12', 'root')).toBeNull();
+    // A prefix binding must not be mistaken for a root one.
+    expect(parsePrefixBinding('bind-key -T prefix F12 detach-client', 'F12', 'root')).toBeNull();
+  });
 });
 
 describe('TuiClient.clearLeakedAttachBanners', () => {
