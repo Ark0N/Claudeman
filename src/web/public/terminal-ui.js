@@ -3878,21 +3878,6 @@ Object.assign(CodemanApp.prototype, {
     return ok;
   },
 
-  async copyTerminal() {
-    try {
-      const buffer = this.terminal.buffer.active;
-      let text = '';
-      for (let i = 0; i < buffer.length; i++) {
-        const line = buffer.getLine(i);
-        if (line) text += line.translateToString(true) + '\n';
-      }
-      await navigator.clipboard.writeText(text.replace(/\n+$/, '\n'));
-      this.showToast('Copied to clipboard', 'success');
-    } catch (err) {
-      this.showToast('Failed to copy', 'error');
-    }
-  },
-
   _syncMobileHelperTextareaToCursor() {
     if (!MobileDetection.isTouchDevice() || !this.terminal?.element) return;
     try {
