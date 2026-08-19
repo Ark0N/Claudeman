@@ -172,6 +172,13 @@ export interface RenderParams {
   /** Height of the character rendering area (px). */
   charHeight: number;
   promptRow: number;
+  /**
+   * Visible terminal rows. When given, the overlay is kept ON SCREEN: it grows
+   * upward instead of running off the bottom edge, and a wrapped prompt taller
+   * than the viewport keeps its tail. Omit to lay out straight down from
+   * `promptRow` (the historical behaviour).
+   */
+  totalRows?: number;
   font: FontStyle;
   showCursor: boolean;
   cursorColor: string;

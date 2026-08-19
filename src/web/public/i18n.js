@@ -504,6 +504,11 @@
     'Respawn Blocked': '重生已阻止',
     'Task Complete': '任务完成',
     'Copied to clipboard': '已复制到剪贴板',
+    // Terminal touch-selection bar (long-press to select). The bar is a sibling of
+    // `.xterm`, not a descendant, so SKIP_SELECTOR does not cover it and these apply.
+    Copy: '复制',
+    Line: '整行',
+    'Clear selection': '清除选择',
     'Failed to copy': '复制失败',
     'Checking…': '正在检查…',
     'Starting…': '正在启动…',

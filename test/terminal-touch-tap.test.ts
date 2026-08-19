@@ -8,8 +8,11 @@ function loadTerminalUiHarness() {
   let now = 1_000;
   let keyboardVisible = false;
   let activeElement: unknown = null;
+  // The module hangs its constants off window (CodemanTerminalInput) and the URL branch of
+  // the link provider opens through window.open, so tests need a handle on the same object.
+  const windowRef: Record<string, any> = {};
   const context = vm.createContext({
-    window: {},
+    window: windowRef,
     document: {
       body: { classList: { contains: () => false } },
       get activeElement() {
@@ -18,7 +21,7 @@ function loadTerminalUiHarness() {
       getElementById: () => null,
     },
     CodemanApp,
-    console: { warn: vi.fn(), log: vi.fn() },
+    console: { warn: vi.fn(), log: vi.fn(), debug: vi.fn() },
     _crashDiag: { log: vi.fn() },
     performance: { now: () => now },
     requestAnimationFrame: (_fn: () => void) => 1,
@@ -43,12 +46,18 @@ function loadTerminalUiHarness() {
     TERMINAL_CHUNK_SIZE: 32 * 1024,
   });
 
+  // constants.js first: the link provider calls absoluteFilePathPattern() and
+  // previewsInFileViewer() at scan time, and the SHIPPED definitions are what keep a tap and
+  // a hover resolving the same links.
+  const constants = readFileSync(resolve(import.meta.dirname, '../src/web/public/constants.js'), 'utf8');
   const code = readFileSync(resolve(import.meta.dirname, '../src/web/public/terminal-ui.js'), 'utf8');
+  vm.runInContext(constants, context, { filename: 'constants.js' });
   vm.runInContext(code, context, { filename: 'terminal-ui.js' });
 
   const app = new (CodemanApp as any)();
   return {
     app,
+    windowRef,
     setNow: (value: number) => {
       now = value;
     },
@@ -88,13 +97,23 @@ function createTerminalGrid(lines: string[], cursorY: number, wrappedRows = new 
       active: {
         viewportY: 0,
         baseY: 0,
+        length: lines.length,
         cursorY,
         getLine: (row: number) =>
           row >= 0 && row < lines.length
-            ? { isWrapped: wrappedRows.has(row), translateToString: () => lines[row] }
+            ? {
+                isWrapped: wrappedRows.has(row),
+                // xterm pads an UNTRIMMED row to the full width; the selection offset
+                // math is linear over joined rows and would shift without it.
+                translateToString: (trim?: boolean) => (trim === false ? lines[row].padEnd(80) : lines[row]),
+              }
             : undefined,
       },
     },
+    select: vi.fn(),
+    clearSelection: vi.fn(),
+    hasSelection: () => false,
+    getSelectionPosition: () => undefined,
     element: {
       querySelector: (selector: string) =>
         selector === '.xterm-screen' ? { getBoundingClientRect: () => ({ left: 0, top: 0 }) } : null,
@@ -730,5 +749,436 @@ describe('terminal touch tap mouse guard', () => {
 
     expect(event.preventDefault).not.toHaveBeenCalled();
     expect(event.stopImmediatePropagation).not.toHaveBeenCalled();
+  });
+});
+
+describe('terminal link tap', () => {
+  // xterm resolves a link from mousemove and activates it on mouseup over its SCREEN element.
+  // A touch tap produces none of those (touch-action:none and touchstart's preventDefault
+  // suppress the compatibility mouse events, the post-tap guard drops the rest, and the
+  // synthetic pair this app dispatches for mouse REPORTING lands on the .xterm root, an
+  // ancestor of the node the linkifier listens on). So the tap path activates the link
+  // itself, through the same provider, or every URL and path in the terminal stays inert on
+  // a phone.
+  //
+  // Grid geometry from createTerminalGrid: 8×16 cells, screen rect at (0,0), viewportY 0 —
+  // so 0-based character index i on 0-based row r sits at (i * 8 + 4, r * 16 + 8).
+  const at = (index: number, row = 0) => ({ clientX: index * 8 + 4, clientY: row * 16 + 8 });
+
+  /** A claude-mode app with the shipped link provider registered over `lines`. */
+  function linkHarness(lines: string[], cursorY = lines.length - 1) {
+    const harness = loadTerminalUiHarness();
+    const { app, windowRef } = harness;
+    const sent: string[] = [];
+    app.activeSessionId = 'sess-1';
+    app.sessions = new Map([['sess-1', { mode: 'claude' }]]);
+    app._sendInputAsync = (_id: string, data: string) => sent.push(data);
+    app.terminal = createTerminalGrid(lines, cursorY);
+    app.terminal.registerLinkProvider = vi.fn();
+    app.openFilePreview = vi.fn();
+    app.openLogViewerWindow = vi.fn();
+    app._isExternalPreviewPath = () => false;
+    windowRef.open = vi.fn();
+    app.registerFilePathLinkProvider();
+    return { app, windowRef, sent };
+  }
+
+  it('opens a URL under the finger in a new tab', () => {
+    const line = 'Login at https://claude.ai/oauth/authorize?code=true&client_id=abc to finish';
+    const { app, windowRef } = linkHarness([line, '', '❯ ']);
+
+    expect(app._handleMobileTerminalTap(at(line.indexOf('https')), false, 'content')).toBe('link');
+    expect(windowRef.open).toHaveBeenCalledWith(
+      'https://claude.ai/oauth/authorize?code=true&client_id=abc',
+      '_blank',
+      'noopener,noreferrer'
+    );
+  });
+
+  it('sends no mouse report for the tap it just spent on a link', () => {
+    // The CLI must not also see a click there: that is how a tap on a URL printed inside a
+    // permission dialog would answer the dialog. Desktop already skips the SGR tap for a
+    // hovered link (_handleDesktopTerminalClick).
+    const line = 'see https://example.com/x for more';
+    const { app, sent } = linkHarness([line, '', '❯ ']);
+
+    expect(app._sessionUsesServerMouseStrip()).toBe(true);
+    app._handleMobileTerminalTap(at(line.indexOf('https')), false, 'content');
+
+    expect(sent).toEqual([]);
+  });
+
+  it('leaves a tap beside the link as an ordinary tap', () => {
+    // Containment is xterm's own rule (flattened cell index), so tap and click agree on
+    // where a link ends; a tap on the prose around it keeps its mouse report.
+    const line = 'see https://example.com/x for more';
+    const { app, windowRef, sent } = linkHarness([line, '', '❯ ']);
+
+    expect(app._handleMobileTerminalTap(at(line.indexOf('for more') + 3), false, 'content')).toBe('content');
+    expect(windowRef.open).not.toHaveBeenCalled();
+    expect(sent).toHaveLength(1);
+  });
+
+  it('opens a tapped file path in the preview overlay', () => {
+    const line = 'wrote the chart to /tmp/out/chart.png just now';
+    const { app } = linkHarness([line, '', '❯ ']);
+
+    expect(app._handleMobileTerminalTap(at(line.indexOf('/tmp')), false, 'content')).toBe('link');
+    expect(app.openFilePreview).toHaveBeenCalledWith('/tmp/out/chart.png', 'sess-1');
+    expect(app.openLogViewerWindow).not.toHaveBeenCalled();
+  });
+
+  it('sends a tapped log path to the log viewer', () => {
+    const line = 'tail -f /var/log/app.log';
+    const { app } = linkHarness([line, '', '❯ ']);
+
+    expect(app._handleMobileTerminalTap(at(line.indexOf('/var')), false, 'content')).toBe('link');
+    expect(app.openLogViewerWindow).toHaveBeenCalledWith('/var/log/app.log', 'sess-1');
+  });
+
+  it('activates a link in scrollback, where the tap sends no report at all', () => {
+    // A scrolled-up tap deliberately reports nothing (it would land on whatever row now
+    // occupies the cell), but reading old output and tapping a URL in it is the common case.
+    const line = 'docs at https://example.com/guide';
+    const { app, windowRef, sent } = linkHarness([line, '', '']);
+
+    expect(app._handleMobileTerminalTap(at(line.indexOf('https')), false, 'history')).toBe('link');
+    expect(windowRef.open).toHaveBeenCalledOnce();
+    expect(sent).toEqual([]);
+  });
+
+  it('never hijacks a TUI-owned choice row that happens to carry a path', () => {
+    // On a phone the dialog is the only interaction that matters, and its rows routinely
+    // name the very file a link would open — answering it must keep winning.
+    // ⚠️ The caret is parked on the QUESTION row, not the choice: with the caret on the
+    // tapped row this would pass through _tapIsOnCaretLine and pin nothing.
+    const line = '❯ 1. Yes, edit /home/user/src/app.ts';
+    const { app, windowRef, sent } = linkHarness(['Do you want to make this edit?', line, '  2. No, keep it as is'], 0);
+
+    expect(app._handleMobileTerminalTap(at(line.indexOf('/home'), 1), false, 'content')).toBe('content');
+    expect(windowRef.open).not.toHaveBeenCalled();
+    expect(app.openFilePreview).not.toHaveBeenCalled();
+    expect(sent).toHaveLength(1); // the choice still reaches the CLI
+  });
+
+  it('leaves a URL the user typed in the composer editable', () => {
+    // Tapping your own prompt text means "put the caret here". Opening it instead would
+    // punish the phone gesture for fixing a typo in a pasted link.
+    const composer = '❯ summarize https://example.com/guide for me';
+    const { app, windowRef, sent } = linkHarness(['earlier output', '', composer], 2);
+
+    expect(app._handleMobileTerminalTap(at(composer.indexOf('https'), 2), true, 'input')).toBe('input');
+    expect(windowRef.open).not.toHaveBeenCalled();
+    expect(sent).toHaveLength(1); // the tap still positions the caret via the mouse report
+  });
+
+  it('activates a link in a plain shell session, where every tap classifies as input', () => {
+    // A shell has no TUI to own taps, so _classifyMobileTerminalTap short-circuits to
+    // 'input' for the whole screen — gating link taps on the intent would leave every URL
+    // in shell output (curl, npm, git remote) inert. The caret line is the real boundary.
+    const line = 'remote: https://github.com/Ark0N/Codeman.git';
+    const harness = loadTerminalUiHarness();
+    const { app, windowRef } = harness;
+    app.activeSessionId = 'sess-1';
+    app.sessions = new Map([['sess-1', { mode: 'shell' }]]);
+    app._sendInputAsync = vi.fn();
+    app.terminal = createTerminalGrid([line, '', 'bash-5.3$ '], 2);
+    app.terminal.registerLinkProvider = vi.fn();
+    windowRef.open = vi.fn();
+    app.registerFilePathLinkProvider();
+
+    // No cachedIntent below: real classification runs, and for a shell it answers 'input'.
+    const point = at(line.indexOf('https'));
+    expect(app._classifyMobileTerminalTap(point.clientX, point.clientY)).toBe('input');
+    expect(app._handleMobileTerminalTap(point, false)).toBe('link');
+    expect(windowRef.open).toHaveBeenCalledWith(
+      'https://github.com/Ark0N/Codeman.git',
+      '_blank',
+      'noopener,noreferrer'
+    );
+  });
+
+  it('keeps taps working when no provider was ever registered', () => {
+    const harness = loadTerminalUiHarness();
+    const { app } = harness;
+    app.activeSessionId = 'sess-1';
+    app.sessions = new Map([['sess-1', { mode: 'claude' }]]);
+    app.terminal = createTerminalGrid(['plain output', '', '❯ '], 2);
+
+    expect(app._terminalLinkAtPoint(4, 8)).toBeNull();
+    expect(app._activateTerminalLinkAtPoint(4, 8)).toBe(false);
+  });
+});
+
+describe('terminal touch selection', () => {
+  // Copying from a phone was impossible in three layers at once: `user-select: none`
+  // on the whole terminal subtree, a WebGL renderer that draws glyphs as pixels with
+  // only the accessibility tree behind them, and xterm's selection being a mouse DRAG
+  // while the tap path dispatches a zero-movement mousedown/mouseup pair. The gesture
+  // therefore drives xterm's own `select()`, which is renderer-independent.
+  //
+  // Grid geometry (createTerminalGrid): 80 cols, 8×16 cells, screen rect at (0,0),
+  // viewportY 0 — 0-based index i on 0-based row r sits at (i * 8 + 4, r * 16 + 8).
+  const at = (index: number, row = 0) => ({ clientX: index * 8 + 4, clientY: row * 16 + 8 });
+  const press = (app: any, index: number, row = 0) =>
+    app._beginTouchSelection(at(index, row).clientX, at(index, row).clientY);
+  const dragTo = (app: any, index: number, row = 0) =>
+    app._extendTouchSelection(at(index, row).clientX, at(index, row).clientY);
+  const COLS = 80;
+  const LINE = 'wrote the chart to /tmp/out/chart.png just now';
+  const PATH_AT = LINE.indexOf('/tmp');
+
+  function selectionHarness(lines = [LINE, '', '❯ '], cursorY = 2, wrapped = new Set<number>()) {
+    const { app, setNow } = loadTerminalUiHarness();
+    app.activeSessionId = 'sess-1';
+    app.sessions = new Map([['sess-1', { mode: 'claude' }]]);
+    app._sendInputAsync = vi.fn();
+    app.terminal = createTerminalGrid(lines, cursorY, wrapped);
+    return { app, setNow, select: app.terminal.select as ReturnType<typeof vi.fn> };
+  }
+
+  it('selects the whitespace-delimited token under a long press', () => {
+    // Whitespace is the only delimiter on purpose: a punctuation-aware word rule
+    // cuts a path, a URL or a hash in half, which is exactly what you came to copy.
+    const { app, select } = selectionHarness();
+
+    expect(press(app, PATH_AT + 4)).toBe(true);
+    expect(select).toHaveBeenCalledWith(PATH_AT, 0, '/tmp/out/chart.png'.length);
+  });
+
+  it('selects nothing when the press lands on blank space', () => {
+    const { app, select } = selectionHarness();
+
+    expect(press(app, LINE.length + 10)).toBe(false);
+    expect(select).not.toHaveBeenCalled();
+  });
+
+  it('grows the selection as the finger drags past the anchor word', () => {
+    const { app, select } = selectionHarness();
+    press(app, PATH_AT + 4);
+    select.mockClear();
+
+    dragTo(app, LINE.length - 1);
+
+    // From the word's start through the cell under the finger, inclusive.
+    expect(select).toHaveBeenCalledWith(PATH_AT, 0, LINE.length - PATH_AT);
+  });
+
+  it('keeps the anchor word inside the selection when the drag goes backwards', () => {
+    const { app, select } = selectionHarness();
+    press(app, PATH_AT + 4);
+    select.mockClear();
+
+    dragTo(app, 6);
+
+    const wordEnd = PATH_AT + '/tmp/out/chart.png'.length;
+    expect(select).toHaveBeenCalledWith(6, 0, wordEnd - 6);
+  });
+
+  it('extends across rows, where a linear length is what xterm wants', () => {
+    const { app, select } = selectionHarness(['first row text', 'second row text', '❯ '], 2);
+    press(app, 0);
+    select.mockClear();
+
+    dragTo(app, 5, 1);
+
+    // Row 1 cell 5 is absolute cell 85; the selection runs from 0 through it.
+    expect(select).toHaveBeenCalledWith(0, 0, COLS + 6);
+  });
+
+  it('Line takes the whole logical line, wraps included, without the padding', () => {
+    const wrappedTail = 'tail';
+    const { app, select } = selectionHarness(['x'.repeat(COLS), wrappedTail, '❯ '], 2, new Set([1]));
+    press(app, 2, 1);
+    select.mockClear();
+
+    app._selectTouchSelectionLine();
+
+    expect(select).toHaveBeenCalledWith(0, 0, COLS + wrappedTail.length);
+  });
+
+  it('a tap while a selection is up extends it instead of moving the cursor', () => {
+    const { app, select } = selectionHarness();
+    press(app, PATH_AT + 4);
+    select.mockClear();
+
+    expect(app._handleMobileTerminalTap(at(LINE.length - 1), false, 'content')).toBe('select');
+    expect(select).toHaveBeenCalledWith(PATH_AT, 0, LINE.length - PATH_AT);
+    // and the CLI never sees a click it would act on
+    expect(app._sendInputAsync).not.toHaveBeenCalled();
+  });
+
+  it('copies through the shared clipboard path and drops the selection', () => {
+    // copyTerminalSelection is the one that falls back to execCommand, which is the
+    // only route that works on the plain-HTTP LAN install the installer offers.
+    const { app } = selectionHarness();
+    app.copyTerminalSelection = vi.fn().mockResolvedValue(true);
+    press(app, PATH_AT + 4);
+
+    return app._copyTouchSelection().then(() => {
+      expect(app.copyTerminalSelection).toHaveBeenCalledOnce();
+      expect(app._touchSelectionActive).toBe(false);
+      expect(app._touchSelectionAnchor).toBeNull();
+      expect(app.terminal.clearSelection).toHaveBeenCalled();
+    });
+  });
+
+  it('lifting the finger cannot let a compat mousedown steal focus and drop the selection', () => {
+    // The bug this pins: on lift the browser synthesizes a trusted mousedown, xterm
+    // focuses on it (keyboard up) and SelectionService resets the model (bar gone).
+    // Ending the gesture arms the same guard the tap path uses.
+    const { app } = selectionHarness();
+    const { element, dispatch } = createElementHarness();
+    app.terminal.element = { ...app.terminal.element, addEventListener: element.addEventListener };
+    app._installMobileTapMouseGuard();
+
+    press(app, PATH_AT + 4);
+    app._endTouchSelectionGesture();
+
+    const ev = { isTrusted: true, preventDefault: vi.fn(), stopImmediatePropagation: vi.fn() };
+    dispatch('mousedown', ev);
+
+    expect(ev.preventDefault).toHaveBeenCalledOnce();
+    expect(ev.stopImmediatePropagation).toHaveBeenCalledOnce();
+    expect(app._touchSelecting).toBe(false);
+    expect(app._touchSelectionActive).toBe(true); // the selection outlives the gesture
+  });
+
+  it('copying does not pop the on-screen keyboard back over the text', () => {
+    // copyTerminalSelection hands focus to the terminal, which on a phone means the
+    // keyboard covers what you just copied with nothing waiting to be typed.
+    const { app } = selectionHarness();
+    app.copyTerminalSelection = vi.fn().mockResolvedValue(true);
+    press(app, PATH_AT + 4);
+    app._blurMobileTerminalInput = vi.fn(); // stubbed AFTER the press, which blurs too
+
+    return app._copyTouchSelection().then(() => {
+      expect(app._blurMobileTerminalInput).toHaveBeenCalledOnce();
+    });
+  });
+
+  it('blurs the terminal input if anything focuses it during the gesture', () => {
+    // The one that matters on Android: Chrome runs its own long-press handling at
+    // ~500ms and focuses the helper textarea directly — no mouse event to guard, so
+    // the keyboard shot up over the selection the instant it appeared.
+    const { app, setNow } = selectionHarness();
+    const listeners = new Map<string, () => void>();
+    app.terminal.textarea = {
+      addEventListener: (type: string, fn: () => void) => listeners.set(type, fn),
+      classList: { contains: (n: string) => n === 'xterm-helper-textarea' },
+      blur: vi.fn(),
+    };
+    app._installTouchSelectionFocusGuard();
+    press(app, PATH_AT + 4);
+    app._endTouchSelectionGesture();
+
+    // Whatever focused it, the guard takes the focus straight back off.
+    app._blurMobileTerminalInput = vi.fn();
+    listeners.get('focus')?.();
+    expect(app._blurMobileTerminalInput).toHaveBeenCalledOnce();
+
+    // …and the guard expires on its own, so a stuck flag can never make the
+    // keyboard permanently unreachable.
+    setNow(1_000 + 5_000);
+    app._blurMobileTerminalInput = vi.fn();
+    listeners.get('focus')?.();
+    expect(app._blurMobileTerminalInput).not.toHaveBeenCalled();
+  });
+
+  it('survives a missing bar container instead of throwing mid-gesture', () => {
+    // index.html is read once at server start, so the bar is built in JS — and a
+    // solo popup or an early gesture can run before the container exists.
+    const { app } = selectionHarness();
+
+    expect(() => app._showTouchSelectionBar()).not.toThrow();
+    expect(app._ensureTouchSelectionBar()).toBeNull();
+  });
+});
+
+describe('terminal wrapped-line handling', () => {
+  // Reported from a phone against the shipped fix: an agent's numbered list wraps its
+  // URL, and tapping it opened only the part on screen. Ink emits a real newline (so
+  // nothing is flagged isWrapped) and indents the continuation under the list marker,
+  // so joining the rows verbatim put whitespace inside the URL. "Line" broke the same
+  // way, grabbing the one visible row.
+  //
+  // Grid: 80 cols, 8×16 cells, screen rect at (0,0), viewportY 0.
+  const COLS = 80;
+  const at = (index: number, row = 0) => ({ clientX: index * 8 + 4, clientY: row * 16 + 8 });
+  const press = (app: any, index: number, row = 0) =>
+    app._beginTouchSelection(at(index, row).clientX, at(index, row).clientY);
+  const HEAD = '1. https://example.com/';
+  // Row 0 runs to the last column, which is the only trace a hard wrap leaves.
+  const ROW0 = HEAD + 'a'.repeat(COLS - HEAD.length);
+  const ROW1 = '   ackage/thing';
+  const FULL_URL = 'https://example.com/' + 'a'.repeat(COLS - HEAD.length) + 'ackage/thing';
+
+  function wrappedHarness() {
+    const { app, windowRef } = loadTerminalUiHarness();
+    app.activeSessionId = 'sess-1';
+    app.sessions = new Map([['sess-1', { mode: 'claude' }]]);
+    app._sendInputAsync = vi.fn();
+    app.terminal = createTerminalGrid([ROW0, ROW1, '❯ '], 2);
+    app.terminal.registerLinkProvider = vi.fn();
+    app.openFilePreview = vi.fn();
+    app.openLogViewerWindow = vi.fn();
+    app._isExternalPreviewPath = () => false;
+    windowRef.open = vi.fn();
+    app.registerFilePathLinkProvider();
+    return { app, windowRef, select: app.terminal.select as ReturnType<typeof vi.fn> };
+  }
+
+  it('opens the WHOLE wrapped URL, not the part on screen', () => {
+    const { app, windowRef } = wrappedHarness();
+
+    expect(app._handleMobileTerminalTap(at(HEAD.length + 5), false, 'content')).toBe('link');
+    expect(windowRef.open).toHaveBeenCalledWith(FULL_URL, '_blank', 'noopener,noreferrer');
+  });
+
+  it('opens the whole URL from the continuation row too', () => {
+    // Tapping the second half is the natural gesture when that is what you can see.
+    const { app, windowRef } = wrappedHarness();
+
+    expect(app._handleMobileTerminalTap(at(5, 1), false, 'content')).toBe('link');
+    expect(windowRef.open).toHaveBeenCalledWith(FULL_URL, '_blank', 'noopener,noreferrer');
+  });
+
+  it('selects a token that spans the wrap, across both rows', () => {
+    const { app, select } = wrappedHarness();
+
+    press(app, 5, 1); // inside 'ackage/thing' on the continuation row
+    // From the URL's first cell (row 0, col 3) through the token's last cell
+    // (row 1, col 14). The run covers the indent cells between the halves, because
+    // an xterm selection is one contiguous run and a gap cannot be expressed.
+    const index = 3;
+    const end = COLS + ROW1.length - 1;
+    expect(select).toHaveBeenCalledWith(3, 0, end - index + 1);
+  });
+
+  it('Line takes every row of a HARD-wrapped line, not just the visible one', () => {
+    const { app, select } = wrappedHarness();
+    press(app, HEAD.length + 5);
+    select.mockClear();
+
+    app._selectTouchSelectionLine();
+
+    // Row 0 col 0 through row 1's last non-blank cell.
+    expect(select).toHaveBeenCalledWith(0, 0, COLS + ROW1.length);
+  });
+
+  it('does not reach into the next line when a row stops short of the edge', () => {
+    // Over-reaching would glue unrelated output into one link or one "Line".
+    const { app, select } = loadTerminalUiHarness();
+    void select;
+    app.activeSessionId = 'sess-1';
+    app.sessions = new Map([['sess-1', { mode: 'claude' }]]);
+    app.terminal = createTerminalGrid(['short output', 'https://example.com/next', '❯ '], 2);
+    app.terminal.registerLinkProvider = vi.fn();
+    app.registerFilePathLinkProvider();
+
+    press(app, 2); // inside 'short'
+    app._selectTouchSelectionLine();
+
+    expect(app.terminal.select).toHaveBeenCalledWith(0, 0, 'short output'.length);
   });
 });

@@ -418,3 +418,88 @@ describe('stringCellWidth', () => {
     expect(stringCellWidth(null, '')).toBe(0);
   });
 });
+
+describe('renderOverlay — staying on screen (totalRows)', () => {
+  // A phone with the keyboard up leaves only a handful of terminal rows. The
+  // overlay lays its wrapped lines out downward from the prompt row, so a long
+  // prompt used to run off the bottom edge and the user typed blind, with the
+  // tail of their own sentence behind the keyboard. With totalRows known, the
+  // composer grows UPWARD instead — the line divs are opaque, so they cover
+  // transcript above rather than disappearing below.
+  const linesOf = (n: number) => Array.from({ length: n }, (_, i) => `line${i}`);
+  const lineDivs = (container: HTMLDivElement) =>
+    Array.from(container.children).filter((el) => el.tagName === 'DIV') as HTMLDivElement[];
+
+  it('lifts the block so its last line lands on the last visible row', () => {
+    const container = document.createElement('div');
+    renderOverlay(container, makeParams({ lines: linesOf(5), promptRow: 10, totalRows: 12, cellH: 17 }));
+
+    // 10 + 5 would end on row 14 of a 12-row screen; the block starts at 7 instead.
+    expect(container.style.top).toBe(7 * 17 + 'px');
+    expect(lineDivs(container)).toHaveLength(5);
+  });
+
+  it('leaves the prompt row alone when the block already fits', () => {
+    const container = document.createElement('div');
+    renderOverlay(container, makeParams({ lines: linesOf(3), promptRow: 5, totalRows: 24, cellH: 17 }));
+
+    expect(container.style.top).toBe(5 * 17 + 'px');
+  });
+
+  it('keeps the TAIL when the prompt is taller than the whole viewport', () => {
+    // The end is where the cursor is, and where the user is looking.
+    const container = document.createElement('div');
+    renderOverlay(container, makeParams({ lines: linesOf(6), promptRow: 2, totalRows: 3, cellH: 20 }));
+
+    const divs = lineDivs(container);
+    expect(container.style.top).toBe('0px');
+    expect(divs).toHaveLength(3);
+    expect(divs.map((d) => d.textContent)).toEqual(['line3', 'line4', 'line5']);
+  });
+
+  it('drops the prompt indent once the prompt line is no longer shown', () => {
+    // startCol indents only the line that begins at the prompt marker.
+    const container = document.createElement('div');
+    renderOverlay(
+      container,
+      makeParams({ lines: linesOf(6), promptRow: 2, totalRows: 3, startCol: 5, cellW: 10, totalCols: 80 })
+    );
+
+    const first = lineDivs(container)[0];
+    expect(first.style.left).toBe('0px');
+    expect(first.style.width).toBe(80 * 10 + 'px');
+  });
+
+  it('rides the cursor on the last VISIBLE line', () => {
+    const container = document.createElement('div');
+    renderOverlay(
+      container,
+      makeParams({ lines: ['aaa', 'bbb', 'ccc', 'ddd'], promptRow: 9, totalRows: 3, cellH: 20, cellW: 10, startCol: 4 })
+    );
+
+    const cursor = Array.from(container.children).find((el) => el.tagName === 'SPAN') as HTMLSpanElement;
+    // Tail is the last 3 lines, so the cursor sits on row 2 (0-based) of the block…
+    expect(cursor.style.top).toBe(2 * 20 + 'px');
+    // …at column 3, NOT startCol + 3: the indented prompt line is not shown.
+    expect(cursor.style.left).toBe(3 * 10 + 'px');
+  });
+
+  it('lays out straight down when totalRows is absent (unchanged behaviour)', () => {
+    const container = document.createElement('div');
+    renderOverlay(container, makeParams({ lines: linesOf(9), promptRow: 20, cellH: 17 }));
+
+    expect(container.style.top).toBe(20 * 17 + 'px');
+    expect(lineDivs(container)).toHaveLength(9);
+  });
+
+  it('falls back to the terminal row count when totalRows is not passed', () => {
+    // The addon passes totalRows, but a stale bundle / third-party caller may not.
+    const container = document.createElement('div');
+    renderOverlay(
+      container,
+      makeParams({ lines: linesOf(4), promptRow: 8, cellH: 17, terminal: { rows: 10, cols: 80 } as never })
+    );
+
+    expect(container.style.top).toBe(6 * 17 + 'px');
+  });
+});

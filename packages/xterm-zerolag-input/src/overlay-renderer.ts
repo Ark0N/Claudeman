@@ -65,38 +65,71 @@ export function renderOverlay(container: HTMLDivElement, params: RenderParams): 
     charTop,
     charHeight,
     promptRow,
+    totalRows,
     font,
     showCursor,
     cursorColor,
     terminal,
   } = params;
 
-  // Position container at prompt row.
+  // ── Keep what is being typed ON SCREEN ────────────────────────────
+  //
+  // The overlay lays its wrapped lines out DOWNWARD from the prompt row, and
+  // nothing past the last terminal row is visible. On a phone the strip left
+  // above the on-screen keyboard is only a handful of rows, so a prompt long
+  // enough to wrap ran off the bottom and the user was typing blind — the tail
+  // of their own sentence, the part they are actually looking at, hidden behind
+  // the keyboard.
+  //
+  // So the composer grows UPWARD once it reaches the last row, exactly as a real
+  // terminal's does: every line div is opaque (see makeLine), so the lines cover
+  // transcript rows above instead of vanishing under the keyboard below, and the
+  // newest text stays where the eye is. A prompt taller than the whole viewport
+  // keeps its TAIL for the same reason.
+  //
+  // `startCol` indents only the line that begins at the prompt marker, so it is
+  // dropped along with that line when the tail is all that fits.
+  const rows = totalRows && totalRows > 0 ? totalRows : terminal?.rows;
+  let visibleLines = lines;
+  let keepsPromptLine = true;
+  let topRow = promptRow;
+  if (rows && rows > 0) {
+    if (lines.length > rows) {
+      visibleLines = lines.slice(lines.length - rows);
+      keepsPromptLine = false;
+      topRow = 0;
+    } else if (promptRow + lines.length > rows) {
+      topRow = rows - lines.length;
+    }
+  }
+  topRow = Math.max(0, topRow);
+
   container.style.left = '0px';
-  container.style.top = promptRow * cellH + 'px';
+  container.style.top = topRow * cellH + 'px';
 
   // Clear and rebuild (typically 1-3 line divs, negligible cost)
   container.innerHTML = '';
   const fullWidthPx = totalCols * cellW;
 
-  for (let i = 0; i < lines.length; i++) {
-    const leftPx = i === 0 ? startCol * cellW : 0;
-    const widthPx = i === 0 ? fullWidthPx - leftPx : fullWidthPx;
+  for (let i = 0; i < visibleLines.length; i++) {
+    const indents = i === 0 && keepsPromptLine;
+    const leftPx = indents ? startCol * cellW : 0;
+    const widthPx = indents ? fullWidthPx - leftPx : fullWidthPx;
     const topPx = i * cellH;
-    const lineEl = makeLine(lines[i], leftPx, topPx, widthPx, cellH, cellW, charTop, charHeight, font, terminal);
+    const lineEl = makeLine(visibleLines[i], leftPx, topPx, widthPx, cellH, cellW, charTop, charHeight, font, terminal);
     container.appendChild(lineEl);
   }
 
   // Block cursor at end of last line (use visual width for CJK support)
   if (showCursor) {
-    const lastLine = lines[lines.length - 1];
-    const lastLineLeft = lines.length === 1 ? startCol : 0;
+    const lastLine = visibleLines[visibleLines.length - 1];
+    const lastLineLeft = visibleLines.length === 1 && keepsPromptLine ? startCol : 0;
     const cursorCol = lastLineLeft + stringCellWidth(terminal, lastLine);
     if (cursorCol < totalCols) {
       const cursor = document.createElement('span');
       cursor.style.cssText = 'position:absolute;display:inline-block';
       cursor.style.left = cursorCol * cellW + 'px';
-      cursor.style.top = (lines.length - 1) * cellH + 'px';
+      cursor.style.top = (visibleLines.length - 1) * cellH + 'px';
       cursor.style.width = cellW + 'px';
       cursor.style.height = cellH + 'px';
       cursor.style.backgroundColor = cursorColor;

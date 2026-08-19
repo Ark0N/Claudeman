@@ -573,6 +573,42 @@ const KeyboardHandler = {
    * space below the last row. After fitAddon.fit(), measure the gap and
    * reduce padding by that amount so the terminal sits flush against the bars.
    */
+  /**
+   * Combined height of the fixed bars that overlay the terminal's bottom edge.
+   *
+   * On phones the toolbar and the accessory bar are `position: fixed`, so they
+   * occupy no layout space of their own — `main`'s padding-bottom is the only
+   * thing reserving room for them, and any pixel taken out of it is a pixel of
+   * terminal painted underneath them.
+   */
+  _fixedBottomBarsHeight() {
+    let px = 0;
+    for (const selector of ['.toolbar', '.keyboard-accessory-bar', '#cjkInput.cjk-input-visible']) {
+      const el = document.querySelector(selector);
+      if (!el) continue;
+      const style = window.getComputedStyle?.(el);
+      if (style && (style.display === 'none' || style.visibility === 'hidden')) continue;
+      px += el.offsetHeight || 0;
+    }
+    return px;
+  },
+
+  /**
+   * Reclaim sub-row slack at the bottom of the terminal — but never the space the
+   * fixed bars stand in.
+   *
+   * Shrinking the padding by the whole slack pulled the terminal's bottom edge
+   * DOWN under those bars, and the row the following re-fit then gained was
+   * painted behind them: on a long wrapped prompt the last line was clipped by
+   * the accessory bar, i.e. the bottom half of the text being typed. The floor is
+   * now the bars' MEASURED height, so a device where the hard-coded 84px
+   * over-reserves still reclaims the difference, while one that genuinely needs
+   * it keeps every pixel.
+   *
+   * ⚠️ The floor can only ever prevent a shrink, never cause a grow
+   * (`Math.min(currentPadding, …)`): a measured height LARGER than the current
+   * padding makes this a no-op rather than silently resizing the terminal.
+   */
   _shrinkPaddingToFit() {
     try {
       const container = document.getElementById('terminalContainer');
@@ -583,7 +619,8 @@ const KeyboardHandler = {
       const gap = container.clientHeight - app.terminal.rows * cellH;
       if (gap > 0 && gap < cellH) {
         const currentPadding = parseInt(main.style.paddingBottom) || 0;
-        main.style.paddingBottom = Math.max(0, currentPadding - gap) + 'px';
+        const floor = Math.min(currentPadding, this._fixedBottomBarsHeight());
+        main.style.paddingBottom = Math.max(floor, currentPadding - gap) + 'px';
         if (app.fitAddon)
           try {
             app.fitAddon.fit();

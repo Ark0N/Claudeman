@@ -3408,6 +3408,57 @@ body.touch-device .terminal-container .xterm .xterm-helper-textarea {
   -webkit-touch-callout: none !important;
 }
 
+/* Touch text-selection bar (long-press → select → Copy).
+   Lives in styles.css, NOT mobile.css: the gesture is touch-driven, not
+   width-driven, and mobile.css is media-gated to ≤1023px — a touch tablet in
+   landscape would get the gesture with no bar to copy from.
+   Built in JS (index.html is read once at server start, so markup added there
+   would need a restart to appear). z-index 900 sits above terminal content and
+   the local-echo overlay (7) and deliberately BELOW floating agent windows
+   (1000), so it can never cover their controls. */
+.term-select-bar {
+  position: absolute;
+  z-index: 900;
+  display: none;
+  gap: 2px;
+  padding: 3px;
+  background: var(--bg-card);
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  box-shadow: 0 4px 14px rgba(0, 0, 0, 0.45);
+}
+
+.term-select-bar.visible {
+  display: flex;
+}
+
+.term-select-btn {
+  min-height: 38px;
+  min-width: 46px;
+  padding: 0 0.7rem;
+  border: none;
+  border-radius: 6px;
+  background: transparent;
+  color: var(--text);
+  font-family: inherit;
+  font-size: 0.82rem;
+  font-weight: 600;
+  cursor: pointer;
+  /* The bar is the one place in the terminal subtree a tap must land on a
+     control rather than a cell, so it opts out of the gesture styles above. */
+  touch-action: manipulation;
+}
+
+.term-select-btn:active {
+  background: var(--bg-hover);
+}
+
+.term-select-btn--close {
+  min-width: 38px;
+  padding: 0;
+  color: var(--text-muted);
+}
+
 /* Welcome Overlay */
 .welcome-overlay {
   position: absolute;
