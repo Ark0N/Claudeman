@@ -1419,63 +1419,32 @@ Object.assign(CodemanApp.prototype, {
 
         // Stitch the LOGICAL line back together.
         //
-        // xterm invokes this provider per visible ROW, and translateToString returns
-        // that row alone (the old comment here claimed otherwise). A URL or path
-        // longer than the terminal is wide therefore matched only as far as the row
-        // boundary, and the link opened a PREFIX of the real target. Walk out to both
-        // ends of the continuation, match against the joined text, and map offsets
-        // back to (x, y) so a link can span rows.
-        //
-        // Two different kinds of continuation, and handling only the first is not
-        // enough:
-        //   1. SOFT wrap: the emulator ran out of columns and flags the next row
-        //      `isWrapped`.
-        //   2. HARD wrap: the program did its own wrapping and emitted a real
-        //      newline, so nothing is flagged. Ink does this, which is why Claude
-        //      Code's own `/login` URL was cut at the window edge, and why the
-        //      clickable part grew when the window was widened.
-        // A row that fills the full width is treated as continuing into the next:
-        // that is the signal a hard wrap leaves behind, and a line that genuinely
-        // ended would stop short of the last column.
-        const cols = self.terminal.cols;
-        const rowAt = (r) => buffer.getLine(r - 1);
-        const continuesPrevious = (r) => {
-          if (r <= 1) return false;
-          if (rowAt(r)?.isWrapped) return true;
-          const prev = rowAt(r - 1);
-          return !!prev && prev.translateToString(true).length >= cols;
-        };
-
+        // xterm invokes this provider per visible ROW and translateToString returns
+        // that row alone, so a URL or path longer than the terminal is wide matched
+        // only as far as the row boundary and the link opened a PREFIX of the real
+        // target. `terminalLogicalLine` (constants.js) owns the reconstruction —
+        // both continuation kinds, the indent a hard wrap leaves on its
+        // continuation, and the offset↔cell mapping — because touch selection
+        // measures the SAME lines and the two must not disagree.
         // Bounded so a screenful of full-width output (wide tables, box drawing)
         // cannot make every hover stitch and re-scan the entire viewport.
         const MAX_STITCHED_ROWS = 12;
-        let startRow = bufferLineNumber;
-        while (startRow > 1 && bufferLineNumber - startRow < MAX_STITCHED_ROWS && continuesPrevious(startRow)) {
-          startRow--;
+        const logical = window.CodemanTerminalLines?.terminalLogicalLine(
+          buffer,
+          bufferLineNumber - 1,
+          self.terminal.cols,
+          MAX_STITCHED_ROWS
+        );
+        if (!logical) {
+          callback(undefined);
+          return;
         }
-        let endRow = bufferLineNumber;
-        while (endRow < buffer.length && endRow - startRow < MAX_STITCHED_ROWS && continuesPrevious(endRow + 1)) {
-          endRow++;
-        }
-
-        const rowTexts = [];
-        for (let r = startRow; r <= endRow; r++) {
-          const row = rowAt(r);
-          if (!row) break;
-          // Only the final row may be trimmed. Continuation rows fill the width by
-          // definition, and trimming one would shift every later offset.
-          rowTexts.push(row.translateToString(r === endRow));
-        }
-        const lineText = rowTexts.join('');
+        const lineText = logical.text;
 
         /** Map an offset in the stitched text back to a 1-based terminal cell. */
         const coordAt = (index) => {
-          let rest = index;
-          for (let i = 0; i < rowTexts.length - 1; i++) {
-            if (rest < rowTexts[i].length) return { x: rest + 1, y: startRow + i };
-            rest -= rowTexts[i].length;
-          }
-          return { x: rest + 1, y: startRow + rowTexts.length - 1 };
+          const cell = logical.offsetToCell(index);
+          return { x: cell.col + 1, y: cell.row + 1 };
         };
 
         if (!lineText || !lineText.includes('/')) {
@@ -1797,22 +1766,20 @@ Object.assign(CodemanApp.prototype, {
   },
 
   /**
-   * The logical line a buffer row belongs to, as one string plus its start row.
+   * The logical line a buffer row belongs to — the SAME reconstruction the link
+   * provider matches against (`terminalLogicalLine`, constants.js).
    *
-   * ⚠️ Rows are read UNTRIMMED (`translateToString(false)`) so every row
-   * contributes exactly `cols` characters: the offset math below is linear over
-   * the joined text, and a trimmed row would silently shift every offset after it.
+   * ⚠️ Walking only `isWrapped` was not enough: Claude Code and every other Ink CLI
+   * wrap their own output and emit real newlines, so nothing is flagged and "Line"
+   * grabbed the one row on screen instead of the whole wrapped line. The shared
+   * helper treats a row that fills the last column as continuing, and drops the
+   * indent such a continuation carries.
    */
   _touchSelectionLogicalLine(row) {
     const buffer = this.terminal?.buffer?.active;
-    if (!buffer?.getLine) return null;
-    let start = row;
-    while (start > 0 && buffer.getLine(start)?.isWrapped) start--;
-    let end = row;
-    while (end + 1 < buffer.length && buffer.getLine(end + 1)?.isWrapped) end++;
-    let text = '';
-    for (let r = start; r <= end; r++) text += buffer.getLine(r)?.translateToString(false) ?? '';
-    return { startRow: start, text };
+    const cols = Math.max(1, this.terminal?.cols || 1);
+    if (!buffer || typeof window.CodemanTerminalLines?.terminalLogicalLine !== 'function') return null;
+    return window.CodemanTerminalLines.terminalLogicalLine(buffer, row, cols);
   },
 
   /**
@@ -1821,19 +1788,30 @@ Object.assign(CodemanApp.prototype, {
    * Whitespace is the only delimiter on purpose: in a terminal the thing worth
    * grabbing is a path, a URL, a container id or a hash, and every punctuation-
    * aware word rule cuts those in half.
+   *
+   * ⚠️ Bounds are found in the reconstructed TEXT (so a token is not cut at a wrap)
+   * and then converted to CELLS, because an xterm selection is one contiguous run of
+   * cells. A token spanning a hard wrap therefore also covers the indent cells
+   * between its halves — the alternative, a selection that skips them, cannot be
+   * expressed and would not match what is highlighted.
    */
   _touchSelectionWordAt(cell) {
     const cols = Math.max(1, this.terminal?.cols || 1);
     const line = this._touchSelectionLogicalLine(cell.row);
     if (!line) return null;
-    const offset = (cell.row - line.startRow) * cols + cell.col;
+    const offset = line.cellToOffset(cell.row, cell.col);
+    if (offset < 0) return null;
     const ch = line.text[offset];
     if (!ch || !ch.trim()) return null; // pressed on blank space: nothing to select
     let from = offset;
     while (from > 0 && line.text[from - 1] && line.text[from - 1].trim()) from--;
     let to = offset;
     while (to + 1 < line.text.length && line.text[to + 1] && line.text[to + 1].trim()) to++;
-    return { index: line.startRow * cols + from, length: to - from + 1 };
+    const startCell = line.offsetToCell(from);
+    const endCell = line.offsetToCell(to);
+    const index = startCell.row * cols + startCell.col;
+    const length = endCell.row * cols + endCell.col - index + 1;
+    return length > 0 ? { index, length } : null;
   },
 
   /** Apply a selection given absolute cell indices; `select()` wraps a length across rows. */
@@ -1923,13 +1901,16 @@ Object.assign(CodemanApp.prototype, {
     if (!anchor) return;
     const line = this._touchSelectionLogicalLine(Math.floor(anchor.index / cols));
     if (!line) return;
-    // Trailing blanks are padding, not content: rows are read untrimmed so the
-    // offsets line up, and copying the pad would put a wall of spaces on the
-    // clipboard.
-    const length = line.text.replace(/\s+$/, '').length;
-    if (length === 0) return;
-    this._touchSelectionAnchor = { index: line.startRow * cols, length };
-    this._applyTouchSelection(line.startRow * cols, length);
+    // Every row of the logical line, wraps included — that is the whole point of
+    // the button. The end is the last row's last non-blank cell: trailing cells are
+    // padding, and copying them would put a wall of spaces on the clipboard.
+    const buffer = this.terminal?.buffer?.active;
+    const lastRow = (buffer?.getLine(line.endRow)?.translateToString(true) || '').length;
+    const index = line.startRow * cols;
+    const length = line.endRow * cols + Math.max(0, lastRow - 1) - index + 1;
+    if (length <= 0) return;
+    this._touchSelectionAnchor = { index, length };
+    this._applyTouchSelection(index, length);
     this._positionTouchSelectionBar();
   },
 

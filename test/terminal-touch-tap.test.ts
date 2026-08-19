@@ -1094,3 +1094,91 @@ describe('terminal touch selection', () => {
     expect(app._ensureTouchSelectionBar()).toBeNull();
   });
 });
+
+describe('terminal wrapped-line handling', () => {
+  // Reported from a phone against the shipped fix: an agent's numbered list wraps its
+  // URL, and tapping it opened only the part on screen. Ink emits a real newline (so
+  // nothing is flagged isWrapped) and indents the continuation under the list marker,
+  // so joining the rows verbatim put whitespace inside the URL. "Line" broke the same
+  // way, grabbing the one visible row.
+  //
+  // Grid: 80 cols, 8×16 cells, screen rect at (0,0), viewportY 0.
+  const COLS = 80;
+  const at = (index: number, row = 0) => ({ clientX: index * 8 + 4, clientY: row * 16 + 8 });
+  const press = (app: any, index: number, row = 0) =>
+    app._beginTouchSelection(at(index, row).clientX, at(index, row).clientY);
+  const HEAD = '1. https://example.com/';
+  // Row 0 runs to the last column, which is the only trace a hard wrap leaves.
+  const ROW0 = HEAD + 'a'.repeat(COLS - HEAD.length);
+  const ROW1 = '   ackage/thing';
+  const FULL_URL = 'https://example.com/' + 'a'.repeat(COLS - HEAD.length) + 'ackage/thing';
+
+  function wrappedHarness() {
+    const { app, windowRef } = loadTerminalUiHarness();
+    app.activeSessionId = 'sess-1';
+    app.sessions = new Map([['sess-1', { mode: 'claude' }]]);
+    app._sendInputAsync = vi.fn();
+    app.terminal = createTerminalGrid([ROW0, ROW1, '❯ '], 2);
+    app.terminal.registerLinkProvider = vi.fn();
+    app.openFilePreview = vi.fn();
+    app.openLogViewerWindow = vi.fn();
+    app._isExternalPreviewPath = () => false;
+    windowRef.open = vi.fn();
+    app.registerFilePathLinkProvider();
+    return { app, windowRef, select: app.terminal.select as ReturnType<typeof vi.fn> };
+  }
+
+  it('opens the WHOLE wrapped URL, not the part on screen', () => {
+    const { app, windowRef } = wrappedHarness();
+
+    expect(app._handleMobileTerminalTap(at(HEAD.length + 5), false, 'content')).toBe('link');
+    expect(windowRef.open).toHaveBeenCalledWith(FULL_URL, '_blank', 'noopener,noreferrer');
+  });
+
+  it('opens the whole URL from the continuation row too', () => {
+    // Tapping the second half is the natural gesture when that is what you can see.
+    const { app, windowRef } = wrappedHarness();
+
+    expect(app._handleMobileTerminalTap(at(5, 1), false, 'content')).toBe('link');
+    expect(windowRef.open).toHaveBeenCalledWith(FULL_URL, '_blank', 'noopener,noreferrer');
+  });
+
+  it('selects a token that spans the wrap, across both rows', () => {
+    const { app, select } = wrappedHarness();
+
+    press(app, 5, 1); // inside 'ackage/thing' on the continuation row
+    // From the URL's first cell (row 0, col 3) through the token's last cell
+    // (row 1, col 14). The run covers the indent cells between the halves, because
+    // an xterm selection is one contiguous run and a gap cannot be expressed.
+    const index = 3;
+    const end = COLS + ROW1.length - 1;
+    expect(select).toHaveBeenCalledWith(3, 0, end - index + 1);
+  });
+
+  it('Line takes every row of a HARD-wrapped line, not just the visible one', () => {
+    const { app, select } = wrappedHarness();
+    press(app, HEAD.length + 5);
+    select.mockClear();
+
+    app._selectTouchSelectionLine();
+
+    // Row 0 col 0 through row 1's last non-blank cell.
+    expect(select).toHaveBeenCalledWith(0, 0, COLS + ROW1.length);
+  });
+
+  it('does not reach into the next line when a row stops short of the edge', () => {
+    // Over-reaching would glue unrelated output into one link or one "Line".
+    const { app, select } = loadTerminalUiHarness();
+    void select;
+    app.activeSessionId = 'sess-1';
+    app.sessions = new Map([['sess-1', { mode: 'claude' }]]);
+    app.terminal = createTerminalGrid(['short output', 'https://example.com/next', '❯ '], 2);
+    app.terminal.registerLinkProvider = vi.fn();
+    app.registerFilePathLinkProvider();
+
+    press(app, 2); // inside 'short'
+    app._selectTouchSelectionLine();
+
+    expect(app.terminal.select).toHaveBeenCalledWith(0, 0, 'short output'.length);
+  });
+});
