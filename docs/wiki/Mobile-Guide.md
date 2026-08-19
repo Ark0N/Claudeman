@@ -88,6 +88,22 @@ looks exactly like a dead button.
 On phones this button replaces the desktop's **Run Shell** control; starting a shell moved
 into the Run dropdown.
 
+## Tapping, links and copying
+
+- **Tap a link** in terminal output and it opens in a new tab. Same for a link in an agent's
+  answer in the response viewer — it opens a tab rather than navigating the dashboard away,
+  which on a phone would unload the whole session view.
+- **Tap a file path** an agent printed and the file-preview overlay opens; a log path opens the
+  log viewer. Works in scrolled-up transcript too.
+- A tap on the prose *beside* a link still places the cursor as usual, and a tap on a dialog's
+  numbered choice still answers the dialog even when the row contains a path — the dialog wins,
+  because on a phone it is the only interaction that matters.
+- **Long-press to select text**, then drag, or tap the other end to extend the selection — no
+  hairline handles to grab. A small bar offers **Copy**, **Line** (the whole logical line,
+  wrapped rows included) and dismiss. Copy works on plain-HTTP installs too, where the browser
+  clipboard API is unavailable.
+- A swipe is never mistaken for a long-press, and the keyboard stays down while you select.
+
 ## Scrolling and the keyboard
 
 - The terminal and toolbar shift up when the keyboard opens, tracked through the browser's
@@ -97,6 +113,10 @@ into the Run dropdown.
   keeps focus so you can place the caret.
 - A scroll is never mistaken for a tap: travel is measured from the start of the gesture, and
   multi-touch never counts.
+- **A long prompt stays visible.** Once what you are typing wraps past the last visible row it
+  grows upward over the transcript instead of sliding under the keyboard, so the end of the
+  sentence — where the cursor is — is always on screen. A prompt taller than the visible strip
+  shows its tail.
 
 ## Voice
 
