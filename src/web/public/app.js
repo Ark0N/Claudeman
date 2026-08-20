@@ -2235,6 +2235,10 @@ class CodemanApp {
 
   _getResponseViewerAgentLabel() {
     const mode = this.sessions.get(this.activeSessionId)?.mode;
+    const clis = typeof window !== 'undefined' ? window.__codemanClis : undefined;
+    const cliMeta = (clis || []).find(c => c.id === mode);
+    if (cliMeta) return cliMeta.label;
+    // Fallback chain for a context with no window.__codemanClis (older cached page).
     return mode === 'codex'
       ? 'Codex'
       : mode === 'gemini'

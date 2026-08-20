@@ -55,18 +55,19 @@ describe('OpenCode session initial resize', () => {
     await context?.close();
   });
 
-  it('selectSession is not bypassed when runOpenCode sets activeSessionId', async () => {
-    // This test verifies at the code level that runOpenCode does NOT
-    // pre-set activeSessionId before calling selectSession.
+  it('selectSession is not bypassed when runCli(opencode) sets activeSessionId', async () => {
+    // This test verifies at the code level that runCli() (the shared launch path
+    // for opencode/codex/gemini/antigravity/pi, formerly a per-mode runOpenCode()
+    // etc.) does NOT pre-set activeSessionId before calling selectSession.
     // If it did, selectSession would early-return and skip sendResize.
     ({ context, page } = await freshPage());
     await navigateAndWait(page);
 
-    // Read the runOpenCode source from the live app and verify
+    // Read the runCli source from the live app and verify
     // it doesn't assign activeSessionId before selectSession
     const hasPreAssignment = await page.evaluate(() => {
-      const app = (window as unknown as { app: { runOpenCode: { toString: () => string } } }).app;
-      const source = app.runOpenCode.toString();
+      const app = (window as unknown as { app: { runCli: { toString: () => string } } }).app;
+      const source = app.runCli.toString();
 
       // Check: the source should NOT have activeSessionId = ... before selectSession
       // Find positions of both patterns
@@ -114,7 +115,7 @@ describe('OpenCode session initial resize', () => {
 
     expect(sessionId).toBeTruthy();
 
-    // Call selectSession (which is what runOpenCode does after fix)
+    // Call selectSession (which is what runCli does after fix)
     await page.evaluate(async (sid: string) => {
       const app = (window as unknown as { app: { selectSession: (id: string) => Promise<void> } }).app;
       await app.selectSession(sid);

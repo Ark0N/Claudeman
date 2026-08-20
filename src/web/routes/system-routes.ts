@@ -384,14 +384,20 @@ export function registerSystemRoutes(
   // buttons, labels and badges from data instead of a hard-coded list. Sorted by `order`,
   // each entry augmented with live availability so a single fetch covers both.
   app.get('/api/clis', async () => {
-    const { listClis } = await import('../../config/cli-registry/registry.js');
+    const { listClis, missingCliMessage } = await import('../../config/cli-registry/registry.js');
     const { resolveCliBinDir, resolveCliVersion } = await import('../../utils/cli-resolver.js');
-    const clis = listClis().map((entry) => ({
-      ...entry,
-      available: entry.kind === 'shell' ? true : resolveCliBinDir(entry.id) !== null,
-      path: entry.kind === 'shell' ? null : resolveCliBinDir(entry.id),
-      version: entry.kind === 'shell' ? null : resolveCliVersion(entry.id),
-    }));
+    const clis = listClis().map((entry) => {
+      const available = entry.kind === 'shell' ? true : resolveCliBinDir(entry.id) !== null;
+      return {
+        ...entry,
+        available,
+        path: entry.kind === 'shell' ? null : resolveCliBinDir(entry.id),
+        version: entry.kind === 'shell' ? null : resolveCliVersion(entry.id),
+        // Populated only when actually needed (not installed), so the frontend never has
+        // to reconstruct the per-platform install-command message itself.
+        installHint: available ? null : missingCliMessage(entry.id),
+      };
+    });
     return { success: true, data: clis };
   });
 
@@ -402,18 +408,20 @@ export function registerSystemRoutes(
   // resolveCliVersion's own doc comment); claude's own `/api/claude/status` stays the
   // place to read ITS live version until that becomes generic too.
   app.get<{ Params: { id: string } }>('/api/cli/:id/status', async (req, reply) => {
-    const { getCli } = await import('../../config/cli-registry/registry.js');
+    const { getCli, missingCliMessage } = await import('../../config/cli-registry/registry.js');
     const { resolveCliBinDir, resolveCliVersion } = await import('../../utils/cli-resolver.js');
     const entry = getCli(req.params.id);
     if (!entry) {
       return reply.code(404).send(createErrorResponse(ApiErrorCode.NOT_FOUND, `Unknown CLI: ${req.params.id}`));
     }
+    const available = entry.kind === 'shell' ? true : resolveCliBinDir(entry.id) !== null;
     return {
       success: true,
       data: {
-        available: entry.kind === 'shell' ? true : resolveCliBinDir(entry.id) !== null,
+        available,
         path: entry.kind === 'shell' ? null : resolveCliBinDir(entry.id),
         version: entry.kind === 'shell' ? null : resolveCliVersion(entry.id),
+        installHint: available ? null : missingCliMessage(entry.id),
       },
     };
   });

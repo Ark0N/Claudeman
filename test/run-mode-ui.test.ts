@@ -148,8 +148,10 @@ describe('Run launch synchronization', () => {
    * directly, which is the actual bug: a launch started while another session
    * is active wipes that session's terminal, and _cleanupPreviousSession()
    * then serializes the wiped view into its restore snapshot. Asserting on the
-   * helpers alone cannot see that, so pin the call sites here. This also
-   * covers run modes added later, which is how runAntigravity was caught.
+   * helpers alone cannot see that, so pin the call sites here. runCli(mode) is
+   * the single entry point for every external CLI (opencode/codex/gemini/
+   * antigravity/pi and any future custom one), which is what now covers a mode
+   * added later automatically instead of needing its own runX() caught here.
    */
   it('routes every run mode through the ownership helpers, never the terminal directly', () => {
     const src = readFileSync(resolve(import.meta.dirname, '../src/web/public/session-ui.js'), 'utf8');
@@ -157,7 +159,7 @@ describe('Run launch synchronization', () => {
     // Methods live in one Object.assign(prototype, {...}) block at a fixed
     // 2-space indent, so `\n  },` reliably closes the one we are inside.
     const bodies = new Map<string, string>();
-    const header = /^ {2}async (run[A-Za-z]*)\(\) \{$/gm;
+    const header = /^ {2}async (run[A-Za-z]*)\([a-z]*\) \{$/gm;
     for (let m = header.exec(src); m; m = header.exec(src)) {
       const start = m.index + m[0].length;
       const end = src.indexOf('\n  },', start);
@@ -167,17 +169,7 @@ describe('Run launch synchronization', () => {
 
     // Fail loudly if the scan matched nothing: a silently empty scan would make
     // every assertion below vacuously true.
-    expect([...bodies.keys()]).toEqual(
-      expect.arrayContaining([
-        'runClaude',
-        'runShell',
-        'runOpenCode',
-        'runCodex',
-        'runGemini',
-        'runAntigravity',
-        'runPi',
-      ])
-    );
+    expect([...bodies.keys()]).toEqual(expect.arrayContaining(['runClaude', 'runShell', 'runCli']));
 
     for (const [name, body] of bodies) {
       expect(body, `${name}() must not clear a terminal it may not own`).not.toContain('this.terminal.clear(');
@@ -497,7 +489,8 @@ describe('Codex quick start settings', () => {
       // server.ts wraps route payloads into the { success, data } envelope.
       fetch: async (url: string, init?: { body?: string }) => {
         requests.push({ url, body: init?.body ? JSON.parse(init.body) : undefined });
-        if (url === '/api/codex/status') return { json: async () => ({ success: true, data: { available: true } }) };
+        if (url === '/api/cli/codex/status')
+          return { json: async () => ({ success: true, data: { available: true } }) };
         if (url === '/api/quick-start') return { json: async () => ({ success: true, data: { sessionId: 'sess-1' } }) };
         if (url === '/api/sessions/sess-1')
           return { json: async () => ({ success: true, data: { id: 'sess-1', name: 'w1-codex-case' } }) };
@@ -525,7 +518,7 @@ describe('Codex quick start settings', () => {
       selected.push(id);
     };
 
-    await app.runCodex();
+    await app.runCli('codex');
 
     expect(requests.find((req) => req.url === '/api/quick-start')?.body).toMatchObject({
       caseName: 'codex-case',
@@ -798,12 +791,12 @@ describe('case selector refresh', () => {
 });
 
 describe('Gemini quick start', () => {
-  // Regression guard for the ApiResponse-envelope unwrap in runGemini(): the
+  // Regression guard for the ApiResponse-envelope unwrap in runCli(): the
   // status check must read `.data.available` and the quick-start response must
   // read `.data.sessionId`. Reading the raw shape (pre-fix) silently bails on
   // the status check and never selects the new tab — exactly the two blockers
   // caught in PR #134 review.
-  it('drives runGemini() through the {success,data} envelope and selects the new session', async () => {
+  it("drives runCli('gemini') through the {success,data} envelope and selects the new session", async () => {
     const elements: Record<string, any> = {
       quickStartCase: { value: 'gemini-case' },
     };
@@ -818,7 +811,8 @@ describe('Gemini quick start', () => {
       // hook wraps raw route payloads into the { success, data } envelope.
       fetch: async (url: string, init?: { body?: string }) => {
         requests.push({ url, body: init?.body ? JSON.parse(init.body) : undefined });
-        if (url === '/api/gemini/status') return { json: async () => ({ success: true, data: { available: true } }) };
+        if (url === '/api/cli/gemini/status')
+          return { json: async () => ({ success: true, data: { available: true } }) };
         if (url === '/api/quick-start')
           return { json: async () => ({ success: true, data: { sessionId: 'sess-gm' } }) };
         if (url === '/api/sessions/sess-gm')
@@ -844,7 +838,7 @@ describe('Gemini quick start', () => {
       selected.push(id);
     };
 
-    await app.runGemini();
+    await app.runCli('gemini');
 
     expect(requests.find((req) => req.url === '/api/quick-start')?.body).toMatchObject({
       caseName: 'gemini-case',
@@ -856,8 +850,8 @@ describe('Gemini quick start', () => {
 });
 
 describe('Antigravity quick start', () => {
-  // Same envelope-unwrap regression guard as the Gemini block above, for runAntigravity().
-  it('drives runAntigravity() through the {success,data} envelope and selects the new session', async () => {
+  // Same envelope-unwrap regression guard as the Gemini block above, for antigravity.
+  it("drives runCli('antigravity') through the {success,data} envelope and selects the new session", async () => {
     const elements: Record<string, any> = {
       quickStartCase: { value: 'ag-case' },
     };
@@ -870,7 +864,7 @@ describe('Antigravity quick start', () => {
       document: { getElementById: (id: string) => elements[id] ?? null },
       fetch: async (url: string, init?: { body?: string }) => {
         requests.push({ url, body: init?.body ? JSON.parse(init.body) : undefined });
-        if (url === '/api/antigravity/status')
+        if (url === '/api/cli/antigravity/status')
           return { json: async () => ({ success: true, data: { available: true } }) };
         if (url === '/api/quick-start')
           return { json: async () => ({ success: true, data: { sessionId: 'sess-ag' } }) };
@@ -897,7 +891,7 @@ describe('Antigravity quick start', () => {
       selected.push(id);
     };
 
-    await app.runAntigravity();
+    await app.runCli('antigravity');
 
     expect(requests.find((req) => req.url === '/api/quick-start')?.body).toMatchObject({
       caseName: 'ag-case',
@@ -909,11 +903,11 @@ describe('Antigravity quick start', () => {
 });
 
 describe('Pi quick start', () => {
-  // Same envelope-unwrap regression guard as the blocks above, for runPi(), plus the
+  // Same envelope-unwrap regression guard as the blocks above, for pi, plus the
   // rule that makes pi different: it must send NO piConfig. Pi has no permission
   // prompts, and `approveProjectTrust` would opt the session into EXECUTING
   // repo-supplied TypeScript — never something a Run button decides silently.
-  it('drives runPi() through the {success,data} envelope and sends no piConfig', async () => {
+  it("drives runCli('pi') through the {success,data} envelope and sends no piConfig", async () => {
     const elements: Record<string, any> = {
       quickStartCase: { value: 'pi-case' },
     };
@@ -926,7 +920,7 @@ describe('Pi quick start', () => {
       document: { getElementById: (id: string) => elements[id] ?? null },
       fetch: async (url: string, init?: { body?: string }) => {
         requests.push({ url, body: init?.body ? JSON.parse(init.body) : undefined });
-        if (url === '/api/pi/status')
+        if (url === '/api/cli/pi/status')
           return {
             json: async () => ({ success: true, data: { available: true, path: '/usr/local/bin', version: '0.84.1' } }),
           };
@@ -955,7 +949,7 @@ describe('Pi quick start', () => {
       selected.push(id);
     };
 
-    await app.runPi();
+    await app.runCli('pi');
 
     const body = requests.find((req) => req.url === '/api/quick-start')?.body;
     expect(body).toMatchObject({ caseName: 'pi-case', mode: 'pi' });
@@ -973,8 +967,19 @@ describe('Pi quick start', () => {
       document: { getElementById: (id: string) => elements[id] ?? null },
       fetch: async (url: string) => {
         requests.push(url);
-        if (url === '/api/pi/status')
-          return { json: async () => ({ success: true, data: { available: false, path: null, version: null } }) };
+        if (url === '/api/cli/pi/status')
+          return {
+            json: async () => ({
+              success: true,
+              data: {
+                available: false,
+                path: null,
+                version: null,
+                installHint:
+                  'Pi CLI not found. Install with: npm install -g --ignore-scripts @earendil-works/pi-coding-agent',
+              },
+            }),
+          };
         throw new Error(`unexpected fetch: ${url}`);
       },
       console,
@@ -987,9 +992,9 @@ describe('Pi quick start', () => {
     const errors: string[] = [];
     app._reportSessionLaunchError = (_owns: boolean, msg: string) => errors.push(msg);
 
-    await app.runPi();
+    await app.runCli('pi');
 
-    expect(requests).toEqual(['/api/pi/status']);
+    expect(requests).toEqual(['/api/cli/pi/status']);
     expect(errors[0]).toContain('@earendil-works/pi-coding-agent');
   });
 });

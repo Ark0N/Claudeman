@@ -388,25 +388,11 @@ Object.assign(CodemanApp.prototype, {
 
     try {
       const mode = this._runMode || 'claude';
-      if (mode === 'opencode') {
-        return await this.runOpenCode();
-      }
-      if (mode === 'codex') {
-        return await this.runCodex();
-      }
-      if (mode === 'gemini') {
-        return await this.runGemini();
-      }
-      if (mode === 'antigravity') {
-        return await this.runAntigravity();
-      }
-      if (mode === 'pi') {
-        return await this.runPi();
-      }
-      if (mode === 'shell') {
-        return await this.runShell();
-      }
-      return await this.runClaude();
+      if (mode === 'claude') return await this.runClaude();
+      if (mode === 'shell') return await this.runShell();
+      // Every other mode (opencode/codex/gemini/antigravity/pi, or a future custom
+      // external CLI) shares one launch path — see runCli()'s own doc comment.
+      return await this.runCli(mode);
     } finally {
       const remaining = minLockMs - (Date.now() - startedAt);
       if (remaining > 0) await new Promise(resolve => setTimeout(resolve, remaining));
@@ -565,7 +551,16 @@ Object.assign(CodemanApp.prototype, {
       gearBtn.className = `btn-toolbar btn-run-gear mode-${mode}`;
     }
     if (label) {
-      label.textContent = mode === 'opencode' ? 'Run OC' : mode === 'codex' ? 'Run CX' : mode === 'gemini' ? 'Run GM' : mode === 'antigravity' ? 'Run AG' : mode === 'pi' ? 'Run PI' : mode === 'shell' ? 'Run SH' : 'Run';
+      // Prefer the registry's own shortBadge ("Run <BADGE>") when the served list is
+      // available; claude has no badge suffix ("Run" alone), matching every mode this
+      // ternary already special-cased. Falls back to the hard-coded chain in a context
+      // with no `window.__codemanClis` (older cached page, or a test harness) so behavior
+      // stays identical either way — this is an enhancement, not a required data source.
+      const clis = typeof window !== 'undefined' ? window.__codemanClis : undefined;
+      const cliMeta = (clis || []).find(c => c.id === mode);
+      label.textContent = cliMeta
+        ? (mode === 'claude' ? 'Run' : `Run ${cliMeta.shortBadge}`)
+        : (mode === 'opencode' ? 'Run OC' : mode === 'codex' ? 'Run CX' : mode === 'gemini' ? 'Run GM' : mode === 'antigravity' ? 'Run AG' : mode === 'pi' ? 'Run PI' : mode === 'shell' ? 'Run SH' : 'Run');
     }
   },
 
@@ -1004,81 +999,77 @@ Object.assign(CodemanApp.prototype, {
     }
   },
 
-  async runOpenCode() {
+  /**
+   * Per-mode default `<mode>Config` body sent to `/api/quick-start`, for the local
+   * (non-remote/docker) case. This is DELIBERATE FRONTEND POLICY, not "which CLIs
+   * exist" — it encodes decisions like "codex's bypass/animations come from two
+   * App Settings toggles" and "pi gets NO config at all", which is a genuine safety
+   * choice, not an omission: pi has no permission prompts, so there is no bypass to
+   * opt into, and project trust is pi's own `defaultProjectTrust` decision (an
+   * interactive prompt the user answers in the terminal) — sending
+   * `approveProjectTrust: true` here would silently opt every browser-launched pi
+   * session into executing repo-supplied TypeScript. A mode with no entry here
+   * (claude/shell, handled by their own run methods; a future custom external CLI)
+   * gets no config object at all, which quick-start already treats as "use defaults".
+   */
+  _quickStartConfigFor(mode, globalSettings) {
+    switch (mode) {
+      case 'opencode':
+        // No `effort` field — it's Claude-specific (OpenCode has no /effort).
+        return { openCodeConfig: { autoAllowTools: true } };
+      case 'codex':
+        return {
+          codexConfig: {
+            dangerouslyBypassApprovals: globalSettings.codexDangerouslyBypassApprovals ?? false,
+            animations: globalSettings.codexAnimationsEnabled ?? false,
+            renderMode: 'hybrid',
+          },
+        };
+      case 'gemini':
+        return { geminiConfig: { approvalMode: 'yolo' } };
+      case 'antigravity':
+        return { antigravityConfig: { dangerouslySkipPermissions: true } };
+      default:
+        return {};
+    }
+  },
+
+  /**
+   * Launch a session for any external CLI mode (opencode/codex/gemini/antigravity/
+   * pi today, or a future custom one) — the five near-identical runOpenCode()/
+   * runCodex()/runGemini()/runAntigravity()/runPi() methods this replaced differed
+   * only in the status-check URL, the install-hint message, the display label and
+   * `_quickStartConfigFor()`'s per-mode config body, all now DATA (the label/install
+   * hint from `GET /api/cli/:id/status` and `window.__codemanClis`, the config body
+   * from the table above) rather than one copy-pasted method per CLI. claude/shell
+   * keep their own methods (runClaude/runShell): both are genuinely larger and
+   * differently-shaped (multi-tab, docker drift handling, ralph tracker, shell count).
+   */
+  async runCli(mode) {
     const caseName = document.getElementById('quickStartCase').value || 'testcase';
-    // Remote cases run the CLI on the REMOTE host — the local /api/opencode/status
-    // probe and the local-only config/env below don't apply (quick-start rejects them).
+    // Remote/docker cases run the CLI on the OTHER side — the local status probe and
+    // the local-only config/env below don't apply (quick-start rejects them there).
     const _runLoc = (this.cases || []).find(c => c.name === caseName)?.location;
     const isRemote = _runLoc === 'remote' || _runLoc === 'docker';
+    // `typeof window` guard: some unit-test harnesses run this file in a vm sandbox
+    // with no `window` global at all, where a bare reference would throw instead of
+    // just being undefined (unlike every other optional-lookup in this method).
+    const clis = typeof window !== 'undefined' ? window.__codemanClis : undefined;
+    const cliMeta = (clis || []).find(c => c.id === mode);
+    const label = cliMeta?.label || mode;
 
-    const ownsLaunchTerminal = this._beginSessionLaunchStatus(`Starting OpenCode session in ${caseName}...`);
+    const ownsLaunchTerminal = this._beginSessionLaunchStatus(`Starting ${label} session in ${caseName}...`);
     // Focus in sync gesture context (see runClaude comment)
     this.terminal.focus();
 
     try {
-      // Check if OpenCode is available (local sessions only)
       if (!isRemote) {
-        const statusRes = await fetch('/api/opencode/status');
+        const statusRes = await fetch(`/api/cli/${encodeURIComponent(mode)}/status`);
         const status = (await statusRes.json()).data;
         if (!status.available) {
           this._reportSessionLaunchError(
             ownsLaunchTerminal,
-            'OpenCode CLI not found. Install with: curl -fsSL https://opencode.ai/install | bash'
-          );
-          return;
-        }
-      }
-
-      // Quick-start with opencode mode (auto-allow tools by default).
-      // No `effort` field — it's Claude-specific (OpenCode has no /effort).
-      const envOverrides = this.buildEnvOverrides(this.getCaseSettings(caseName), this.loadAppSettingsFromStorage());
-      const res = await fetch('/api/quick-start', {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({
-          caseName,
-          mode: 'opencode',
-          sessionName: `w${this._nextCaseSessionStartNumber(caseName)}-${caseName}`,
-          ...(isRemote ? {} : {
-            openCodeConfig: { autoAllowTools: true },
-            ...(Object.keys(envOverrides).length > 0 ? { envOverrides } : {}),
-          }),
-        })
-      });
-      const data = await res.json();
-      if (!data.success) throw new Error(data.error || 'Failed to start OpenCode');
-      await this._ensureCreatedSessionVisible(data.data.sessionId, data.data.session);
-
-      // Switch to the new session (don't pre-set activeSessionId — selectSession
-      // early-returns when IDs match, skipping buffer load and sendResize)
-      if (data.data.sessionId) {
-        await this.selectSession(data.data.sessionId);
-      }
-
-      this.terminal.focus();
-    } catch (err) {
-      this._reportSessionLaunchError(ownsLaunchTerminal, err.message);
-    }
-  },
-
-  async runCodex() {
-    const caseName = document.getElementById('quickStartCase').value || 'testcase';
-    // Remote cases run Codex on the REMOTE host — skip the local status probe and the
-    // local-only config/env below (quick-start rejects them for remote cases).
-    const _runLoc = (this.cases || []).find(c => c.name === caseName)?.location;
-    const isRemote = _runLoc === 'remote' || _runLoc === 'docker';
-
-    const ownsLaunchTerminal = this._beginSessionLaunchStatus(`Starting Codex session in ${caseName}...`);
-    this.terminal.focus();
-
-    try {
-      if (!isRemote) {
-        const statusRes = await fetch('/api/codex/status');
-        const status = (await statusRes.json()).data;
-        if (!status.available) {
-          this._reportSessionLaunchError(
-            ownsLaunchTerminal,
-            'Codex CLI not found. Install with: npm install -g @openai/codex'
+            status.installHint || `${label} CLI not found.`
           );
           return;
         }
@@ -1091,183 +1082,20 @@ Object.assign(CodemanApp.prototype, {
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({
           caseName,
-          mode: 'codex',
+          mode,
           sessionName: `w${this._nextCaseSessionStartNumber(caseName)}-${caseName}`,
           ...(isRemote ? {} : {
-            codexConfig: {
-              dangerouslyBypassApprovals: globalSettings.codexDangerouslyBypassApprovals ?? false,
-              animations: globalSettings.codexAnimationsEnabled ?? false,
-              renderMode: 'hybrid',
-            },
+            ...this._quickStartConfigFor(mode, globalSettings),
             ...(Object.keys(envOverrides).length > 0 ? { envOverrides } : {}),
           }),
         })
       });
       const data = await res.json();
-      if (!data.success) throw new Error(data.error || 'Failed to start Codex');
+      if (!data.success) throw new Error(data.error || `Failed to start ${label}`);
       await this._ensureCreatedSessionVisible(data.data.sessionId, data.data.session);
 
       // Switch to the new session (don't pre-set activeSessionId — selectSession
       // early-returns when IDs match, skipping buffer load and sendResize)
-      if (data.data.sessionId) {
-        await this.selectSession(data.data.sessionId);
-      }
-
-      this.terminal.focus();
-    } catch (err) {
-      this._reportSessionLaunchError(ownsLaunchTerminal, err.message);
-    }
-  },
-
-  async runGemini() {
-    const caseName = document.getElementById('quickStartCase').value || 'testcase';
-    // Remote cases run Gemini on the REMOTE host — skip the local status probe and the
-    // local-only config/env below (quick-start rejects them for remote cases).
-    const _runLoc = (this.cases || []).find(c => c.name === caseName)?.location;
-    const isRemote = _runLoc === 'remote' || _runLoc === 'docker';
-
-    const ownsLaunchTerminal = this._beginSessionLaunchStatus(`Starting Gemini session in ${caseName}...`);
-    this.terminal.focus();
-
-    try {
-      if (!isRemote) {
-        const statusRes = await fetch('/api/gemini/status');
-        const status = (await statusRes.json()).data;
-        if (!status.available) {
-          this._reportSessionLaunchError(
-            ownsLaunchTerminal,
-            'Gemini CLI not found. Install with: npm install -g @google/gemini-cli'
-          );
-          return;
-        }
-      }
-
-      const envOverrides = this.buildEnvOverrides(this.getCaseSettings(caseName), this.loadAppSettingsFromStorage());
-      const res = await fetch('/api/quick-start', {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({
-          caseName,
-          mode: 'gemini',
-          sessionName: `w${this._nextCaseSessionStartNumber(caseName)}-${caseName}`,
-          ...(isRemote ? {} : {
-            geminiConfig: { approvalMode: 'yolo' },
-            ...(Object.keys(envOverrides).length > 0 ? { envOverrides } : {}),
-          }),
-        })
-      });
-      const data = await res.json();
-      if (!data.success) throw new Error(data.error || 'Failed to start Gemini');
-      await this._ensureCreatedSessionVisible(data.data.sessionId, data.data.session);
-
-      if (data.data.sessionId) {
-        await this.selectSession(data.data.sessionId);
-      }
-
-      this.terminal.focus();
-    } catch (err) {
-      this._reportSessionLaunchError(ownsLaunchTerminal, err.message);
-    }
-  },
-
-  async runAntigravity() {
-    const caseName = document.getElementById('quickStartCase').value || 'testcase';
-    // Remote/docker cases run agy on the OTHER side — skip the local status probe and the
-    // local-only config/env below (quick-start rejects them for remote cases).
-    const _runLoc = (this.cases || []).find(c => c.name === caseName)?.location;
-    const isRemote = _runLoc === 'remote' || _runLoc === 'docker';
-
-    const ownsLaunchTerminal = this._beginSessionLaunchStatus(`Starting Antigravity session in ${caseName}...`);
-    this.terminal.focus();
-
-    try {
-      if (!isRemote) {
-        const statusRes = await fetch('/api/antigravity/status');
-        const status = (await statusRes.json()).data;
-        if (!status.available) {
-          this._reportSessionLaunchError(
-            ownsLaunchTerminal,
-            'Antigravity CLI not found. Install with: curl -fsSL https://antigravity.google/cli/install.sh | bash'
-          );
-          return;
-        }
-      }
-
-      const envOverrides = this.buildEnvOverrides(this.getCaseSettings(caseName), this.loadAppSettingsFromStorage());
-      const res = await fetch('/api/quick-start', {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({
-          caseName,
-          mode: 'antigravity',
-          sessionName: `w${this._nextCaseSessionStartNumber(caseName)}-${caseName}`,
-          ...(isRemote ? {} : {
-            antigravityConfig: { dangerouslySkipPermissions: true },
-            ...(Object.keys(envOverrides).length > 0 ? { envOverrides } : {}),
-          }),
-        })
-      });
-      const data = await res.json();
-      if (!data.success) throw new Error(data.error || 'Failed to start Antigravity');
-      await this._ensureCreatedSessionVisible(data.data.sessionId, data.data.session);
-
-      if (data.data.sessionId) {
-        await this.selectSession(data.data.sessionId);
-      }
-
-      this.terminal.focus();
-    } catch (err) {
-      this._reportSessionLaunchError(ownsLaunchTerminal, err.message);
-    }
-  },
-
-  /**
-   * Launch a Pi (pi.dev) session.
-   *
-   * Deliberately sends NO piConfig: pi has no permission prompts, so there is no
-   * bypass to opt into, and project trust is pi's own `defaultProjectTrust`
-   * decision (an interactive prompt the user answers in the terminal). Sending
-   * `approveProjectTrust: true` here would silently opt every browser-launched pi
-   * session into executing repo-supplied TypeScript.
-   */
-  async runPi() {
-    const caseName = document.getElementById('quickStartCase').value || 'testcase';
-    // Remote/docker cases run pi on the OTHER side — skip the local status probe and the
-    // local-only config/env below (quick-start rejects them for remote cases).
-    const _runLoc = (this.cases || []).find(c => c.name === caseName)?.location;
-    const isRemote = _runLoc === 'remote' || _runLoc === 'docker';
-
-    const ownsLaunchTerminal = this._beginSessionLaunchStatus(`Starting Pi session in ${caseName}...`);
-    this.terminal.focus();
-
-    try {
-      if (!isRemote) {
-        const statusRes = await fetch('/api/pi/status');
-        const status = (await statusRes.json()).data;
-        if (!status.available) {
-          this._reportSessionLaunchError(
-            ownsLaunchTerminal,
-            'Pi CLI not found. Install with: npm install -g --ignore-scripts @earendil-works/pi-coding-agent'
-          );
-          return;
-        }
-      }
-
-      const envOverrides = this.buildEnvOverrides(this.getCaseSettings(caseName), this.loadAppSettingsFromStorage());
-      const res = await fetch('/api/quick-start', {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({
-          caseName,
-          mode: 'pi',
-          sessionName: `w${this._nextCaseSessionStartNumber(caseName)}-${caseName}`,
-          ...(isRemote || Object.keys(envOverrides).length === 0 ? {} : { envOverrides }),
-        })
-      });
-      const data = await res.json();
-      if (!data.success) throw new Error(data.error || 'Failed to start Pi');
-      await this._ensureCreatedSessionVisible(data.data.sessionId, data.data.session);
-
       if (data.data.sessionId) {
         await this.selectSession(data.data.sessionId);
       }
