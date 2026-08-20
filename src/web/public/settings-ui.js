@@ -409,6 +409,7 @@ Object.assign(CodemanApp.prototype, {
     document.getElementById('appSettingsCodexAnimations').checked =
       settings.codexAnimationsEnabled ?? false;
     this._applyCodexSettingsVisibility();
+    this.renderCliManagementList();
     // Claude Permissions settings
     document.getElementById('appSettingsAgentTeams').checked = settings.agentTeamsEnabled ?? false;
     document.getElementById('appSettingsAgentSkill').checked = settings.agentSkillEnabled ?? false;
@@ -548,6 +549,229 @@ Object.assign(CodemanApp.prototype, {
   _applyCodexSettingsVisibility() {
     const group = document.getElementById('appSettingsCodexGroup');
     if (group) group.style.display = window.__codemanCliAvailable?.codex === true ? '' : 'none';
+  },
+
+  /**
+   * Agents & CLIs → Installed CLIs: the enable/disable/reorder/remove list backed by
+   * GET/PUT/POST/DELETE /api/clis(...). Re-fetches on every call (not cached against
+   * window.__codemanClis, which is a page-load snapshot) so the list reflects a change
+   * made moments ago in the same session. Each row is built from ONLY existing
+   * `.set-row`/`.set-row-actions` classes — no new CSS — so it renders consistently with
+   * every other row in this modal.
+   */
+  async renderCliManagementList() {
+    const container = document.getElementById('appSettingsCliList');
+    if (!container) return;
+    let clis;
+    try {
+      const res = await fetch('/api/clis');
+      const data = await res.json();
+      if (!data.success) throw new Error(data.error || 'Failed to load CLIs');
+      clis = data.data;
+    } catch (err) {
+      container.textContent = `Failed to load CLI list: ${err.message}`;
+      return;
+    }
+
+    container.replaceChildren();
+    clis.forEach((cli, index) => {
+      const row = document.createElement('div');
+      row.className = 'set-row';
+      row.dataset.cliId = cli.id;
+      row.dataset.search = `${cli.label} ${cli.id} cli`;
+
+      const text = document.createElement('div');
+      text.className = 'set-row-text';
+      const label = document.createElement('span');
+      label.className = 'set-row-label';
+      label.textContent = `${cli.label}${cli.stock ? '' : ' (custom)'}`;
+      const desc = document.createElement('span');
+      desc.className = 'set-row-desc';
+      desc.textContent = cli.available ? 'Installed' : cli.installHint || 'Not found on this host';
+      text.append(label, desc);
+
+      const actions = document.createElement('div');
+      actions.className = 'set-row-actions';
+
+      const upBtn = document.createElement('button');
+      upBtn.type = 'button';
+      upBtn.className = 'btn-toolbar btn-sm';
+      upBtn.textContent = '↑';
+      upBtn.title = 'Move up';
+      upBtn.disabled = index === 0;
+      upBtn.onclick = () => this._moveCliOrder(clis, index, -1);
+
+      const downBtn = document.createElement('button');
+      downBtn.type = 'button';
+      downBtn.className = 'btn-toolbar btn-sm';
+      downBtn.textContent = '↓';
+      downBtn.title = 'Move down';
+      downBtn.disabled = index === clis.length - 1;
+      downBtn.onclick = () => this._moveCliOrder(clis, index, 1);
+
+      const toggleLabel = document.createElement('label');
+      toggleLabel.className = 'switch switch-sm';
+      const toggleInput = document.createElement('input');
+      toggleInput.type = 'checkbox';
+      toggleInput.checked = cli.enabled;
+      toggleInput.onchange = () => this._setCliEnabled(cli.id, toggleInput.checked);
+      const slider = document.createElement('span');
+      slider.className = 'slider';
+      toggleLabel.append(toggleInput, slider);
+
+      actions.append(upBtn, downBtn, toggleLabel);
+
+      if (!cli.stock) {
+        const removeBtn = document.createElement('button');
+        removeBtn.type = 'button';
+        removeBtn.className = 'btn-toolbar btn-sm';
+        removeBtn.textContent = 'Remove';
+        removeBtn.onclick = () => this._removeCustomCli(cli.id, cli.label);
+        actions.append(removeBtn);
+      }
+
+      row.append(text, actions);
+      container.appendChild(row);
+    });
+  },
+
+  async _setCliEnabled(id, enabled) {
+    try {
+      const res = await fetch(`/api/clis/${encodeURIComponent(id)}/enabled`, {
+        method: 'PUT',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ enabled }),
+      });
+      const data = await res.json();
+      if (!data.success) throw new Error(data.error || 'Failed to update');
+    } catch (err) {
+      this.showToast?.(err.message, 'error');
+    }
+    this.renderCliManagementList();
+  },
+
+  async _moveCliOrder(currentList, index, delta) {
+    const target = index + delta;
+    if (target < 0 || target >= currentList.length) return;
+    const order = currentList.map((c) => c.id);
+    [order[index], order[target]] = [order[target], order[index]];
+    try {
+      const res = await fetch('/api/clis/order', {
+        method: 'PUT',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ order }),
+      });
+      const data = await res.json();
+      if (!data.success) throw new Error(data.error || 'Failed to reorder');
+    } catch (err) {
+      this.showToast?.(err.message, 'error');
+    }
+    this.renderCliManagementList();
+  },
+
+  async _removeCustomCli(id, label) {
+    if (!confirm(`Remove ${label} (${id})? This only removes it from the run menu — nothing is uninstalled.`)) return;
+    try {
+      const res = await fetch(`/api/clis/${encodeURIComponent(id)}`, { method: 'DELETE' });
+      const data = await res.json();
+      if (!data.success) throw new Error(data.error || 'Failed to remove');
+    } catch (err) {
+      this.showToast?.(err.message, 'error');
+    }
+    this.renderCliManagementList();
+  },
+
+  toggleAddCliForm(show) {
+    const row = document.getElementById('addCliFormRow');
+    if (!row) return;
+    const visible = show === undefined ? row.style.display === 'none' : show;
+    row.style.display = visible ? '' : 'none';
+    if (!visible) {
+      document.getElementById('appSettingsAddCliStatus').textContent = '';
+      ['appSettingsNewCliId', 'appSettingsNewCliLabel', 'appSettingsNewCliBinary', 'appSettingsNewCliInstall'].forEach((id) => {
+        const el = document.getElementById(id);
+        if (el) el.value = '';
+      });
+    }
+  },
+
+  /**
+   * Build a minimal-but-valid custom CliEntry from the quick-add form and POST it.
+   * Deliberately conservative defaults (external/requiresMux true, no hooks, buffered
+   * echo, alt-screen preserved via strip-mux-only, no privileged params) — the SAME
+   * "behaves like pi" profile the registry documents for an unrecognized CLI, since
+   * that is the safest baseline for a CLI this form knows nothing else about. Advanced
+   * customization (launch flags, env) is a direct edit of ~/.codeman/clis.json, not
+   * something this quick form tries to cover.
+   */
+  async submitAddCliForm() {
+    const status = document.getElementById('appSettingsAddCliStatus');
+    const id = document.getElementById('appSettingsNewCliId').value.trim().toLowerCase();
+    const label = document.getElementById('appSettingsNewCliLabel').value.trim();
+    const binary = document.getElementById('appSettingsNewCliBinary').value.trim();
+    const install = document.getElementById('appSettingsNewCliInstall').value.trim();
+
+    if (!/^[a-z][a-z0-9-]{0,23}$/.test(id)) {
+      status.textContent = 'id must be lowercase letters/digits/hyphens, starting with a letter.';
+      return;
+    }
+    if (!label || !binary) {
+      status.textContent = 'Label and binary name are required.';
+      return;
+    }
+
+    const entry = {
+      label,
+      shortBadge: label.slice(0, 2).toUpperCase(),
+      accent: '#6b7280',
+      enabled: true,
+      order: 1000,
+      kind: 'agent',
+      discovery: {
+        binaries: [binary],
+        searchDirs: ['~/.local/bin', '/usr/local/bin', '~/.npm-global/bin', '~/bin'],
+        install: { command: install ? { linux: install, darwin: install } : {} },
+      },
+      launch: { params: {}, variants: [{ id: 'default', args: [{ lit: binary }] }] },
+      env: { exports: [], unset: [], tmuxSetenvKeys: [], dockerExecEnvNames: [], allowedPrefixes: [], allowedKeys: [] },
+      capabilities: {
+        external: true,
+        requiresMux: true,
+        hooks: false,
+        transcript: 'none',
+        altScreen: 'strip-mux-only',
+        echo: { policy: 'buffer', anchor: { kind: 'cursor' } },
+        wheelForward: { mode: 'never' },
+        keyboardAccessory: 'agent',
+        privilegedCommandGate: false,
+        startMode: 'interactive',
+        stripInkBloat: true,
+        ralph: false,
+        respawn: false,
+        effort: false,
+        agentSkillInjection: false,
+        statusLineTelemetry: false,
+        model: { source: 'none' },
+        privilegedParams: [],
+        gates: {},
+      },
+      overlays: {},
+    };
+
+    try {
+      const res = await fetch(`/api/clis/${encodeURIComponent(id)}`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify(entry),
+      });
+      const data = await res.json();
+      if (!data.success) throw new Error(data.error || 'Failed to add CLI');
+    } catch (err) {
+      status.textContent = err.message;
+      return;
+    }
+    this.toggleAddCliForm(false);
+    this.renderCliManagementList();
   },
 
   /**

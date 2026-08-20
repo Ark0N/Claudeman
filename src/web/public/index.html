@@ -2036,6 +2036,37 @@
               <p class="set-section-blurb">Launch flags for the CLIs Codeman spawns.</p>
 
               <div class="set-group">
+                <div class="set-group-head"><h4>Installed CLIs</h4><span class="set-scope">synced</span></div>
+                <div class="set-group-body">
+                  <p class="set-row-desc" style="padding: 0 0 4px;">Enable, disable and reorder the CLIs offered in the run menu. Advanced options (launch flags, environment) can be refined by editing ~/.codeman/clis.json directly.</p>
+                  <div id="appSettingsCliList"></div>
+                  <div class="set-row" data-search="add custom cli register">
+                    <div class="set-row-text">
+                      <span class="set-row-label">Add Custom CLI</span>
+                      <span class="set-row-desc">Register another CLI Codeman can launch, given its binary name.</span>
+                    </div>
+                    <button type="button" class="btn-toolbar btn-sm" id="appSettingsAddCliBtn" onclick="app.toggleAddCliForm()">+ Add</button>
+                  </div>
+                  <div class="set-row has-field" id="addCliFormRow" style="display: none;" data-search="add custom cli form fields">
+                    <div class="set-row-text">
+                      <span class="set-row-label">New CLI</span>
+                      <span class="set-row-desc">
+                        <input type="text" id="appSettingsNewCliId" class="set-input" placeholder="id (lowercase, e.g. copilot)" style="margin-bottom: 4px; display: block;">
+                        <input type="text" id="appSettingsNewCliLabel" class="set-input" placeholder="Label (e.g. GitHub Copilot)" style="margin-bottom: 4px; display: block;">
+                        <input type="text" id="appSettingsNewCliBinary" class="set-input" placeholder="Binary name (e.g. copilot)" style="margin-bottom: 4px; display: block;">
+                        <input type="text" id="appSettingsNewCliInstall" class="set-input" placeholder="Install command (optional)" style="display: block;">
+                      </span>
+                    </div>
+                    <div class="set-row-actions">
+                      <button type="button" class="btn-toolbar btn-sm" onclick="app.submitAddCliForm()">Add</button>
+                      <button type="button" class="btn-toolbar btn-sm" onclick="app.toggleAddCliForm(false)">Cancel</button>
+                    </div>
+                  </div>
+                  <span class="settings-status" id="appSettingsAddCliStatus"></span>
+                </div>
+              </div>
+
+              <div class="set-group">
                 <div class="set-group-head"><h4>Claude</h4><span class="set-scope">synced</span></div>
                 <div class="set-group-body">
                   <div class="set-row has-field" data-search="startup mode permissions auto allowed tools">
