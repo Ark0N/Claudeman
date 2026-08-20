@@ -18,6 +18,7 @@ import {
 } from '../config/terminal-history.js';
 import { MAX_EDITABLE_BYTES } from '../config/file-editing.js';
 import { MIN_MATCH_LENGTH, MAX_MATCH_LENGTH } from '../config/agent-wait.js';
+import { enabledClis } from '../config/cli-registry/registry.js';
 
 // ========== Path Validation ==========
 
@@ -121,18 +122,32 @@ export const FileWriteSchema = z
 
 // ========== Env Var Allowlist ==========
 
-/** Allowlisted env var key prefixes */
-const ALLOWED_ENV_PREFIXES = ['CLAUDE_CODE_', 'OPENCODE_', 'CODEX_', 'GEMINI_', 'GOOGLE_', 'ANTIGRAVITY_', 'PI_'];
+/**
+ * Allowlisted env var key prefixes, composed from every registered CLI's own
+ * `env.allowedPrefixes` (config/cli-registry/stock.ts) — e.g. gemini contributes both
+ * `GEMINI_` and the deliberately-broad `GOOGLE_` (Vertex AI auth needs
+ * `GOOGLE_CLOUD_PROJECT`/`GOOGLE_APPLICATION_CREDENTIALS`/`GOOGLE_GENAI_USE_VERTEXAI`).
+ * A CLI added to the registry — stock or custom — widens this automatically; nothing here
+ * needs editing to add one. Computed once at module load (the registry itself is memoized),
+ * matching this module's previous hardcoded-array performance.
+ */
+const ALLOWED_ENV_PREFIXES: string[] = enabledClis().flatMap((entry) => entry.env.allowedPrefixes);
 
 /**
- * Allowlisted exact env var keys (checked alongside the prefixes).
- * CLAUDE_CONFIG_DIR relocates the Claude CLI's user config (credentials,
- * settings, stats) so a case can run on a separate Claude subscription (#255).
- * Exact match only — CLAUDE_CONFIG_DIR_EXTRA etc. stay rejected.
+ * Allowlisted exact env var keys (checked alongside the prefixes), composed the same way
+ * from `env.allowedKeys`. CLAUDE_CONFIG_DIR (claude's own entry) relocates the Claude CLI's
+ * user config (credentials, settings, stats) so a case can run on a separate Claude
+ * subscription (#255). Exact match only — CLAUDE_CONFIG_DIR_EXTRA etc. stay rejected.
  */
-const ALLOWED_ENV_KEYS = new Set(['CLAUDE_CONFIG_DIR']);
+const ALLOWED_ENV_KEYS = new Set(enabledClis().flatMap((entry) => entry.env.allowedKeys));
 
-/** Env var keys that are always blocked (security-sensitive) */
+/**
+ * Env var keys that are ALWAYS blocked (security-sensitive) — a hard floor no registry
+ * entry, stock or custom, can widen. Deliberately NOT registry-driven: an entry's
+ * `allowedPrefixes` contributes only to the allowlist above, and is checked in
+ * `isAllowedEnvKey` AFTER this blocklist, so a rogue `allowedPrefixes: ['']` still cannot
+ * unblock PATH or any other floor entry.
+ */
 const BLOCKED_ENV_KEYS = new Set([
   'PATH',
   'LD_PRELOAD',

@@ -23,8 +23,11 @@ import {
   type GeminiConfig,
   type AntigravityConfig,
   type PiConfig,
+  type SessionMode,
 } from '../../types.js';
-import { Session, isAltScreenStripMode, isMuxAltScreenOnlyStripMode } from '../../session.js';
+import { Session, isAltScreenStripMode, isMuxAltScreenOnlyStripMode, isExternalCliMode } from '../../session.js';
+import { resolveCliBinDir } from '../../utils/cli-resolver.js';
+import { missingCliMessage } from '../../config/cli-registry/registry.js';
 import { SseEvent } from '../sse-events.js';
 import {
   CreateSessionSchema,
@@ -633,6 +636,23 @@ async function injectAgentSkill(casePath: string): Promise<void> {
 // bypassing the `workspaceHooksEnabled` setting. Route handlers here resolve the
 // setting through the ConfigPort (tests stub it) and pass it as the second arg.
 
+/**
+ * Pre-flight availability check for an external CLI mode, shared by the create and
+ * quick-start routes (each used to hand-write this as five near-identical `if (body.mode
+ * === '<id>') { ... }` blocks). Returns an error response body when the mode is an external
+ * CLI (`isExternalCliMode` — opencode/codex/gemini/antigravity/pi today, or any future
+ * custom external CLI) that is not resolvable on this host; `null` when there is nothing to
+ * report (claude/shell are never checked here, and neither is a mode already confirmed
+ * available). Never called for a `remote`/`docker` case — those run the CLI on the OTHER
+ * host, where this local resolver cannot see it.
+ */
+function checkExternalCliAvailable(mode: SessionMode): ApiResponse<never> | null {
+  if (!isExternalCliMode(mode)) return null;
+  if (resolveCliBinDir(mode) !== null) return null;
+  const message = missingCliMessage(mode) ?? `${mode} CLI not found.`;
+  return createErrorResponse(ApiErrorCode.OPERATION_FAILED, message);
+}
+
 export function registerSessionRoutes(
   app: FastifyInstance,
   ctx: SessionPort & EventPort & ConfigPort & InfraPort & AuthPort
@@ -797,55 +817,11 @@ export function registerSessionRoutes(
       }
     }
 
-    // Check OpenCode availability if requested
-    if (body.mode === 'opencode') {
-      const { isOpenCodeAvailable } = await import('../../utils/opencode-cli-resolver.js');
-      if (!isOpenCodeAvailable()) {
-        return createErrorResponse(
-          ApiErrorCode.OPERATION_FAILED,
-          'OpenCode CLI not found. Install with: curl -fsSL https://opencode.ai/install | bash'
-        );
-      }
-    }
-
-    // Check Codex availability if requested
-    if (body.mode === 'codex') {
-      const { isCodexAvailable } = await import('../../utils/codex-cli-resolver.js');
-      if (!isCodexAvailable()) {
-        return createErrorResponse(
-          ApiErrorCode.OPERATION_FAILED,
-          'Codex CLI not found. Install with: npm install -g @openai/codex'
-        );
-      }
-    }
-
-    // Check Gemini availability if requested
-    if (body.mode === 'gemini') {
-      const { isGeminiAvailable } = await import('../../utils/gemini-cli-resolver.js');
-      if (!isGeminiAvailable()) {
-        return createErrorResponse(
-          ApiErrorCode.OPERATION_FAILED,
-          'Gemini CLI not found. Install with: npm install -g @google/gemini-cli'
-        );
-      }
-    }
-    if (body.mode === 'antigravity') {
-      const { isAntigravityAvailable } = await import('../../utils/antigravity-cli-resolver.js');
-      if (!isAntigravityAvailable()) {
-        return createErrorResponse(
-          ApiErrorCode.OPERATION_FAILED,
-          'Antigravity CLI not found. Install with: curl -fsSL https://antigravity.google/cli/install.sh | bash'
-        );
-      }
-    }
-    if (body.mode === 'pi') {
-      const { isPiAvailable } = await import('../../utils/pi-cli-resolver.js');
-      if (!isPiAvailable()) {
-        return createErrorResponse(
-          ApiErrorCode.OPERATION_FAILED,
-          'Pi CLI not found. Install with: npm install -g --ignore-scripts @earendil-works/pi-coding-agent'
-        );
-      }
+    // Pre-flight availability check for an external CLI (opencode/codex/gemini/
+    // antigravity/pi today — see checkExternalCliAvailable's own doc comment).
+    if (body.mode) {
+      const unavailable = checkExternalCliAvailable(body.mode);
+      if (unavailable) return unavailable;
     }
 
     // Pre-validate resumeSessionId: check that the conversation file actually exists
@@ -2806,60 +2782,12 @@ export function registerSessionRoutes(
         dockerResumeId = dockerCase.lastClaudeSessionId;
       }
     } else {
-      // Check OpenCode availability if requested
-      if (mode === 'opencode') {
-        const { isOpenCodeAvailable } = await import('../../utils/opencode-cli-resolver.js');
-        if (!isOpenCodeAvailable()) {
-          return createErrorResponse(
-            ApiErrorCode.OPERATION_FAILED,
-            'OpenCode CLI not found. Install with: curl -fsSL https://opencode.ai/install | bash'
-          );
-        }
-      }
-
-      // Check Codex availability if requested
-      if (mode === 'codex') {
-        const { isCodexAvailable } = await import('../../utils/codex-cli-resolver.js');
-        if (!isCodexAvailable()) {
-          return createErrorResponse(
-            ApiErrorCode.OPERATION_FAILED,
-            'Codex CLI not found. Install with: npm install -g @openai/codex'
-          );
-        }
-      }
-
-      // Check Gemini availability if requested
-      if (mode === 'gemini') {
-        const { isGeminiAvailable } = await import('../../utils/gemini-cli-resolver.js');
-        if (!isGeminiAvailable()) {
-          return createErrorResponse(
-            ApiErrorCode.OPERATION_FAILED,
-            'Gemini CLI not found. Install with: npm install -g @google/gemini-cli'
-          );
-        }
-      }
-
-      // Check Antigravity availability if requested
-      if (mode === 'antigravity') {
-        const { isAntigravityAvailable } = await import('../../utils/antigravity-cli-resolver.js');
-        if (!isAntigravityAvailable()) {
-          return createErrorResponse(
-            ApiErrorCode.OPERATION_FAILED,
-            'Antigravity CLI not found. Install with: curl -fsSL https://antigravity.google/cli/install.sh | bash'
-          );
-        }
-      }
-
-      // Check Pi availability if requested
-      if (mode === 'pi') {
-        const { isPiAvailable } = await import('../../utils/pi-cli-resolver.js');
-        if (!isPiAvailable()) {
-          return createErrorResponse(
-            ApiErrorCode.OPERATION_FAILED,
-            'Pi CLI not found. Install with: npm install -g --ignore-scripts @earendil-works/pi-coding-agent'
-          );
-        }
-      }
+      // Pre-flight availability check for an external CLI (opencode/codex/gemini/
+      // antigravity/pi today — see checkExternalCliAvailable's own doc comment). Only
+      // reached for a LOCAL case (the remote/docker branches above return earlier), which
+      // is why the LOCAL resolver gate applies here and not there.
+      const unavailable = checkExternalCliAvailable(mode);
+      if (unavailable) return unavailable;
 
       // Resolve case path: check linked-cases registry first, then fall back to CASES_DIR.
       // This mirrors the behaviour of resolveCasePath() in case-routes so that linked

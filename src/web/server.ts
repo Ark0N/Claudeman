@@ -1423,6 +1423,25 @@ export class WebServer extends EventEmitter {
         '</head>',
         `<script>window.__codemanCliAvailable=${JSON.stringify(available)};</script>\n</head>`
       );
+
+      // The full CLI registry (same shape as GET /api/clis), for the frontend to render
+      // the run-mode menu / welcome buttons / labels from data instead of the hard-coded
+      // list `__codemanCliAvailable` above still is. Additive: `__codemanCliAvailable`
+      // keeps its EXACT shape (test/render-index-html.test.ts pins it with `toEqual`,
+      // which fails on an extra key) as a derived alias, not superseded in this pass.
+      const { listClis } = await import('../config/cli-registry/registry.js');
+      const { resolveCliBinDir, resolveCliVersion } = await import('../utils/cli-resolver.js');
+      const clis = listClis().map((entry) => ({
+        ...entry,
+        available: entry.kind === 'shell' ? true : resolveCliBinDir(entry.id) !== null,
+        path: entry.kind === 'shell' ? null : resolveCliBinDir(entry.id),
+        version: entry.kind === 'shell' ? null : resolveCliVersion(entry.id),
+      }));
+      // Escaped like the solo-id global above: label/accent/etc. ultimately come from
+      // ~/.codeman/clis.json, which an operator can edit, so this is defense-in-depth
+      // against a `</script>` breakout rather than a response to untrusted REQUEST input.
+      const safeClis = JSON.stringify(clis).replace(/</g, '\\u003c');
+      html = html.replace('</head>', `<script>window.__codemanClis=${safeClis};</script>\n</head>`);
     }
     if (!soloSessionId && process.env.CODEMAN_GESTURE === '1') {
       html = html.replace('</head>', `<script>window.__codemanGestureAvailable=true;</script>\n</head>`);

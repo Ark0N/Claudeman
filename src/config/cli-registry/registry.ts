@@ -214,3 +214,23 @@ export function getCli(id: string): CliEntry | undefined {
 export function cliIds(): string[] {
   return listClis().map((e) => e.id as string);
 }
+
+/**
+ * Build the "CLI not found" error message for a mode with no resolved binary directory,
+ * naming the registry's own label and per-platform install command. Shared by
+ * tmux-manager.ts's spawn-time throw and session-routes.ts's create-time pre-flight check
+ * (both used to hand-write this string once per external CLI, six throws and ten checks in
+ * total, all now reading the SAME data). Returns null for an id the registry doesn't know.
+ */
+export function missingCliMessage(id: string): string | null {
+  const entry = getCli(id);
+  if (!entry) return null;
+  const platform = process.platform === 'win32' ? 'win32' : process.platform === 'darwin' ? 'darwin' : 'linux';
+  const command =
+    entry.discovery.install.command[platform] ??
+    entry.discovery.install.command.linux ??
+    Object.values(entry.discovery.install.command)[0];
+  return command
+    ? `${entry.label} CLI not found. Install with: ${command}`
+    : `${entry.label} CLI not found. See its docs for install instructions.`;
+}

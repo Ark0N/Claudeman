@@ -51,7 +51,7 @@ import {
   type DockerCommandMode,
 } from './types.js';
 import { buildSpawnCommandFromRegistry } from './session-cli-registry-bridge.js';
-import { getCli } from './config/cli-registry/registry.js';
+import { getCli, missingCliMessage } from './config/cli-registry/registry.js';
 import {
   buildSshConnectionArgs,
   defaultRemoteCommandForMode,
@@ -633,27 +633,6 @@ export function buildCodexCommand(config?: CodexConfig): string {
       codexConfig: config,
     }) ?? 'codex'
   );
-}
-
-/**
- * Build the "CLI not found" error message for a mode with no resolved binary directory,
- * naming the registry's own label and per-platform install command — replaces six
- * hand-written "<CLI> CLI not found. Install with: <command>" throws, one per external
- * CLI. Returns null for a mode the registry doesn't know (never actually reached: a mode
- * that failed schema validation never gets this far), so the caller degrades to a generic
- * failure rather than throwing a message about "undefined".
- */
-function missingCliMessage(mode: SessionMode): string | null {
-  const entry = getCli(mode);
-  if (!entry) return null;
-  const platform = process.platform === 'win32' ? 'win32' : process.platform === 'darwin' ? 'darwin' : 'linux';
-  const command =
-    entry.discovery.install.command[platform] ??
-    entry.discovery.install.command.linux ??
-    Object.values(entry.discovery.install.command)[0];
-  return command
-    ? `${entry.label} CLI not found. Install with: ${command}`
-    : `${entry.label} CLI not found. See its docs for install instructions.`;
 }
 
 /**

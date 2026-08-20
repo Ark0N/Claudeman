@@ -315,3 +315,21 @@ export function resolveCliBinDir(id: string): string | null {
   }
   return resolver.resolveDir();
 }
+
+/**
+ * Generic version accessor for the SAME memoized resolver `resolveCliBinDir` builds. Only
+ * returns a value for an entry whose resolver is version-aware (today: `requireVersionMatch`
+ * entries like pi) — claude's separate retry/backoff version getter stays on its own module
+ * (`getClaudeCliVersion`), since that behaviour is declared via `retryOnTransientFailure`,
+ * not `requireVersionMatch`, and is not (yet) built generically here. Returns null rather
+ * than probing blind for an entry with no version-aware resolver.
+ */
+function isVersionGated(resolver: DirResolver): resolver is VersionGatedResolver {
+  return 'getVersion' in resolver;
+}
+
+export function resolveCliVersion(id: string): string | null {
+  resolveCliBinDir(id); // ensure the resolver for `id` has been created
+  const resolver = _dirResolvers.get(id);
+  return resolver && isVersionGated(resolver) ? resolver.getVersion() : null;
+}

@@ -92,6 +92,15 @@ vi.mock('../../src/utils/pi-cli-resolver.js', () => ({
   getPiCliVersion: vi.fn(() => null),
 }));
 
+vi.mock('../../src/utils/cli-resolver.js', async (importOriginal) => {
+  const actual = await importOriginal<typeof import('../../src/utils/cli-resolver.js')>();
+  return {
+    ...actual,
+    resolveCliBinDir: vi.fn(() => null),
+    resolveCliVersion: vi.fn(() => null),
+  };
+});
+
 import fs from 'node:fs/promises';
 import { existsSync, readdirSync } from 'node:fs';
 import { subagentWatcher } from '../../src/subagent-watcher.js';
@@ -100,6 +109,7 @@ import { isOpenCodeAvailable, resolveOpenCodeDir } from '../../src/utils/opencod
 import { isGeminiAvailable, resolveGeminiDir } from '../../src/utils/gemini-cli-resolver.js';
 import { isAntigravityAvailable, resolveAntigravityDir } from '../../src/utils/antigravity-cli-resolver.js';
 import { isPiAvailable, resolvePiDir, getPiCliVersion } from '../../src/utils/pi-cli-resolver.js';
+import { resolveCliBinDir, resolveCliVersion } from '../../src/utils/cli-resolver.js';
 
 const mockedReadFile = vi.mocked(fs.readFile);
 const mockedWriteFile = vi.mocked(fs.writeFile);
@@ -878,6 +888,75 @@ describe('system-routes', () => {
       expect(body.available).toBe(true);
       expect(body.path).toBe('/home/user/.local/bin');
       expect(body.version).toBe('0.84.1');
+    });
+  });
+
+  // ========== GET /api/clis ==========
+
+  describe('GET /api/clis', () => {
+    it('returns the full stock catalog, each entry augmented with availability', async () => {
+      vi.mocked(resolveCliBinDir).mockImplementation((id: string) => (id === 'claude' ? '/usr/local/bin' : null));
+
+      const res = await harness.app.inject({ method: 'GET', url: '/api/clis' });
+      expect(res.statusCode).toBe(200);
+      const body = JSON.parse(res.body);
+      expect(body.success).toBe(true);
+      const ids = body.data.map((c: { id: string }) => c.id).sort();
+      expect(ids).toEqual(['antigravity', 'claude', 'codex', 'gemini', 'opencode', 'pi', 'shell']);
+
+      const claude = body.data.find((c: { id: string }) => c.id === 'claude');
+      expect(claude.available).toBe(true);
+      expect(claude.path).toBe('/usr/local/bin');
+
+      const codex = body.data.find((c: { id: string }) => c.id === 'codex');
+      expect(codex.available).toBe(false);
+      expect(codex.path).toBeNull();
+
+      // shell has no binary at all — always "available" (nothing to resolve).
+      const shell = body.data.find((c: { id: string }) => c.id === 'shell');
+      expect(shell.available).toBe(true);
+      expect(shell.path).toBeNull();
+    });
+
+    it('never carries a secret value (only env var NAMES)', async () => {
+      const res = await harness.app.inject({ method: 'GET', url: '/api/clis' });
+      const body = JSON.parse(res.body);
+      const serialized = JSON.stringify(body.data);
+      // tmuxSetenvKeys/allowedPrefixes/allowedKeys are NAMES, never contain '='
+      // or look like an actual secret value.
+      expect(serialized).not.toMatch(/sk-[A-Za-z0-9]{20,}/);
+    });
+  });
+
+  // ========== GET /api/cli/:id/status ==========
+
+  describe('GET /api/cli/:id/status', () => {
+    it('returns availability for a known id, generically (not one of the six hand-written routes)', async () => {
+      vi.mocked(resolveCliBinDir).mockImplementation((id: string) => (id === 'pi' ? '/home/user/.local/bin' : null));
+      vi.mocked(resolveCliVersion).mockImplementation((id: string) => (id === 'pi' ? '0.84.1' : null));
+
+      const res = await harness.app.inject({ method: 'GET', url: '/api/cli/pi/status' });
+      expect(res.statusCode).toBe(200);
+      const body = JSON.parse(res.body);
+      expect(body.success).toBe(true);
+      expect(body.data.available).toBe(true);
+      expect(body.data.path).toBe('/home/user/.local/bin');
+      expect(body.data.version).toBe('0.84.1');
+    });
+
+    it('404s for an unregistered id', async () => {
+      const res = await harness.app.inject({ method: 'GET', url: '/api/cli/not-a-real-cli/status' });
+      expect(res.statusCode).toBe(404);
+      const body = JSON.parse(res.body);
+      expect(body.success).toBe(false);
+    });
+
+    it('shell is always available (nothing to resolve)', async () => {
+      const res = await harness.app.inject({ method: 'GET', url: '/api/cli/shell/status' });
+      expect(res.statusCode).toBe(200);
+      const body = JSON.parse(res.body);
+      expect(body.data.available).toBe(true);
+      expect(body.data.path).toBeNull();
     });
   });
 
