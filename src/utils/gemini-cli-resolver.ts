@@ -1,67 +1,38 @@
 /**
- * @fileoverview Resolve the Gemini CLI binary across common install paths.
+ * @fileoverview Gemini CLI binary resolution.
  *
- * Mirrors codex-cli-resolver.ts and opencode-cli-resolver.ts. Finds the
- * `gemini` binary and provides an augmented PATH directory for tmux sessions.
+ * Thin wrapper over `cli-resolver.ts`'s generic walker, reading its search
+ * parameters from the CLI registry's stock catalog. See claude-cli-resolver.ts's
+ * file header for why this stays its own module rather than a bare re-export.
  *
  * @module utils/gemini-cli-resolver
  */
 
-import { execSync } from 'node:child_process';
-import { existsSync } from 'node:fs';
-import { dirname, join } from 'node:path';
-import { homedir } from 'node:os';
-import { EXEC_TIMEOUT_MS } from '../config/exec-timeout.js';
+import { createDirResolver } from './cli-resolver.js';
+import { getCli } from '../config/cli-registry/registry.js';
 
-/** Common directories where the Gemini CLI binary may be installed */
-const GEMINI_SEARCH_DIRS = [
-  join(homedir(), '.gemini', 'bin'),
-  join(homedir(), '.local', 'bin'),
-  '/usr/local/bin',
-  join(homedir(), '.bun', 'bin'),
-  join(homedir(), '.npm-global', 'bin'),
-  join(homedir(), 'bin'),
-];
+function entry() {
+  const e = getCli('gemini');
+  if (!e) throw new Error('gemini is not registered in the CLI registry');
+  return e;
+}
 
-/** Cached directory containing the gemini binary (empty string = searched but not found) */
-let _geminiDir: string | null = null;
+const resolver = createDirResolver(entry().discovery.binaries, entry().discovery.searchDirs);
 
 /**
  * Finds the directory containing the `gemini` binary.
  * Checks `which gemini` first, then falls back to common install locations.
+ * Result is cached for subsequent calls.
  *
  * @returns Directory path, or null if not found
  */
 export function resolveGeminiDir(): string | null {
-  if (_geminiDir !== null) return _geminiDir || null;
-
-  try {
-    const result = execSync('which gemini', {
-      encoding: 'utf-8',
-      timeout: EXEC_TIMEOUT_MS,
-    }).trim();
-    if (result && existsSync(result)) {
-      _geminiDir = dirname(result);
-      return _geminiDir;
-    }
-  } catch {
-    // Gemini not in PATH, will check common locations
-  }
-
-  for (const dir of GEMINI_SEARCH_DIRS) {
-    if (existsSync(join(dir, 'gemini'))) {
-      _geminiDir = dir;
-      return _geminiDir;
-    }
-  }
-
-  _geminiDir = '';
-  return null;
+  return resolver.resolveDir();
 }
 
 /**
- * Check if Gemini CLI is available on the system.
+ * Check if the Gemini CLI is available on the system.
  */
 export function isGeminiAvailable(): boolean {
-  return resolveGeminiDir() !== null;
+  return resolver.isAvailable();
 }

@@ -1,38 +1,49 @@
 /**
- * @fileoverview Shared Claude CLI binary resolution.
+ * @fileoverview Claude CLI binary resolution.
  *
- * Finds the `claude` binary across common installation paths and provides
- * an augmented PATH string. Used by session.ts and tmux-manager.ts
- * to locate the Claude CLI.
+ * Thin wrapper over `cli-resolver.ts`'s generic walker, reading its search
+ * parameters from the CLI registry's stock catalog. Kept as its own module
+ * (rather than folded into a single generic import everywhere) so every
+ * existing caller and every `vi.mock('.../claude-cli-resolver.js')` in the
+ * test suite keeps working unchanged — see cli-resolver.ts's file header.
  *
  * @module utils/claude-cli-resolver
  */
 
-import { execSync, execFileSync } from 'node:child_process';
-import { existsSync } from 'node:fs';
-import { delimiter, dirname, join } from 'node:path';
-import { homedir } from 'node:os';
-import { EXEC_TIMEOUT_MS } from '../config/exec-timeout.js';
+import { join } from 'node:path';
+import {
+  augmentPath,
+  createDirResolver,
+  createRetryingVersionGetter,
+  resolveRetryingVersion,
+  retryingVersionProbeDelayMs,
+  type RetryingVersionProbeState,
+} from './cli-resolver.js';
+import { getCli } from '../config/cli-registry/registry.js';
 
-/** Common directories where the Claude CLI binary may be installed */
-const CLAUDE_SEARCH_DIRS = [
-  join(homedir(), '.local', 'bin'),
-  join(homedir(), '.claude', 'local'),
-  '/usr/local/bin',
-  join(homedir(), '.npm-global', 'bin'),
-  join(homedir(), 'bin'),
-];
+/** Preserved name for the exported type; identical shape to RetryingVersionProbeState. */
+export type ClaudeVersionProbeState = RetryingVersionProbeState;
 
-/** Cached directory containing the claude binary (empty string = searched but not found) */
-let _claudeDir: string | null = null;
+/** Preserved name; identical behaviour to the generic retry/backoff delay function. */
+export const claudeVersionRetryDelayMs = retryingVersionProbeDelayMs;
+
+/** Preserved name; identical behaviour to the generic retry/backoff cache policy. */
+export const resolveClaudeCliVersion = resolveRetryingVersion;
+
+function claudeEntry() {
+  const entry = getCli('claude');
+  if (!entry) throw new Error('claude is not registered in the CLI registry');
+  return entry;
+}
+
+const resolver = createDirResolver(claudeEntry().discovery.binaries, claudeEntry().discovery.searchDirs);
 
 /**
  * Returns true if the Claude CLI binary can be located (via `which` or one of
- * the common install directories). Mirrors `isGeminiAvailable`/`isAntigravityAvailable`/`isOpenCodeAvailable`/
- * `isCodexAvailable` in the sibling resolvers.
+ * the common install directories). Mirrors the sibling resolvers.
  */
 export function isClaudeAvailable(): boolean {
-  return findClaudeDir() !== null;
+  return resolver.isAvailable();
 }
 
 /**
@@ -43,29 +54,7 @@ export function isClaudeAvailable(): boolean {
  * @returns Directory path, or null if not found
  */
 export function findClaudeDir(): string | null {
-  if (_claudeDir !== null) return _claudeDir || null;
-
-  // Try `which` first (respects current PATH)
-  try {
-    const result = execSync('which claude', { encoding: 'utf-8', timeout: EXEC_TIMEOUT_MS }).trim();
-    if (result && existsSync(result)) {
-      _claudeDir = dirname(result);
-      return _claudeDir;
-    }
-  } catch {
-    // Claude not in PATH, will check common locations
-  }
-
-  // Fallback: check common installation directories
-  for (const dir of CLAUDE_SEARCH_DIRS) {
-    if (existsSync(join(dir, 'claude'))) {
-      _claudeDir = dir;
-      return _claudeDir;
-    }
-  }
-
-  _claudeDir = ''; // mark as searched, not found
-  return null;
+  return resolver.resolveDir();
 }
 
 /**
@@ -83,7 +72,7 @@ export function getClaudeBinaryPath(): string {
   return dir ? join(dir, 'claude') : 'claude';
 }
 
-/** Cached augmented PATH string */
+/** Cached augmented PATH string. */
 let _augmentedPath: string | null = null;
 
 /**
@@ -95,107 +84,8 @@ let _augmentedPath: string | null = null;
  */
 export function getAugmentedPath(): string {
   if (_augmentedPath) return _augmentedPath;
-
-  const currentPath = process.env.PATH || '';
-  const claudeDir = findClaudeDir();
-
-  if (claudeDir && !currentPath.split(delimiter).includes(claudeDir)) {
-    _augmentedPath = `${claudeDir}${delimiter}${currentPath}`;
-    return _augmentedPath;
-  }
-
-  _augmentedPath = currentPath;
+  _augmentedPath = augmentPath(findClaudeDir(), process.env.PATH || '');
   return _augmentedPath;
-}
-
-/**
- * Cache state for the `claude --version` probe.
- *
- * `version` is only ever set from a SUCCESSFUL probe and then kept for the
- * process lifetime (the binary can't change under a running server without a
- * restart). Failures are tracked separately so they expire.
- */
-export interface ClaudeVersionProbeState {
-  /** Successful probe result; `undefined` until one succeeds. */
-  version?: string;
-  /** Consecutive failed probes (drives the retry backoff). */
-  failures: number;
-  /** Timestamp of the most recent failed probe. */
-  lastFailureAt: number;
-}
-
-/** First retry window after a failed probe. */
-const VERSION_PROBE_BASE_RETRY_MS = 60_000;
-/** Ceiling for the doubling backoff, so a permanently missing binary settles down. */
-const VERSION_PROBE_MAX_RETRY_MS = 15 * 60_000;
-
-/**
- * How long to wait before re-probing after `failures` consecutive failures:
- * 1min, 2min, 4min… capped at 15min. Exported for tests.
- */
-export function claudeVersionRetryDelayMs(failures: number): number {
-  if (failures <= 0) return 0;
-  return Math.min(VERSION_PROBE_BASE_RETRY_MS * 2 ** (failures - 1), VERSION_PROBE_MAX_RETRY_MS);
-}
-
-/**
- * Cache policy for the version probe, pure apart from the `state` it mutates
- * and the injected `probe` (exported so tests can drive it with a fake clock).
- *
- * Success is cached forever; FAILURE is not. That asymmetry is the fix for a
- * real shipped bug: the old cache stored `null` on any exception and guarded on
- * `!== undefined`, so a single failed probe — a 5s `EXEC_TIMEOUT_MS` timeout, a
- * PATH-starved systemd/launchd environment, a transient fs hiccup — at the FIRST
- * Claude session start left `cliVersion` undefined for EVERY Claude session
- * until the server restarted. An undefined `cliVersion` silently disables
- * wheel-forwarding to Claude's own transcript (`_shouldForwardWheelToApp`),
- * which is the only route to history in repaint mode: a dead wheel on every
- * device at once, matching the issue #205 retest reports.
- *
- * Retries back off so a genuinely absent binary still can't spawn a probe per
- * session start.
- */
-export function resolveClaudeCliVersion(
-  state: ClaudeVersionProbeState,
-  now: number,
-  probe: () => string | null
-): string | null {
-  if (state.version !== undefined) return state.version;
-  if (state.failures > 0 && now - state.lastFailureAt < claudeVersionRetryDelayMs(state.failures)) return null;
-
-  let version: string | null = null;
-  try {
-    version = probe();
-  } catch {
-    version = null;
-  }
-
-  if (version) {
-    state.version = version;
-    state.failures = 0;
-    state.lastFailureAt = 0;
-    return version;
-  }
-  state.failures += 1;
-  state.lastFailureAt = now;
-  return null;
-}
-
-const _claudeVersionState: ClaudeVersionProbeState = { failures: 0, lastFailureAt: 0 };
-
-/** One `claude --version` run. Throws on spawn/timeout failure. */
-function probeClaudeCliVersion(): string | null {
-  const dir = findClaudeDir();
-  const bin = dir ? join(dir, 'claude') : 'claude';
-  // execFileSync (no shell) — the resolved path may contain spaces, and there
-  // is no untrusted input, but avoid a shell either way.
-  const out = execFileSync(bin, ['--version'], {
-    encoding: 'utf-8',
-    timeout: EXEC_TIMEOUT_MS,
-    env: { ...process.env, PATH: getAugmentedPath() },
-  });
-  const match = out.match(/(\d+\.\d+\.\d+)/);
-  return match ? match[1] : null;
 }
 
 /**
@@ -209,11 +99,10 @@ function probeClaudeCliVersion(): string | null {
  * show it, which left `cliVersion` undefined and silently disabled features
  * gated on it (e.g. wheel-forwarding to Claude's transcript — issue #154).
  */
-export function getClaudeCliVersion(): string | null {
-  // Keep the test suite hermetic — never spawn a real `claude` subprocess under
-  // vitest (matches IS_TEST_MODE in tmux-manager). Tests that need a version set
-  // it on the session directly. Deliberately does NOT touch the cache state:
-  // recording a phantom failure here would be the very poisoning this fixes.
-  if (process.env.VITEST) return null;
-  return resolveClaudeCliVersion(_claudeVersionState, Date.now(), probeClaudeCliVersion);
-}
+export const getClaudeCliVersion = createRetryingVersionGetter({
+  resolveDir: findClaudeDir,
+  binaryName: 'claude',
+  versionArg: claudeEntry().discovery.version?.arg ?? '--version',
+  versionRegex: claudeEntry().discovery.version?.regex,
+  getAugmentedPath,
+});

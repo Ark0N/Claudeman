@@ -9,6 +9,7 @@ import { join } from 'node:path';
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
 import {
   agentImageBuildArgs,
+  binaryForDockerProbe,
   buildDockerBaseArgs,
   buildDockerCreateArgs,
   buildSeamlessClaudeConfig,
@@ -461,5 +462,20 @@ describe('daemon probes (no-op under VITEST)', () => {
     expect(
       await probeDockerCliVersion({ engine: 'docker', containerName: 'codeman-case-x' }, 'claude')
     ).toBeUndefined();
+  });
+
+  it('binaryForDockerProbe resolves the REGISTERED binary, not the mode id', () => {
+    // The regression this pins: probeDockerCliVersion used to probe `mode` itself as the
+    // binary name, which is correct for claude/opencode/codex/gemini/pi (mode === binary)
+    // but WRONG for antigravity, whose binary is `agy`. A container has no `antigravity`
+    // executable, so the old code silently probed a nonexistent binary and always got
+    // undefined back — never actually version-checking Antigravity docker sessions.
+    expect(binaryForDockerProbe('antigravity')).toBe('agy');
+    expect(binaryForDockerProbe('claude')).toBe('claude');
+    expect(binaryForDockerProbe('codex')).toBe('codex');
+    expect(binaryForDockerProbe('gemini')).toBe('gemini');
+    expect(binaryForDockerProbe('opencode')).toBe('opencode');
+    expect(binaryForDockerProbe('pi')).toBe('pi');
+    expect(binaryForDockerProbe('shell')).toBeUndefined();
   });
 });

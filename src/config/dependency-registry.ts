@@ -7,7 +7,7 @@
  * @module config/dependency-registry
  */
 
-import { PI_VERSION_REGEX } from '../utils/pi-cli-resolver.js';
+import { listClis } from './cli-registry/registry.js';
 
 export type ProbeEnvironment = 'linux' | 'darwin' | 'win32' | 'wsl';
 
@@ -56,6 +56,60 @@ export interface ToolDependency {
 
 const ALL: ProbeEnvironment[] = ['linux', 'darwin', 'wsl', 'win32'];
 
+/**
+ * Build a `codeman doctor` entry for one CLI registry entry, so its binary names, search
+ * behaviour, version probe and install hints are declared exactly ONCE — in the CLI
+ * registry's stock catalog — rather than duplicated here. `pi`'s `requireVersionMatch` and
+ * shared `PI_VERSION_REGEX` come along automatically, which is what keeps the doctor and the
+ * run mode from ever disagreeing about what counts as an installed `pi` (see pi-cli-resolver.ts).
+ *
+ * Only entries actually present in the registry are turned into doctor rows — a CLI a user
+ * has fully removed from `clis.json` doesn't get an orphaned dependency row either.
+ */
+function cliDependencyEntry(id: string, usedBy: string): ToolDependency | null {
+  const cli = listClis().find((e) => (e.id as unknown as string) === id);
+  if (!cli || cli.discovery.binaries.length === 0) return null; // e.g. `shell`, which has no binary
+  const version = cli.discovery.version;
+  const installHint: ToolDependency['installHint'] = {};
+  for (const [platform, command] of Object.entries(cli.discovery.install.command)) {
+    if (command) installHint[platform as ProbeEnvironment] = command;
+  }
+  return {
+    id,
+    label: `${cli.label} CLI`,
+    category: 'core',
+    required: false,
+    usedBy: [usedBy],
+    resolvers: [
+      {
+        match: ALL,
+        resolver: {
+          kind: 'path',
+          bins: cli.discovery.binaries,
+          versionArg: version?.arg ?? '--version',
+          versionRegex: version?.regex ? new RegExp(version.regex) : undefined,
+          requireVersionMatch: version?.requireVersionMatch,
+        },
+      },
+    ],
+    installHint: Object.keys(installHint).length > 0 ? installHint : undefined,
+  };
+}
+
+/** `usedBy` text for each CLI's doctor row, matching the historical copy per id. */
+const CLI_USED_BY: Record<string, string> = {
+  claude: 'Claude Code sessions (default backend)',
+  opencode: 'OpenCode sessions',
+  codex: 'Codex sessions',
+  gemini: 'Gemini sessions',
+  antigravity: 'Antigravity sessions',
+  pi: 'Pi sessions',
+};
+
+const CLI_DEPENDENCY_ENTRIES: ToolDependency[] = Object.entries(CLI_USED_BY)
+  .map(([id, usedBy]) => cliDependencyEntry(id, usedBy))
+  .filter((entry): entry is ToolDependency => entry !== null);
+
 export const DEPENDENCY_REGISTRY: ToolDependency[] = [
   {
     id: 'node',
@@ -67,15 +121,6 @@ export const DEPENDENCY_REGISTRY: ToolDependency[] = [
     installHint: { linux: 'https://nodejs.org', darwin: 'brew install node', wsl: 'https://nodejs.org' },
   },
   {
-    id: 'claude',
-    label: 'Claude CLI',
-    category: 'core',
-    required: false,
-    usedBy: ['Claude Code sessions (default backend)'],
-    resolvers: [{ match: ALL, resolver: { kind: 'path', bins: ['claude'], versionArg: '--version' } }],
-    installHint: { linux: 'https://docs.claude.com/claude-code', darwin: 'https://docs.claude.com/claude-code' },
-  },
-  {
     id: 'tmux',
     label: 'tmux',
     category: 'core',
@@ -83,62 +128,7 @@ export const DEPENDENCY_REGISTRY: ToolDependency[] = [
     resolvers: [{ match: ['linux', 'darwin', 'wsl'], resolver: { kind: 'path', bins: ['tmux'], versionArg: '-V' } }],
     installHint: { linux: 'sudo apt install tmux', darwin: 'brew install tmux', wsl: 'sudo apt install tmux' },
   },
-  {
-    id: 'opencode',
-    label: 'OpenCode CLI',
-    category: 'core',
-    required: false,
-    usedBy: ['OpenCode sessions'],
-    resolvers: [{ match: ALL, resolver: { kind: 'path', bins: ['opencode'], versionArg: '--version' } }],
-  },
-  {
-    id: 'codex',
-    label: 'Codex CLI',
-    category: 'core',
-    required: false,
-    usedBy: ['Codex sessions'],
-    resolvers: [{ match: ALL, resolver: { kind: 'path', bins: ['codex'], versionArg: '--version' } }],
-  },
-  {
-    id: 'gemini',
-    label: 'Gemini CLI',
-    category: 'core',
-    required: false,
-    usedBy: ['Gemini sessions'],
-    resolvers: [{ match: ALL, resolver: { kind: 'path', bins: ['gemini'], versionArg: '--version' } }],
-  },
-  {
-    id: 'antigravity',
-    label: 'Antigravity CLI',
-    category: 'core',
-    required: false,
-    usedBy: ['Antigravity sessions'],
-    resolvers: [{ match: ALL, resolver: { kind: 'path', bins: ['agy'], versionArg: '--version' } }],
-  },
-  {
-    id: 'pi',
-    label: 'Pi CLI',
-    category: 'core',
-    required: false,
-    usedBy: ['Pi sessions'],
-    // The only entry that requires a version match, for the same reason
-    // pi-cli-resolver.ts probes: `pi` is a short generic name (Raspberry Pi tooling,
-    // personal scripts), so a `which pi` hit alone is not the coding agent. Both sides
-    // share PI_VERSION_REGEX, so the doctor and the run mode cannot drift into telling
-    // the user opposite things about the same binary.
-    resolvers: [
-      {
-        match: ALL,
-        resolver: {
-          kind: 'path',
-          bins: ['pi'],
-          versionArg: '--version',
-          versionRegex: PI_VERSION_REGEX,
-          requireVersionMatch: true,
-        },
-      },
-    ],
-  },
+  ...CLI_DEPENDENCY_ENTRIES,
   {
     id: 'libreoffice',
     label: 'LibreOffice',

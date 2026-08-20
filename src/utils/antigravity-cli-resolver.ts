@@ -1,28 +1,24 @@
 /**
- * @fileoverview Resolve the Antigravity CLI (`agy`) binary across common install paths.
+ * @fileoverview Antigravity CLI binary resolution.
  *
- * Mirrors gemini-cli-resolver.ts. Google's installer (antigravity.google/cli/install.sh)
- * places the binary at ~/.local/bin/agy; the other locations cover manual installs.
+ * The binary is `agy`, not `antigravity` — the registry's `discovery.binaries`
+ * carries that split so nothing here (or anywhere else) has to know it by name.
+ * Thin wrapper over `cli-resolver.ts`'s generic walker; see claude-cli-resolver.ts's
+ * file header for why this stays its own module rather than a bare re-export.
  *
  * @module utils/antigravity-cli-resolver
  */
 
-import { execSync } from 'node:child_process';
-import { existsSync } from 'node:fs';
-import { dirname, join } from 'node:path';
-import { homedir } from 'node:os';
-import { EXEC_TIMEOUT_MS } from '../config/exec-timeout.js';
+import { createDirResolver } from './cli-resolver.js';
+import { getCli } from '../config/cli-registry/registry.js';
 
-/** Common directories where the Antigravity CLI binary may be installed */
-const ANTIGRAVITY_SEARCH_DIRS = [
-  join(homedir(), '.local', 'bin'),
-  join(homedir(), '.antigravity', 'bin'),
-  '/usr/local/bin',
-  join(homedir(), 'bin'),
-];
+function entry() {
+  const e = getCli('antigravity');
+  if (!e) throw new Error('antigravity is not registered in the CLI registry');
+  return e;
+}
 
-/** Cached directory containing the agy binary (empty string = searched but not found) */
-let _antigravityDir: string | null = null;
+const resolver = createDirResolver(entry().discovery.binaries, entry().discovery.searchDirs);
 
 /**
  * Finds the directory containing the `agy` binary.
@@ -31,35 +27,12 @@ let _antigravityDir: string | null = null;
  * @returns Directory path, or null if not found
  */
 export function resolveAntigravityDir(): string | null {
-  if (_antigravityDir !== null) return _antigravityDir || null;
-
-  try {
-    const result = execSync('which agy', {
-      encoding: 'utf-8',
-      timeout: EXEC_TIMEOUT_MS,
-    }).trim();
-    if (result && existsSync(result)) {
-      _antigravityDir = dirname(result);
-      return _antigravityDir;
-    }
-  } catch {
-    // agy not in PATH, will check common locations
-  }
-
-  for (const dir of ANTIGRAVITY_SEARCH_DIRS) {
-    if (existsSync(join(dir, 'agy'))) {
-      _antigravityDir = dir;
-      return _antigravityDir;
-    }
-  }
-
-  _antigravityDir = '';
-  return null;
+  return resolver.resolveDir();
 }
 
 /**
  * Check if the Antigravity CLI is available on the system.
  */
 export function isAntigravityAvailable(): boolean {
-  return resolveAntigravityDir() !== null;
+  return resolver.isAvailable();
 }

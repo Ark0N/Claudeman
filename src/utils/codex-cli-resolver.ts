@@ -1,30 +1,23 @@
 /**
- * @fileoverview Resolve the Codex (OpenAI) CLI binary across common install paths.
+ * @fileoverview Codex CLI binary resolution.
  *
- * Mirrors opencode-cli-resolver.ts pattern. Finds the `codex` binary
- * and provides an augmented PATH string for tmux sessions.
+ * Thin wrapper over `cli-resolver.ts`'s generic walker, reading its search
+ * parameters from the CLI registry's stock catalog. See claude-cli-resolver.ts's
+ * file header for why this stays its own module rather than a bare re-export.
  *
  * @module utils/codex-cli-resolver
  */
 
-import { execSync } from 'node:child_process';
-import { existsSync } from 'node:fs';
-import { dirname, join } from 'node:path';
-import { homedir } from 'node:os';
-import { EXEC_TIMEOUT_MS } from '../config/exec-timeout.js';
+import { createDirResolver } from './cli-resolver.js';
+import { getCli } from '../config/cli-registry/registry.js';
 
-/** Common directories where the Codex CLI binary may be installed */
-const CODEX_SEARCH_DIRS = [
-  join(homedir(), '.codex', 'bin'), // Default install location
-  join(homedir(), '.local', 'bin'), // Alternative install location
-  '/usr/local/bin', // Homebrew / system
-  join(homedir(), '.bun', 'bin'), // Bun global
-  join(homedir(), '.npm-global', 'bin'), // npm global
-  join(homedir(), 'bin'), // User bin
-];
+function entry() {
+  const e = getCli('codex');
+  if (!e) throw new Error('codex is not registered in the CLI registry');
+  return e;
+}
 
-/** Cached directory containing the codex binary (empty string = searched but not found) */
-let _codexDir: string | null = null;
+const resolver = createDirResolver(entry().discovery.binaries, entry().discovery.searchDirs);
 
 /**
  * Finds the directory containing the `codex` binary.
@@ -34,36 +27,12 @@ let _codexDir: string | null = null;
  * @returns Directory path, or null if not found
  */
 export function resolveCodexDir(): string | null {
-  if (_codexDir !== null) return _codexDir || null;
-
-  // Try `which` first (respects current PATH)
-  try {
-    const result = execSync('which codex', {
-      encoding: 'utf-8',
-      timeout: EXEC_TIMEOUT_MS,
-    }).trim();
-    if (result && existsSync(result)) {
-      _codexDir = dirname(result);
-      return _codexDir;
-    }
-  } catch {
-    // Codex not in PATH, will check common locations
-  }
-
-  for (const dir of CODEX_SEARCH_DIRS) {
-    if (existsSync(join(dir, 'codex'))) {
-      _codexDir = dir;
-      return _codexDir;
-    }
-  }
-
-  _codexDir = ''; // mark as searched, not found
-  return null;
+  return resolver.resolveDir();
 }
 
 /**
- * Check if Codex CLI is available on the system.
+ * Check if the Codex CLI is available on the system.
  */
 export function isCodexAvailable(): boolean {
-  return resolveCodexDir() !== null;
+  return resolver.isAvailable();
 }

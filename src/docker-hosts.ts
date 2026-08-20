@@ -30,6 +30,7 @@ import { createHash } from 'node:crypto';
 import { execFile, spawn } from 'node:child_process';
 import { promisify } from 'node:util';
 import { dataPath } from './config/instance.js';
+import { getCli } from './config/cli-registry/registry.js';
 import type {
   DockerCase,
   DockerCommandMode,
@@ -1044,6 +1045,21 @@ export async function reapOrphanedDockerContainers(
 }
 
 /**
+ * Resolve the in-container binary name to probe for a mode's version.
+ *
+ * The binary name is NOT always the mode id — antigravity's mode is `antigravity` but
+ * its binary is `agy` — so this reads the CLI registry's `discovery.binaries[0]` rather
+ * than assuming they match, which is what the old `mode === 'shell' ? null : mode` check
+ * got wrong (it would have probed a nonexistent `antigravity` binary in-container).
+ * `shell`, and any mode with no declared binaries, yields undefined. Exported as a pure
+ * function so the fix is unit-testable without VITEST's `IS_TEST_MODE` short-circuit
+ * standing in the way.
+ */
+export function binaryForDockerProbe(mode: SessionMode): string | undefined {
+  return getCli(mode)?.discovery.binaries[0];
+}
+
+/**
  * Read the IN-CONTAINER Claude CLI version (`docker exec <container> claude
  * --version`). Feeds Session.cliVersion for docker sessions (the LOCAL claude
  * would report the wrong version and disable trackpad wheel-forwarding, #154).
@@ -1054,7 +1070,7 @@ export async function probeDockerCliVersion(
   mode: SessionMode
 ): Promise<string | undefined> {
   if (IS_TEST_MODE) return undefined;
-  const bin = mode === 'shell' ? null : mode;
+  const bin = binaryForDockerProbe(mode);
   if (!bin) return undefined;
   const argv = dockerEngineArgv(docker);
   try {

@@ -34,14 +34,18 @@ describe('DEPENDENCY_REGISTRY', () => {
     // `pi` is a short generic name, so pi-cli-resolver.ts refuses a binary that does not
     // print semver. If the doctor did not apply the identical rule it would report
     // "Pi CLI ✓" on a box where Run Pi stays hidden, which reads as a broken mode
-    // rather than a missing install. One regex, shared, is what keeps them agreeing.
+    // rather than a missing install. Both sides now compile their regex from the SAME
+    // declared string in the CLI registry's stock catalog (config/cli-registry/stock.ts),
+    // so this compares by pattern (`.source`) rather than object identity — the registry
+    // and pi-cli-resolver.ts's own PI_VERSION_REGEX are separately-compiled RegExp
+    // instances of the identical source string, not the same object.
     const pi = DEPENDENCY_REGISTRY.find((t) => t.id === 'pi');
     expect(pi).toBeDefined();
     const spec = pi!.resolvers.find((r) => r.resolver.kind === 'path');
     expect(spec).toBeDefined();
     const resolver = spec!.resolver as { versionRegex?: RegExp; requireVersionMatch?: boolean };
     expect(resolver.requireVersionMatch).toBe(true);
-    expect(resolver.versionRegex).toBe(PI_VERSION_REGEX);
+    expect(resolver.versionRegex?.source).toBe(PI_VERSION_REGEX.source);
   });
 
   it('gives msoffice a windows-side resolver scoped to wsl + win32 only', () => {
