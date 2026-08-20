@@ -884,6 +884,43 @@ export class TuiClient {
   }
 
   /**
+   * Size a window to the terminal that is about to look at it, NOW.
+   *
+   * ⚠️ `window-size latest` only resizes a window while a client is actually on
+   * it. The sessions behind the tab strip have none until you switch, so the
+   * resize happened AT the switch: tmux painted the newly-available area with
+   * its dot fill, and an idle claude had no reason to redraw into it, leaving a
+   * pane in the corner of a dotted screen (reported from the beta, with a
+   * screenshot). Pre-sizing moves that repaint to attach time, while the user
+   * is still looking at the first session.
+   *
+   * `resize-window` with an explicit size implies `window-size manual`, which
+   * is what we want: the size is already right when the switch lands, so tmux
+   * has nothing to change and nothing to repaint. The switch binding puts
+   * `latest` back so a mid-attach terminal resize still follows.
+   */
+  async presizeWindow(muxName: string, cols: number, rows: number): Promise<boolean> {
+    if (!MUX_NAME_PATTERN.test(muxName)) return false;
+    if (!Number.isSafeInteger(cols) || !Number.isSafeInteger(rows) || cols <= 0 || rows <= 0) return false;
+    try {
+      await this.exec('tmux', [
+        '-L',
+        this.socket,
+        'resize-window',
+        '-t',
+        muxName,
+        '-x',
+        String(cols),
+        '-y',
+        String(rows),
+      ]);
+      return true;
+    } catch {
+      return false;
+    }
+  }
+
+  /**
    * tmux's prefix key for a session (`C-b` unless the user's config says
    * otherwise), or null when tmux cannot say. Session-level first, then global:
    * `show-options -v` resolves the chain on its own, and an empty answer simply
@@ -963,7 +1000,27 @@ export class TuiClient {
   async bindSwitchKey(key: string, target: string): Promise<boolean> {
     if (!MUX_NAME_PATTERN.test(target)) return false;
     try {
-      await this.exec('tmux', ['-L', this.socket, 'bind-key', '-T', 'root', key, 'switch-client', '-t', target]);
+      // Two commands: go there, then let that window follow this terminal again.
+      // It is already the right size (see presizeWindow), so `latest` changes
+      // nothing on arrival and costs no repaint — it matters only if the
+      // terminal is resized while sitting in that session.
+      await this.exec('tmux', [
+        '-L',
+        this.socket,
+        'bind-key',
+        '-T',
+        'root',
+        key,
+        'switch-client',
+        '-t',
+        target,
+        ';',
+        'set-window-option',
+        '-t',
+        target,
+        'window-size',
+        'latest',
+      ]);
       return true;
     } catch {
       return false;

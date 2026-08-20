@@ -352,6 +352,8 @@ export function buildAttachBanner(options: {
   tabs?: readonly TuiAttachTab[];
   /** The attaching terminal's width, so the strip can be kept clear of the hint. */
   cols?: number;
+  /** Alt+1..9 really switch sessions, so the bar may say so. */
+  switchKeys?: boolean;
 }): Record<string, string> {
   const chord = escapeTmuxFormat(detachChord(options.prefix, options.detachKey));
   // Named on the bar because it is what people actually type: keeping Ctrl held
@@ -367,9 +369,13 @@ export function buildAttachBanner(options: {
   // left. tmux truncates a status line that overflows, and what it drops is the
   // RIGHT-aligned segment — which is the hint, the one thing on the bar a user
   // cannot do without. Every width tested lost it before this budget existed.
+  // ⚠️ The switch hint appears only when the keys were actually claimed, the
+  // same rule the way-out key follows. A bar naming a key that does nothing is
+  // the bug this whole series started with.
+  const switchHint = options.switchKeys ? 'alt+1-9 switch · ' : '';
   const hint = options.oneKey
-    ? ` ${options.oneKey} ${ATTACH_BANNER_MARKER} `
-    : ` ${chord}${alias} ${ATTACH_BANNER_MARKER} `;
+    ? ` ${switchHint}${options.oneKey} ${ATTACH_BANNER_MARKER} `
+    : ` ${switchHint}${chord}${alias} ${ATTACH_BANNER_MARKER} `;
   const budget = Math.max(0, (options.cols ?? Number.POSITIVE_INFINITY) - hint.length - 1);
   // The strip names the session it highlights, so the standalone label is only
   // a fallback for when there is no strip to draw (degraded mode has no list).
@@ -385,8 +391,8 @@ export function buildAttachBanner(options: {
     // ONLY instruction a user gets during an attach, so it names the simplest
     // thing that is known to work, never a menu of ways.
     'status-format[0]': options.oneKey
-      ? `#[align=left]${left}#[align=right] #[bold]${escapeTmuxFormat(options.oneKey)}#[nobold] ${ATTACH_BANNER_MARKER} #[default]`
-      : `#[align=left]${left}#[align=right] #[bold]${chord}#[nobold]${alias} ${ATTACH_BANNER_MARKER} #[default]`,
+      ? `#[align=left]${left}#[align=right] ${switchHint}#[bold]${escapeTmuxFormat(options.oneKey)}#[nobold] ${ATTACH_BANNER_MARKER} #[default]`
+      : `#[align=left]${left}#[align=right] ${switchHint}#[bold]${chord}#[nobold]${alias} ${ATTACH_BANNER_MARKER} #[default]`,
   };
 }
 
@@ -531,7 +537,8 @@ export async function beginAttachHandoff(
   muxName: string,
   label: string,
   tabs: readonly TuiAttachTab[] = [],
-  cols?: number
+  cols?: number,
+  rows?: number
 ): Promise<TuiAttachHandoff> {
   const prefix = (await client.readPrefixKey(muxName)) ?? undefined;
   // Read, not assumed: see detachChord() for the `d` vs `D` mix-up this closes.
@@ -580,6 +587,7 @@ export async function beginAttachHandoff(
       ...(claimed && alias ? { heldAlias: alias } : {}),
       ...(oneKey ? { oneKey: ONE_KEY_DETACH } : {}),
       ...(cols ? { cols } : {}),
+      ...(switchKeys.length > 0 ? { switchKeys: true } : {}),
       label: ownLabel,
       tabs: tabs.map((tab) => ({ ...tab, active: tab.muxName === activeMux })),
     });
@@ -610,7 +618,10 @@ export async function beginAttachHandoff(
     // at it, which is the same reason the attached one gets it.
     const sizing = await client.readWindowSizing(target);
     if (sizing) resized.push({ muxName: target, sizing });
-    await client.followAttachingClient(target);
+    // Pre-size to this terminal so a switch has nothing left to resize, then
+    // let the session we are actually opening follow the terminal live.
+    if (cols && rows && rows > 1) await client.presizeWindow(target, cols, rows - 1);
+    if (target === muxName) await client.followAttachingClient(target);
   }
   return {
     chord: oneKey ? ONE_KEY_DETACH : detachChord(prefix, detachKey),
@@ -2261,7 +2272,8 @@ class TuiApp {
       muxName,
       rowLabel(row.session),
       this.attachTabs(row.session.sessionId),
-      this.currentLayout().cols
+      this.currentLayout().cols,
+      this.currentLayout().rows
     );
     this.detachChordLabel = handoff.chord;
     this.screen.leave();

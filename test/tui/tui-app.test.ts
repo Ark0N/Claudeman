@@ -468,6 +468,34 @@ describe('the one-key way out', () => {
     expect(ONE_KEY_DETACH).not.toContain('+');
   });
 
+  it('advertises alt+1-9 only once those keys were really claimed', () => {
+    // Same rule as the way-out key: never name a key that does nothing. That
+    // is the bug this whole series started with.
+    const withSwitch = buildAttachBanner({ oneKey: 'F1', switchKeys: true, cols: 150 })['status-format[0]'];
+    expect(withSwitch).toContain('alt+1-9 switch');
+    expect(withSwitch).toContain('back to the codeman dashboard');
+    expect(buildAttachBanner({ oneKey: 'F1', cols: 150 })['status-format[0]']).not.toContain('alt+1-9');
+  });
+
+  it('still fits the strip once the switch hint has taken its space', () => {
+    for (const cols of [80, 100, 120, 190]) {
+      const bar = buildAttachBanner({
+        oneKey: 'F1',
+        switchKeys: true,
+        cols,
+        tabs: Array.from({ length: 12 }, (_, i) => ({
+          index: i + 1,
+          label: `w${i + 1}-session-name`,
+          active: i === 1,
+        })),
+      })['status-format[0]'];
+      const visible = bar.replace(/#\[[^\]]*\]/g, '');
+      expect({ cols, fits: visible.length <= cols }).toEqual({ cols, fits: true });
+      expect(visible).toContain('alt+1-9 switch');
+      expect(visible).toContain('back to the codeman dashboard');
+    }
+  });
+
   it('puts ONE instruction on the bar, not a menu of ways out', () => {
     const banner = buildAttachBanner({ prefix: 'C-b', detachKey: 'd', heldAlias: 'C-d', oneKey: 'F1' });
     const bar = banner['status-format[0]'];
