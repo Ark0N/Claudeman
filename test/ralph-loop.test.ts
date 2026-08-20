@@ -129,6 +129,36 @@ describe('RalphLoop', () => {
     vi.useRealTimers();
   });
 
+  describe('reschedule loop (regression)', () => {
+    // tick() is the only path that calls setRalphLoopState with lastCheckAt and
+    // no status field; start() carries status:'running', stop() status:'stopped'.
+    const countTicks = () =>
+      (mockState.store.setRalphLoopState as any).mock.calls.filter(
+        (c: any[]) => c[0]?.lastCheckAt !== undefined && c[0]?.status === undefined
+      ).length;
+
+    it('keeps rescheduling past the second tick', async () => {
+      // Real timers + a tiny poll interval: tick()'s async internals settle
+      // naturally on the event loop, avoiding fake-timer microtask fragility.
+      vi.useRealTimers();
+      loop.destroy();
+      // Keep the loop in the "running, should keep polling" state so it actually
+      // exercises the reschedule path: min duration unreached + autoGenerate on
+      // makes shouldStop() false (idle sessions are mocked empty, so nothing is
+      // actually generated). Otherwise an empty queue self-stops after 1 tick.
+      loop = new RalphLoop({ pollIntervalMs: 5, minDurationMs: 60_000, autoGenerateTasks: true });
+
+      await loop.start();
+      await new Promise((resolve) => setTimeout(resolve, 80)); // ~16 poll intervals
+      loop.stop();
+
+      // The bug: the loopTimer handle is never nulled in the setTimeout callback,
+      // so the `loopTimer === null` reschedule guard is false after the first fire
+      // and the loop dies at exactly 2 ticks. Fixed -> many ticks.
+      expect(countTicks()).toBeGreaterThanOrEqual(3);
+    });
+  });
+
   describe('initial state', () => {
     it('should start in stopped status', () => {
       expect(loop.status).toBe('stopped');
@@ -296,11 +326,7 @@ describe('RalphLoop', () => {
   describe('getStats', () => {
     it('should return complete stats object', async () => {
       const mockRunningTask = { id: '2', status: 'running', isTimedOut: () => false };
-      mockState.taskQueue.tasks = [
-        { id: '1', status: 'pending' },
-        mockRunningTask,
-        { id: '3', status: 'completed' },
-      ];
+      mockState.taskQueue.tasks = [{ id: '1', status: 'pending' }, mockRunningTask, { id: '3', status: 'completed' }];
       mockState.taskQueue.getRunningTasks.mockReturnValue([mockRunningTask]);
 
       await loop.start();
