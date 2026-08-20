@@ -131,6 +131,11 @@ import {
   toSessionDocker,
 } from '../../docker-hosts.js';
 import { LRUMap } from '../../utils/lru-map.js';
+import {
+  getLastTranscriptResponse,
+  isExternalCliTranscriptMode,
+  parseExternalCliTranscript,
+} from '../response-viewer-transcript.js';
 
 // Path to linked-cases registry (same file used by case-routes resolveCasePath)
 const LINKED_CASES_FILE = dataPath('linked-cases.json');
@@ -1896,6 +1901,22 @@ export function registerSessionRoutes(
     if (session.mode === 'codex') {
       const codexQuery = req.query as { context?: string };
       return await readCodexLastResponse(session, codexQuery.context === 'full');
+    }
+
+    // OpenCode / Gemini / Antigravity render their own TUIs and write no Claude
+    // transcript, so the scan below finds nothing and the response viewer renders
+    // permanently empty for them. Segment the terminal buffer instead — the pane
+    // IS the transcript for these CLIs. Codex is already handled above, where a
+    // real rollout file is the better source.
+    if (isExternalCliTranscriptMode(session.mode)) {
+      const externalQuery = req.query as { context?: string };
+      const blocks = parseExternalCliTranscript(session.terminalBuffer, session.mode);
+      return {
+        text: getLastTranscriptResponse(blocks),
+        timestamp: '',
+        hasContext: blocks.length > 0,
+        messages: externalQuery.context === 'full' ? blocks : undefined,
+      };
     }
 
     // Scan ~/.claude/projects/*/ for the transcript file
