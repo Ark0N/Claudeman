@@ -8,11 +8,11 @@
  * @module utils/claude-cli-resolver
  */
 
-import { execSync, execFileSync } from 'node:child_process';
-import { existsSync } from 'node:fs';
-import { delimiter, dirname, join } from 'node:path';
+import { execFileSync } from 'node:child_process';
+import { delimiter, join } from 'node:path';
 import { homedir } from 'node:os';
 import { EXEC_TIMEOUT_MS } from '../config/exec-timeout.js';
+import { createCliExecutableResolver, formatCliNotFoundMessage } from './cli-executable-resolver.js';
 
 /** Common directories where the Claude CLI binary may be installed */
 const CLAUDE_SEARCH_DIRS = [
@@ -23,8 +23,8 @@ const CLAUDE_SEARCH_DIRS = [
   join(homedir(), 'bin'),
 ];
 
-/** Cached directory containing the claude binary (empty string = searched but not found) */
-let _claudeDir: string | null = null;
+const claudeResolver = createCliExecutableResolver({ binary: 'claude', searchDirs: CLAUDE_SEARCH_DIRS });
+const CLAUDE_NOT_FOUND = 'Claude CLI not found. Install it with: curl -fsSL https://claude.ai/install.sh | bash';
 
 /**
  * Returns true if the Claude CLI binary can be located (via `which` or one of
@@ -43,29 +43,11 @@ export function isClaudeAvailable(): boolean {
  * @returns Directory path, or null if not found
  */
 export function findClaudeDir(): string | null {
-  if (_claudeDir !== null) return _claudeDir || null;
+  return claudeResolver.resolve()?.directory ?? null;
+}
 
-  // Try `which` first (respects current PATH)
-  try {
-    const result = execSync('which claude', { encoding: 'utf-8', timeout: EXEC_TIMEOUT_MS }).trim();
-    if (result && existsSync(result)) {
-      _claudeDir = dirname(result);
-      return _claudeDir;
-    }
-  } catch {
-    // Claude not in PATH, will check common locations
-  }
-
-  // Fallback: check common installation directories
-  for (const dir of CLAUDE_SEARCH_DIRS) {
-    if (existsSync(join(dir, 'claude'))) {
-      _claudeDir = dir;
-      return _claudeDir;
-    }
-  }
-
-  _claudeDir = ''; // mark as searched, not found
-  return null;
+export function getClaudeNotFoundMessage(): string {
+  return formatCliNotFoundMessage(CLAUDE_NOT_FOUND, claudeResolver.diagnostics());
 }
 
 /**
@@ -99,7 +81,9 @@ export function getAugmentedPath(): string {
   const currentPath = process.env.PATH || '';
   const claudeDir = findClaudeDir();
 
-  if (claudeDir && !currentPath.split(delimiter).includes(claudeDir)) {
+  if (!claudeDir) return currentPath;
+
+  if (!currentPath.split(delimiter).includes(claudeDir)) {
     _augmentedPath = `${claudeDir}${delimiter}${currentPath}`;
     return _augmentedPath;
   }

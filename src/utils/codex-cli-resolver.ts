@@ -7,11 +7,9 @@
  * @module utils/codex-cli-resolver
  */
 
-import { execSync } from 'node:child_process';
-import { existsSync } from 'node:fs';
-import { dirname, join } from 'node:path';
+import { join } from 'node:path';
 import { homedir } from 'node:os';
-import { EXEC_TIMEOUT_MS } from '../config/exec-timeout.js';
+import { createCliExecutableResolver, formatCliNotFoundMessage } from './cli-executable-resolver.js';
 
 /** Common directories where the Codex CLI binary may be installed */
 const CODEX_SEARCH_DIRS = [
@@ -23,8 +21,8 @@ const CODEX_SEARCH_DIRS = [
   join(homedir(), 'bin'), // User bin
 ];
 
-/** Cached directory containing the codex binary (empty string = searched but not found) */
-let _codexDir: string | null = null;
+const codexResolver = createCliExecutableResolver({ binary: 'codex', searchDirs: CODEX_SEARCH_DIRS });
+const CODEX_NOT_FOUND = 'Codex CLI not found. Install with: npm install -g @openai/codex';
 
 /**
  * Finds the directory containing the `codex` binary.
@@ -34,31 +32,7 @@ let _codexDir: string | null = null;
  * @returns Directory path, or null if not found
  */
 export function resolveCodexDir(): string | null {
-  if (_codexDir !== null) return _codexDir || null;
-
-  // Try `which` first (respects current PATH)
-  try {
-    const result = execSync('which codex', {
-      encoding: 'utf-8',
-      timeout: EXEC_TIMEOUT_MS,
-    }).trim();
-    if (result && existsSync(result)) {
-      _codexDir = dirname(result);
-      return _codexDir;
-    }
-  } catch {
-    // Codex not in PATH, will check common locations
-  }
-
-  for (const dir of CODEX_SEARCH_DIRS) {
-    if (existsSync(join(dir, 'codex'))) {
-      _codexDir = dir;
-      return _codexDir;
-    }
-  }
-
-  _codexDir = ''; // mark as searched, not found
-  return null;
+  return codexResolver.resolve()?.directory ?? null;
 }
 
 /**
@@ -66,4 +40,8 @@ export function resolveCodexDir(): string | null {
  */
 export function isCodexAvailable(): boolean {
   return resolveCodexDir() !== null;
+}
+
+export function getCodexNotFoundMessage(): string {
+  return formatCliNotFoundMessage(CODEX_NOT_FOUND, codexResolver.diagnostics());
 }
