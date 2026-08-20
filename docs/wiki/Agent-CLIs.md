@@ -1,23 +1,29 @@
 # Agent CLIs
 
-Codeman drives seven run modes: six agent CLIs plus a plain shell. This page covers picking
-one, setting it up, and the differences that actually change how you work.
+Codeman drives whatever CLI backends are registered — a plain shell plus a set of
+agent CLIs. That set is **data, not code**: it lives in a central CLI registry
+(`~/.codeman/clis.json`, layered over a shipped stock catalog), not in a hardcoded list
+anywhere in the app. Enabling, disabling, reordering, or adding a CLI is a settings
+change, never a code change. See [CLI Registry](CLI-Registry) for the schema and how to
+add one (e.g. GitHub Copilot CLI, or any future agent CLI).
 
-## The seven modes
+Out of the box the stock catalog ships seven entries:
 
 | Mode                 | CLI                          | Get it                                                                 |
-| -------------------- | ---------------------------- | ---------------------------------------------------------------------- |
-| **Claude Code**      | `claude`                     | [docs.anthropic.com](https://docs.anthropic.com/en/docs/claude-code)   |
-| **OpenCode**         | `opencode`                   | [opencode.ai](https://opencode.ai)                                     |
-| **Codex**            | `codex`                      | [developers.openai.com/codex/cli](https://developers.openai.com/codex/cli) |
-| **Gemini**           | `gemini`                     | [github.com/google-gemini/gemini-cli](https://github.com/google-gemini/gemini-cli) |
-| **Antigravity**      | `agy`                        | [antigravity.google](https://antigravity.google)                       |
-| **Pi**               | `pi`                         | [pi.dev](https://pi.dev)                                               |
-| **Terminal / Shell** | your `$SHELL`                | Already installed.                                                     |
+| -------------------- | ----------------------------- | ------------------------------------------------------------------------ |
+| **Claude Code**      | `claude`                      | [docs.anthropic.com](https://docs.anthropic.com/en/docs/claude-code)     |
+| **OpenCode**         | `opencode`                    | [opencode.ai](https://opencode.ai)                                       |
+| **Codex**            | `codex`                       | [developers.openai.com/codex/cli](https://developers.openai.com/codex/cli) |
+| **Gemini**           | `gemini`                      | [github.com/google-gemini/gemini-cli](https://github.com/google-gemini/gemini-cli) |
+| **Antigravity**      | `agy`                         | [antigravity.google](https://antigravity.google)                         |
+| **Pi**               | `pi`                          | [pi.dev](https://pi.dev)                                                 |
+| **Terminal / Shell** | your `$SHELL`                 | Already installed.                                                       |
 
-Any combination works, including all of them. The run mode is chosen per session from the
-arrow beside the **Run** button, so one case can have a Claude session and a Codex session
-open side by side.
+Any combination works, including all of them, plus anything you add yourself. The run
+mode is chosen per session from the arrow beside the **Run** button (built from
+whichever CLIs are currently enabled), so one case can have a Claude session and a Codex
+session open side by side. App Settings → Agents & CLIs → **Installed CLIs** is where you
+enable, disable, reorder, or add a custom entry without touching a config file by hand.
 
 ## Codeman does not manage your logins
 

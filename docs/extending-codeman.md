@@ -186,6 +186,14 @@ curl -u admin:$PASS -X POST http://127.0.0.1:3000/api/v1/sessions/$ID/input \
   -d '{"input":"run the tests\r","useMux":true}'
 ```
 
+`mode` above is not a fixed enum — it is one of the ids in the CLI registry
+(`GET /api/clis` lists every registered CLI, enabled or not, plus live
+`available`/`path`/`version`/`installHint` per entry). The stock catalog ships
+`claude`, `shell`, `opencode`, `codex`, `gemini`, `antigravity`, and `pi`, but an
+install can add or remove entries through App Settings → Agents & CLIs, so an
+integration that hardcodes that list will miss a custom CLI. See
+[CLI Registry](cli-registry.md).
+
 `POST .../input` also accepts `clientId` (stable per client, max 128 chars) and
 `seq` (monotonic per session). Send both and the server applies each pair
 at-most-once, so retrying after a dropped connection cannot type the prompt

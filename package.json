@@ -12,6 +12,7 @@
   "scripts": {
     "postinstall": "node scripts/postinstall.js",
     "build": "node scripts/build.mjs",
+    "generate:cli-stock-json": "tsx scripts/generate-cli-stock-json.mjs",
     "build:gesture": "node scripts/build-gesture-bundle.mjs",
     "start": "NODE_COMPILE_CACHE=${HOME}/.codeman/compile-cache node dist/index.js",
     "dev": "tsx src/index.ts web",

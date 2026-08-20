@@ -12,6 +12,7 @@
 import { spawn, spawnSync } from 'node:child_process';
 import { fileURLToPath } from 'node:url';
 import { dirname, join } from 'node:path';
+import { readFileSync } from 'node:fs';
 
 const __dirname = dirname(fileURLToPath(import.meta.url));
 const REPO_ROOT = join(__dirname, '..');
@@ -55,9 +56,42 @@ if (args.help) {
   process.exit(0);
 }
 
+// The stock catalog's install-command shape, mirroring config/clis.stock.json
+// (see docs/cli-registry.md) — read directly rather than via tsx/ts-node so this
+// script has no extra runtime dependency. A registry entry with a plain
+// `npm install -g <pkg>` install command joins the shared npm-install ARG
+// automatically; anything else (a curl installer, --ignore-scripts, no npm
+// package at all) stays a documented Dockerfile special case, same as
+// Antigravity and Pi today.
+function cliNpmPackages() {
+  const stockPath = join(REPO_ROOT, 'config', 'clis.stock.json');
+  let entries;
+  try {
+    entries = JSON.parse(readFileSync(stockPath, 'utf8'));
+  } catch (err) {
+    console.warn(`[build-agent-image] could not read ${stockPath} (${err.message}); using the Dockerfile's built-in defaults`);
+    return null;
+  }
+  const packages = entries
+    .filter((e) => e.id !== 'pi') // pi needs --ignore-scripts, handled by its own ARG below
+    .map((e) => e.discovery?.install?.npmPackage)
+    .filter((pkg) => typeof pkg === 'string' && pkg.length > 0);
+  const pi = entries.find((e) => e.id === 'pi')?.discovery?.install?.npmPackage;
+  return { packages, pi };
+}
+
 const engine = resolveEngine(args.engine);
 const buildArgs = ['build', '-f', DOCKERFILE, '-t', args.image];
 if (args.noCache) buildArgs.push('--no-cache');
+
+const cliPkgs = cliNpmPackages();
+if (cliPkgs && cliPkgs.packages.length > 0) {
+  buildArgs.push('--build-arg', `CLI_NPM_PACKAGES=${cliPkgs.packages.join(' ')}`);
+}
+if (cliPkgs && cliPkgs.pi) {
+  buildArgs.push('--build-arg', `CLI_PI_NPM_PACKAGE=${cliPkgs.pi}`);
+}
+
 buildArgs.push(REPO_ROOT);
 
 console.log(`[build-agent-image] ${engine} ${buildArgs.join(' ')}`);

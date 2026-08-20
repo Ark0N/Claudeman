@@ -19,6 +19,7 @@ import {
 import { MAX_EDITABLE_BYTES } from '../config/file-editing.js';
 import { MIN_MATCH_LENGTH, MAX_MATCH_LENGTH } from '../config/agent-wait.js';
 import { enabledClis } from '../config/cli-registry/registry.js';
+import type { SessionMode } from '../types/session.js';
 
 // ========== Path Validation ==========
 
@@ -140,6 +141,29 @@ const ALLOWED_ENV_PREFIXES: string[] = enabledClis().flatMap((entry) => entry.en
  * subscription (#255). Exact match only — CLAUDE_CONFIG_DIR_EXTRA etc. stay rejected.
  */
 const ALLOWED_ENV_KEYS = new Set(enabledClis().flatMap((entry) => entry.env.allowedKeys));
+
+/**
+ * The session `mode`/`agentType` enum, built from the registry rather than a fixed
+ * literal list: `z.enum(registryIds())` per the CLI-registry compatibility design (see
+ * docs/cli-registry.md). A custom CLI added through App Settings → Agents & CLIs (or by
+ * hand-editing ~/.codeman/clis.json) becomes a valid `mode` value the moment it is
+ * enabled, with no schema change. Disabled entries are deliberately excluded — the same
+ * policy as ALLOWED_ENV_PREFIXES above — so a disabled CLI cannot be used to start a new
+ * session even if a stale client still offers it. `shell` is always present (it can be
+ * disabled but never deleted — see registry.ts), so this is never empty at runtime; the
+ * cast is only to satisfy Zod's non-empty-tuple type, which cannot be proven statically
+ * for a value computed at module load.
+ */
+const SESSION_MODE_IDS = enabledClis().map((entry) => entry.id as string);
+// `SessionMode` stays the literal union of stock ids for now (retyping it as a plain
+// string would also collapse RemoteCommandMode/DockerCommandMode, which key off
+// Extract<SessionMode, …> — a larger, separately-scoped change). The cast here is the
+// honest boundary: Zod validates against the LIVE registry (so a custom CLI id really is
+// accepted at runtime), and every downstream reader treats `mode` as an opaque id rather
+// than exhaustively switching on it (test/cli-registry-no-id-branching.test.ts enforces
+// that), so widening what actually flows through is safe even though the static type does
+// not (yet) say so.
+const sessionModeSchema = () => z.enum(SESSION_MODE_IDS as [string, ...string[]]) as unknown as z.ZodType<SessionMode>;
 
 /**
  * Env var keys that are ALWAYS blocked (security-sensitive) — a hard floor no registry
@@ -328,7 +352,7 @@ const parentSessionIdSchema = z.string().max(100).optional();
 
 export const CreateSessionSchema = z.object({
   workingDir: safePathSchema.optional(),
-  mode: z.enum(['claude', 'shell', 'opencode', 'codex', 'gemini', 'antigravity', 'pi']).optional(),
+  mode: sessionModeSchema().optional(),
   name: z.string().max(100).optional(),
   /** Session that spawned this one — see parentSessionIdSchema. */
   parentSessionId: parentSessionIdSchema,
@@ -753,7 +777,7 @@ export const QuickStartSchema = z.object({
    *  a real host dir, so the settings file crosses the bind mount); rejected for
    *  remote cases (the file would be written on the WRONG machine). */
   modelOverride: z.string().max(50).optional(),
-  mode: z.enum(['claude', 'shell', 'opencode', 'codex', 'gemini', 'antigravity', 'pi']).optional(),
+  mode: sessionModeSchema().optional(),
   openCodeConfig: OpenCodeConfigSchema,
   codexConfig: CodexConfigSchema,
   geminiConfig: GeminiConfigSchema,
@@ -1282,7 +1306,7 @@ const noNewlines = (v: string) => !/[\r\n]/.test(v);
 /** Shared field shape for creating/updating a scheduled job. */
 const CronJobBaseSchema = z.object({
   name: z.string().min(1).max(200),
-  agentType: z.enum(['claude', 'shell', 'opencode', 'codex', 'gemini', 'antigravity', 'pi']),
+  agentType: sessionModeSchema(),
   workingDir: safePathSchema,
   launchCommand: z.string().max(2000).refine(noNewlines, 'launchCommand must be a single line').optional(),
   promptMode: z.enum(['inline_text', 'prompt_file_path']),

@@ -26,28 +26,35 @@ RUN apt-get update \
       openssh-client \
  && rm -rf /var/lib/apt/lists/*
 
-# The npm-published agent CLIs. Pinning is left to the rebuild cadence (see
-# docs/docker-cases-plan.md, user-decision 2).
-RUN npm install -g \
-      @anthropic-ai/claude-code \
-      @openai/codex \
-      @google/gemini-cli \
-      opencode-ai \
+# The npm-published agent CLIs. Package list is a build ARG, populated by
+# scripts/build-agent-image.mjs from the live CLI registry (config/cli-registry) —
+# a new registry entry with a plain `npm install -g <pkg>` install command (the
+# common case, e.g. a future GitHub Copilot CLI entry) is picked up here with NO
+# Dockerfile edit. Defaults preserve today's four CLIs for a hand-run
+# `docker build` that skips the wrapper script. Pinning is left to the rebuild
+# cadence (see docs/docker-cases-plan.md, user-decision 2).
+ARG CLI_NPM_PACKAGES="@anthropic-ai/claude-code @openai/codex @google/gemini-cli opencode-ai"
+RUN npm install -g ${CLI_NPM_PACKAGES} \
  && npm cache clean --force
 
-# Antigravity (`agy`) is NOT on npm — Google ships a standalone binary through its
-# own installer, so it needs its own step. `--dir /usr/local/bin` is load-bearing:
-# the installer's default target is `$HOME/.local/bin`, which at build time is
-# root's home and would be unreachable by the `agent` user the container runs as.
+# Antigravity (`agy`) has no npmPackage in the registry — it is NOT on npm, Google
+# ships a standalone binary through its own installer — so it stays a documented
+# Dockerfile special case rather than a generic npm-install line (the sanctioned
+# per-CLI exception; see docs/cli-registry.md). `--dir /usr/local/bin` is
+# load-bearing: the installer's default target is `$HOME/.local/bin`, which at
+# build time is root's home and would be unreachable by the `agent` user the
+# container runs as.
 # ⚠️ This binary is ~190MB on its own; it is the single largest layer in the image.
-RUN curl -fsSL https://antigravity.google/cli/install.sh | bash -s -- --dir /usr/local/bin \
+ARG CLI_ANTIGRAVITY_INSTALL_URL="https://antigravity.google/cli/install.sh"
+RUN curl -fsSL "${CLI_ANTIGRAVITY_INSTALL_URL}" | bash -s -- --dir /usr/local/bin \
  && chmod 755 /usr/local/bin/agy \
  && agy --version
 
 # Pi (pi.dev). Upstream documents --ignore-scripts (pi needs no lifecycle scripts);
 # kept out of the shared npm block above so the flag cannot silently change how the
-# other four CLIs install.
-RUN npm install -g --ignore-scripts @earendil-works/pi-coding-agent \
+# other four CLIs install. Package name is still a build ARG from the registry.
+ARG CLI_PI_NPM_PACKAGE="@earendil-works/pi-coding-agent"
+RUN npm install -g --ignore-scripts ${CLI_PI_NPM_PACKAGE} \
  && npm cache clean --force \
  && pi --version
 

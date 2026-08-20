@@ -81,7 +81,7 @@ CI runs `npm run check:lockfile` on every push/PR, so lockfile drift fails the b
 
 Codeman is a Claude Code session manager with web interface and autonomous Ralph Loop. Spawns Claude CLI via PTY, streams via SSE, supports respawn cycling for 24+ hour autonomous runs.
 
-**Tech Stack**: TypeScript (ES2022/NodeNext, strict mode), Node.js, Fastify, node-pty, xterm.js. Supports Claude Code, OpenCode, Codex (OpenAI), Gemini (Google, enterprise-only since Google's June 2026 consumer cutover), Antigravity (`agy`, Google) and Pi (pi.dev) CLIs via pluggable CLI resolvers (`SessionMode = 'claude' | 'shell' | 'opencode' | 'codex' | 'gemini' | 'antigravity' | 'pi'`).
+**Tech Stack**: TypeScript (ES2022/NodeNext, strict mode), Node.js, Fastify, node-pty, xterm.js. Ships stock support for Claude Code, OpenCode, Codex (OpenAI), Gemini (Google, enterprise-only since Google's June 2026 consumer cutover), Antigravity (`agy`, Google) and Pi (pi.dev), but the set of CLI backends is **data, not code**: every one is a `CliEntry` in the CLI registry (`src/config/cli-registry/`, overrides in `~/.codeman/clis.json`), and `SessionMode` (`src/types/session.ts`) is a string id resolved against it rather than a fixed set of names. Adding, removing, or reconfiguring a CLI — including a custom one, e.g. GitHub Copilot CLI — needs no code change; see [`docs/cli-registry.md`](docs/cli-registry.md).
 
 **TypeScript Strictness** (see `tsconfig.json`): `noUnusedLocals`, `noUnusedParameters`, `noImplicitReturns`, `noImplicitOverride`, `noFallthroughCasesInSwitch`, `allowUnreachableCode: false`, `allowUnusedLabels: false`.
 

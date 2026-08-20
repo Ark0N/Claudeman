@@ -76,62 +76,40 @@ TS_NEED_ROOT="0"
 # explicit caller override so contributors can still fetch the browser if needed.
 export PUPPETEER_SKIP_DOWNLOAD="${PUPPETEER_SKIP_DOWNLOAD:-1}"
 
-# Claude CLI search paths (from src/utils/claude-cli-resolver.ts)
-CLAUDE_SEARCH_PATHS=(
-    "$HOME/.local/bin/claude"
-    "$HOME/.claude/local/claude"
-    "/usr/local/bin/claude"
-    "$HOME/.npm-global/bin/claude"
-    "$HOME/bin/claude"
-)
+# ============================================================================
+# CLI registry (config/clis.stock.json)
+# ============================================================================
+#
+# Codeman's set of supported CLIs is data, not code (see docs/cli-registry.md):
+# src/config/cli-registry/stock.ts is the single source of truth, and
+# config/clis.stock.json is a generated, install.sh-only export of it (id,
+# label, and discovery: binaries/searchDirs/install commands — never
+# launch/capabilities, which are server-side concerns). Regenerate it with
+# `npm run generate:cli-stock-json`; test/cli-stock-json-sync.test.ts pins the
+# two in sync.
+#
+# This script runs standalone via `curl | bash`, BEFORE the repo is cloned or
+# built, so it cannot import TypeScript (or even reach a git checkout) to
+# learn what CLIs exist. load_cli_registry() (defined further down, after
+# download_to_stdout) instead fetches that JSON export directly from
+# raw.githubusercontent.com and parses it with `node -e` (Node.js is already
+# installed by the time it runs — see the ensure_node call ordering).
+CLI_IDS=()
+CLI_LABELS=()
+CLI_BINARIES=()       # per id: comma-separated binary names, first hit wins
+CLI_SEARCH_PATHS=()   # per id: comma-separated search directories (~ expands to $HOME)
+CLI_INSTALL_HINTS=()  # per id: platform-appropriate "install with: ..." command, or ""
 
-# OpenCode CLI search paths (from src/utils/opencode-cli-resolver.ts)
-OPENCODE_SEARCH_PATHS=(
-    "$HOME/.opencode/bin/opencode"
-    "$HOME/.local/bin/opencode"
-    "/usr/local/bin/opencode"
-    "$HOME/go/bin/opencode"
-    "$HOME/.bun/bin/opencode"
-    "$HOME/.npm-global/bin/opencode"
-    "$HOME/bin/opencode"
-)
-
-# Codex CLI search paths (from src/utils/codex-cli-resolver.ts)
-CODEX_SEARCH_PATHS=(
-    "$HOME/.codex/bin/codex"
-    "$HOME/.local/bin/codex"
-    "/usr/local/bin/codex"
-    "$HOME/.bun/bin/codex"
-    "$HOME/.npm-global/bin/codex"
-    "$HOME/bin/codex"
-)
-
-# Gemini CLI search paths (from src/utils/gemini-cli-resolver.ts)
-GEMINI_SEARCH_PATHS=(
-    "$HOME/.gemini/bin/gemini"
-    "$HOME/.local/bin/gemini"
-    "/usr/local/bin/gemini"
-    "$HOME/.bun/bin/gemini"
-    "$HOME/.npm-global/bin/gemini"
-    "$HOME/bin/gemini"
-)
-
-# Pi CLI search paths (from src/utils/pi-cli-resolver.ts)
-PI_SEARCH_PATHS=(
-    "$HOME/.local/bin/pi"
-    "/usr/local/bin/pi"
-    "$HOME/.bun/bin/pi"
-    "$HOME/.npm-global/bin/pi"
-    "$HOME/bin/pi"
-)
-
-# Antigravity CLI search paths (from src/utils/antigravity-cli-resolver.ts)
-ANTIGRAVITY_SEARCH_PATHS=(
-    "$HOME/.local/bin/agy"
-    "$HOME/.antigravity/bin/agy"
-    "/usr/local/bin/agy"
-    "$HOME/bin/agy"
-)
+# Minimal built-in fallback used only if the registry file cannot be fetched or
+# fails to parse (offline install, or a custom CODEMAN_REPO_URL/CODEMAN_BRANCH
+# pointing somewhere with no matching raw.githubusercontent.com URL). Kept
+# intentionally small — Claude Code and OpenCode are the only two the
+# interactive installer offers to install directly; every other CLI just loses
+# its "found at ..." detection until the registry is reachable again.
+CLI_REGISTRY_FALLBACK_JSON='[
+  {"id":"claude","label":"Claude","discovery":{"binaries":["claude"],"searchDirs":["~/.local/bin","~/.claude/local","/usr/local/bin","~/.npm-global/bin","~/bin"],"install":{"command":{"linux":"curl -fsSL https://claude.ai/install.sh | bash","darwin":"curl -fsSL https://claude.ai/install.sh | bash"}}}},
+  {"id":"opencode","label":"OpenCode","discovery":{"binaries":["opencode"],"searchDirs":["~/.opencode/bin","~/.local/bin","/usr/local/bin","~/go/bin","~/.bun/bin","~/.npm-global/bin","~/bin"],"install":{"command":{"linux":"curl -fsSL https://opencode.ai/install | bash","darwin":"curl -fsSL https://opencode.ai/install | bash"}}}}
+]'
 
 # ============================================================================
 # Color Output
@@ -366,6 +344,60 @@ download_to_stdout() {
     fi
 }
 
+# Only github.com repo URLs (https:// or git@) have a matching
+# raw.githubusercontent.com host; a custom CODEMAN_REPO_URL pointing
+# elsewhere has no known raw-file mirror and falls back to the embedded catalog.
+cli_registry_raw_url() {
+    local url="$REPO_URL"
+    if [[ "$url" =~ ^https://github\.com/([^/]+)/([^/.]+)(\.git)?$ ]]; then
+        echo "https://raw.githubusercontent.com/${BASH_REMATCH[1]}/${BASH_REMATCH[2]}/${BRANCH}/config/clis.stock.json"
+    elif [[ "$url" =~ ^git@github\.com:([^/]+)/([^/.]+)(\.git)?$ ]]; then
+        echo "https://raw.githubusercontent.com/${BASH_REMATCH[1]}/${BASH_REMATCH[2]}/${BRANCH}/config/clis.stock.json"
+    fi
+}
+
+# Fetches config/clis.stock.json and populates CLI_IDS/CLI_LABELS/CLI_BINARIES/
+# CLI_SEARCH_PATHS/CLI_INSTALL_HINTS (see the declarations above for the shape).
+# Never fatal: a fetch or parse failure warns and falls back to
+# CLI_REGISTRY_FALLBACK_JSON, so a network hiccup degrades to "detect fewer
+# CLIs" rather than aborting the whole install. Requires `node` on PATH, so
+# callers must run this only after Node.js is confirmed installed.
+load_cli_registry() {
+    local json="" raw_url
+    raw_url=$(cli_registry_raw_url)
+    if [[ -n "$raw_url" ]]; then
+        json=$(download_to_stdout "$raw_url" 2>/dev/null || true)
+    fi
+    if [[ -z "$json" ]] || ! echo "$json" | node -e 'JSON.parse(require("fs").readFileSync(0,"utf8"))' &>/dev/null; then
+        if [[ -n "$json" ]]; then
+            warn "Could not fetch the CLI registry (config/clis.stock.json); using a built-in fallback (Claude Code + OpenCode detection only)."
+        fi
+        json="$CLI_REGISTRY_FALLBACK_JSON"
+    fi
+
+    while IFS=$'\t' read -r id label bins dirs cmd; do
+        [[ -z "$id" ]] && continue
+        CLI_IDS+=("$id")
+        CLI_LABELS+=("$label")
+        CLI_BINARIES+=("$bins")
+        CLI_SEARCH_PATHS+=("$dirs")
+        CLI_INSTALL_HINTS+=("$cmd")
+    done < <(echo "$json" | node -e '
+        const os = require("os");
+        const platform = os.platform() === "darwin" ? "darwin" : "linux";
+        let data;
+        try { data = JSON.parse(require("fs").readFileSync(0, "utf8")); } catch { process.exit(0); }
+        for (const entry of data) {
+            const d = entry.discovery || {};
+            const bins = (d.binaries || []).join(",");
+            if (!bins) continue; // e.g. "shell" — nothing to detect
+            const dirs = (d.searchDirs || []).join(",");
+            const cmd = (d.install && d.install.command && d.install.command[platform]) || "";
+            console.log([entry.id, entry.label, bins, dirs, cmd].join("\t"));
+        }
+    ' 2>/dev/null)
+}
+
 # ============================================================================
 # Dependency Checks
 # ============================================================================
@@ -396,177 +428,83 @@ check_tmux() {
     command -v tmux &>/dev/null
 }
 
-check_claude() {
-    # Check PATH first
-    if command -v claude &>/dev/null; then
-        return 0
-    fi
-
-    # Check known install locations
-    for path in "${CLAUDE_SEARCH_PATHS[@]}"; do
-        if [[ -x "$path" ]]; then
+# Generic replacement for the old per-CLI check_claude/check_opencode/check_codex/
+# check_gemini/check_antigravity/check_pi pairs: driven entirely by the CLI_IDS/
+# CLI_BINARIES/CLI_SEARCH_PATHS arrays populated by load_cli_registry() from
+# config/clis.stock.json, so adding a CLI to the registry needs no install.sh change.
+#
+# `pi` deserves the same caveat the old check_pi() carried: it is a short, generic
+# name (Raspberry Pi tooling, personal scripts), so the server-side resolver
+# additionally probes `pi --version`. Detection here only feeds the "you have no
+# AI CLI" hint, so a plain executable test is enough.
+cli_index() {
+    local id="$1" i
+    for i in "${!CLI_IDS[@]}"; do
+        if [[ "${CLI_IDS[$i]}" == "$id" ]]; then
+            echo "$i"
             return 0
         fi
+    done
+    return 1
+}
+
+check_cli() {
+    local id="$1"
+    local idx bin dir
+    idx=$(cli_index "$id") || return 1
+
+    IFS=',' read -ra bins <<< "${CLI_BINARIES[$idx]}"
+    for bin in "${bins[@]}"; do
+        command -v "$bin" &>/dev/null && return 0
+    done
+
+    IFS=',' read -ra dirs <<< "${CLI_SEARCH_PATHS[$idx]}"
+    for dir in "${dirs[@]}"; do
+        dir="${dir/#\~/$HOME}"
+        for bin in "${bins[@]}"; do
+            [[ -x "$dir/$bin" ]] && return 0
+        done
     done
 
     return 1
 }
 
-get_claude_path() {
-    if command -v claude &>/dev/null; then
-        command -v claude
-        return
-    fi
+get_cli_path() {
+    local id="$1"
+    local idx bin dir
+    idx=$(cli_index "$id") || return 1
 
-    for path in "${CLAUDE_SEARCH_PATHS[@]}"; do
-        if [[ -x "$path" ]]; then
-            echo "$path"
-            return
-        fi
-    done
-}
-
-check_opencode() {
-    if command -v opencode &>/dev/null; then
-        return 0
-    fi
-
-    for path in "${OPENCODE_SEARCH_PATHS[@]}"; do
-        if [[ -x "$path" ]]; then
+    IFS=',' read -ra bins <<< "${CLI_BINARIES[$idx]}"
+    for bin in "${bins[@]}"; do
+        if command -v "$bin" &>/dev/null; then
+            command -v "$bin"
             return 0
         fi
     done
 
+    IFS=',' read -ra dirs <<< "${CLI_SEARCH_PATHS[$idx]}"
+    for dir in "${dirs[@]}"; do
+        dir="${dir/#\~/$HOME}"
+        for bin in "${bins[@]}"; do
+            if [[ -x "$dir/$bin" ]]; then
+                echo "$dir/$bin"
+                return 0
+            fi
+        done
+    done
     return 1
 }
 
-get_opencode_path() {
-    if command -v opencode &>/dev/null; then
-        command -v opencode
-        return
-    fi
-
-    for path in "${OPENCODE_SEARCH_PATHS[@]}"; do
-        if [[ -x "$path" ]]; then
-            echo "$path"
-            return
-        fi
-    done
+cli_label() {
+    local idx
+    idx=$(cli_index "$1") || { echo "$1"; return 0; }
+    echo "${CLI_LABELS[$idx]}"
 }
 
-check_codex() {
-    if command -v codex &>/dev/null; then
-        return 0
-    fi
-
-    for path in "${CODEX_SEARCH_PATHS[@]}"; do
-        if [[ -x "$path" ]]; then
-            return 0
-        fi
-    done
-
-    return 1
-}
-
-get_codex_path() {
-    if command -v codex &>/dev/null; then
-        command -v codex
-        return
-    fi
-
-    for path in "${CODEX_SEARCH_PATHS[@]}"; do
-        if [[ -x "$path" ]]; then
-            echo "$path"
-            return
-        fi
-    done
-}
-
-check_gemini() {
-    if command -v gemini &>/dev/null; then
-        return 0
-    fi
-
-    for path in "${GEMINI_SEARCH_PATHS[@]}"; do
-        if [[ -x "$path" ]]; then
-            return 0
-        fi
-    done
-
-    return 1
-}
-
-get_gemini_path() {
-    if command -v gemini &>/dev/null; then
-        command -v gemini
-        return
-    fi
-
-    for path in "${GEMINI_SEARCH_PATHS[@]}"; do
-        if [[ -x "$path" ]]; then
-            echo "$path"
-            return
-        fi
-    done
-}
-
-check_antigravity() {
-    if command -v agy &>/dev/null; then
-        return 0
-    fi
-
-    for path in "${ANTIGRAVITY_SEARCH_PATHS[@]}"; do
-        if [[ -x "$path" ]]; then
-            return 0
-        fi
-    done
-
-    return 1
-}
-
-get_antigravity_path() {
-    if command -v agy &>/dev/null; then
-        command -v agy
-        return
-    fi
-
-    for path in "${ANTIGRAVITY_SEARCH_PATHS[@]}"; do
-        if [[ -x "$path" ]]; then
-            echo "$path"
-            return
-        fi
-    done
-}
-
-# `pi` is a short, generic name (Raspberry Pi tooling, personal scripts), so the
-# server-side resolver additionally probes `pi --version`. Detection here only feeds
-# the "you have no AI CLI" hint, so a plain executable test is enough.
-check_pi() {
-    if command -v pi &>/dev/null; then
-        return 0
-    fi
-
-    for path in "${PI_SEARCH_PATHS[@]}"; do
-        if [[ -x "$path" ]]; then
-            return 0
-        fi
-    done
-
-    return 1
-}
-
-get_pi_path() {
-    if command -v pi &>/dev/null; then
-        command -v pi
-        return
-    fi
-
-    for path in "${PI_SEARCH_PATHS[@]}"; do
-        if [[ -x "$path" ]]; then
-            echo "$path"
-            return
-        fi
-    done
+cli_install_hint() {
+    local idx
+    idx=$(cli_index "$1") || { echo ""; return 0; }
+    echo "${CLI_INSTALL_HINTS[$idx]}"
 }
 
 check_cloudflared() {
@@ -2069,52 +2007,40 @@ main() {
         fi
     fi
 
-    # AI CLI (Codeman drives one of: Claude Code, OpenCode, Codex, Gemini, Antigravity, Pi)
-    local has_claude=false
-    local has_opencode=false
-    local has_codex=false
-    local has_gemini=false
-    local has_antigravity=false
-    local has_pi=false
+    # AI CLI — Codeman drives whichever CLI backend a session uses; the full,
+    # user-extensible set lives in the registry (config/clis.stock.json /
+    # docs/cli-registry.md), never hardcoded here. load_cli_registry() needs
+    # `node`, confirmed installed above.
+    load_cli_registry
+    declare -A has_cli=()
+    local id any_cli_found="false" cli_list_human=""
 
     info "Checking AI CLI tools..."
-    if check_claude; then
-        has_claude=true
-        success "Claude Code found at $(get_claude_path)"
-    fi
-    if check_opencode; then
-        has_opencode=true
-        success "OpenCode found at $(get_opencode_path)"
-    fi
-    if check_codex; then
-        has_codex=true
-        success "Codex found at $(get_codex_path)"
-    fi
-    if check_gemini; then
-        has_gemini=true
-        success "Gemini CLI found at $(get_gemini_path)"
-    fi
-    if check_antigravity; then
-        has_antigravity=true
-        success "Antigravity CLI found at $(get_antigravity_path)"
-    fi
-    if check_pi; then
-        has_pi=true
-        success "Pi CLI found at $(get_pi_path)"
-    fi
+    for id in "${CLI_IDS[@]}"; do
+        if check_cli "$id"; then
+            has_cli[$id]="true"
+            any_cli_found="true"
+            success "$(cli_label "$id") found at $(get_cli_path "$id")"
+        fi
+        cli_list_human+="$(cli_label "$id"), "
+    done
+    cli_list_human="${cli_list_human%, }"
 
-    if [[ "$has_claude" == "false" && "$has_opencode" == "false" && "$has_codex" == "false" && "$has_gemini" == "false" && "$has_antigravity" == "false" && "$has_pi" == "false" ]]; then
+    if [[ "$any_cli_found" == "false" ]]; then
         echo ""
-        warn "No AI CLI found. Codeman needs at least one: Claude Code, OpenCode, Codex, Antigravity, Gemini, or Pi."
+        warn "No AI CLI found. Codeman needs at least one: $cli_list_human."
         headless_guard "install an AI CLI (curl | bash from its vendor)"
         echo ""
         echo -e "  ${BOLD}Which AI CLI would you like to install?${NC}"
         echo -e "    ${CYAN}1)${NC} Claude Code  (Anthropic)"
         echo -e "    ${CYAN}2)${NC} OpenCode     (open-source)"
         echo -e "    ${CYAN}3)${NC} Both"
-        echo -e "    ${CYAN}4)${NC} Skip         (I'll install one myself, e.g. Codex, Antigravity or Pi)"
+        echo -e "    ${CYAN}4)${NC} Skip         (I'll install one myself — see the list below)"
         echo ""
 
+        # Only Claude Code and OpenCode get a first-class interactive installer
+        # here (a well-known, unattended `curl | bash` one-liner each); every
+        # other registry entry is a hint only, shown below on Skip.
         local cli_choice=""
         if [[ "$NONINTERACTIVE" == "1" ]] || ! has_tty; then
             # Explicit automation opt-in: default to Claude Code
@@ -2135,9 +2061,9 @@ main() {
             info "Installing Claude Code CLI..."
             download_to_stdout https://claude.ai/install.sh | bash
             hash -r 2>/dev/null || true
-            if check_claude; then
-                has_claude=true
-                success "Claude Code installed at $(get_claude_path)"
+            if check_cli claude; then
+                has_cli[claude]="true"
+                success "Claude Code installed at $(get_cli_path claude)"
             else
                 warn "Claude Code installation failed."
             fi
@@ -2147,9 +2073,9 @@ main() {
             info "Installing OpenCode CLI..."
             download_to_stdout https://opencode.ai/install | bash
             hash -r 2>/dev/null || true
-            if check_opencode; then
-                has_opencode=true
-                success "OpenCode installed at $(get_opencode_path)"
+            if check_cli opencode; then
+                has_cli[opencode]="true"
+                success "OpenCode installed at $(get_cli_path opencode)"
             else
                 warn "OpenCode installation failed."
             fi
@@ -2157,10 +2083,13 @@ main() {
 
         if [[ "$cli_choice" == "4" ]]; then
             warn "Skipping AI CLI install. Codeman will run, but sessions need a CLI to drive."
-            info "Install one later, e.g.: npm install -g @openai/codex                          (Codex)"
-            info "                    or: curl -fsSL https://antigravity.google/cli/install.sh | bash  (Antigravity)"
-            info "                    or: npm install -g --ignore-scripts @earendil-works/pi-coding-agent   (Pi)"
-        elif [[ "$has_claude" == "false" ]] && [[ "$has_opencode" == "false" ]]; then
+            for id in "${CLI_IDS[@]}"; do
+                [[ "$id" == "claude" || "$id" == "opencode" ]] && continue
+                local hint
+                hint=$(cli_install_hint "$id")
+                [[ -n "$hint" ]] && info "Install one later, e.g.: $hint   ($(cli_label "$id"))"
+            done
+        elif [[ "${has_cli[claude]:-false}" == "false" ]] && [[ "${has_cli[opencode]:-false}" == "false" ]]; then
             die "The selected AI CLI failed to install. Install one manually and re-run the installer."
         fi
     fi
@@ -2459,13 +2388,17 @@ main() {
     echo -e "    https://github.com/Ark0N/Codeman"
     echo ""
 
-    if ! check_claude && ! check_opencode && ! check_codex && ! check_gemini && ! check_antigravity && ! check_pi; then
+    local any_cli_installed="false"
+    for id in "${CLI_IDS[@]}"; do
+        check_cli "$id" && any_cli_installed="true"
+    done
+    if [[ "$any_cli_installed" == "false" ]]; then
         echo -e "  ${YELLOW}${BOLD}Reminder:${NC} Install at least one AI CLI to start using Codeman:"
-        echo -e "    ${CYAN}curl -fsSL https://claude.ai/install.sh | bash${NC}                # Claude Code"
-        echo -e "    ${CYAN}curl -fsSL https://opencode.ai/install | bash${NC}                 # OpenCode"
-        echo -e "    ${CYAN}npm install -g @openai/codex${NC}                                  # Codex"
-        echo -e "    ${CYAN}curl -fsSL https://antigravity.google/cli/install.sh | bash${NC}   # Antigravity"
-        echo -e "    ${CYAN}npm install -g --ignore-scripts @earendil-works/pi-coding-agent${NC}  # Pi"
+        for id in "${CLI_IDS[@]}"; do
+            local hint
+            hint=$(cli_install_hint "$id")
+            [[ -n "$hint" ]] && echo -e "    ${CYAN}${hint}${NC}  # $(cli_label "$id")"
+        done
         echo ""
     fi
 
@@ -2499,6 +2432,15 @@ update() {
         die "Codeman is not installed at $INSTALL_DIR. Run the installer first."
     fi
 
+    # The CLI registry (~/.codeman/clis.json) lives OUTSIDE $INSTALL_DIR
+    # (which is $HOME/.codeman/app, a git checkout) at $HOME/.codeman directly,
+    # so this function's git reset/npm install/npm run build below can never
+    # touch it. That is what makes "install.sh preserves it across updates"
+    # true by construction rather than by an explicit backup step here — there
+    # is exactly one writer (the app itself, via src/config/cli-registry/registry.ts),
+    # and this script is not it.
+    local cli_registry_file="$HOME/.codeman/clis.json"
+
     info "Updating Codeman..."
     cd "$INSTALL_DIR"
     git remote set-url origin "$REPO_URL" 2>/dev/null || true
@@ -2523,6 +2465,9 @@ update() {
     npm run build --quiet 2>/dev/null || npm run build
     date -u +%Y-%m-%dT%H:%M:%SZ > "$INSTALL_DIR/.install-complete"
     success "Updated to $(node -e "console.log(require('./package.json').version)")"
+    if [[ -f "$cli_registry_file" ]]; then
+        success "Your CLI registry customizations ($cli_registry_file) were preserved."
+    fi
     echo ""
 
     # Auto-restart service if running, otherwise tell the user

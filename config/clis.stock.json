@@ -1,0 +1,150 @@
+[
+  {
+    "id": "claude",
+    "label": "Claude",
+    "stock": true,
+    "discovery": {
+      "binaries": ["claude"],
+      "searchDirs": ["~/.local/bin", "~/.claude/local", "/usr/local/bin", "~/.npm-global/bin", "~/bin"],
+      "version": {
+        "arg": "--version",
+        "regex": "(\\d+\\.\\d+\\.\\d+)",
+        "retryOnTransientFailure": true
+      },
+      "install": {
+        "command": {
+          "linux": "curl -fsSL https://claude.ai/install.sh | bash",
+          "darwin": "curl -fsSL https://claude.ai/install.sh | bash",
+          "wsl": "curl -fsSL https://claude.ai/install.sh | bash"
+        },
+        "npmPackage": "@anthropic-ai/claude-code",
+        "docsUrl": "https://docs.claude.com/claude-code"
+      }
+    }
+  },
+  {
+    "id": "shell",
+    "label": "Shell",
+    "stock": true,
+    "discovery": {
+      "binaries": [],
+      "searchDirs": [],
+      "install": {
+        "command": {}
+      }
+    }
+  },
+  {
+    "id": "opencode",
+    "label": "OpenCode",
+    "stock": true,
+    "discovery": {
+      "binaries": ["opencode"],
+      "searchDirs": [
+        "~/.opencode/bin",
+        "~/.local/bin",
+        "/usr/local/bin",
+        "~/go/bin",
+        "~/.bun/bin",
+        "~/.npm-global/bin",
+        "~/bin"
+      ],
+      "version": {
+        "arg": "--version",
+        "regex": "(\\d+\\.\\d+\\.\\d+)"
+      },
+      "install": {
+        "command": {
+          "linux": "curl -fsSL https://opencode.ai/install | bash",
+          "darwin": "curl -fsSL https://opencode.ai/install | bash"
+        },
+        "npmPackage": "opencode-ai",
+        "docsUrl": "https://opencode.ai/docs"
+      }
+    }
+  },
+  {
+    "id": "codex",
+    "label": "Codex",
+    "stock": true,
+    "discovery": {
+      "binaries": ["codex"],
+      "searchDirs": ["~/.codex/bin", "~/.local/bin", "/usr/local/bin", "~/.bun/bin", "~/.npm-global/bin", "~/bin"],
+      "version": {
+        "arg": "--version",
+        "regex": "(\\d+\\.\\d+\\.\\d+)"
+      },
+      "install": {
+        "command": {
+          "linux": "npm install -g @openai/codex",
+          "darwin": "npm install -g @openai/codex"
+        },
+        "npmPackage": "@openai/codex",
+        "docsUrl": "https://developers.openai.com/codex/cli"
+      }
+    }
+  },
+  {
+    "id": "gemini",
+    "label": "Gemini",
+    "stock": true,
+    "discovery": {
+      "binaries": ["gemini"],
+      "searchDirs": ["~/.gemini/bin", "~/.local/bin", "/usr/local/bin", "~/.bun/bin", "~/.npm-global/bin", "~/bin"],
+      "version": {
+        "arg": "--version",
+        "regex": "(\\d+\\.\\d+\\.\\d+)"
+      },
+      "install": {
+        "command": {
+          "linux": "npm install -g @google/gemini-cli",
+          "darwin": "npm install -g @google/gemini-cli"
+        },
+        "npmPackage": "@google/gemini-cli",
+        "docsUrl": "https://github.com/google-gemini/gemini-cli"
+      }
+    }
+  },
+  {
+    "id": "antigravity",
+    "label": "Antigravity",
+    "stock": true,
+    "discovery": {
+      "binaries": ["agy"],
+      "searchDirs": ["~/.local/bin", "~/.antigravity/bin", "/usr/local/bin", "~/bin"],
+      "version": {
+        "arg": "--version",
+        "regex": "(\\d+\\.\\d+\\.\\d+)"
+      },
+      "install": {
+        "command": {
+          "linux": "curl -fsSL https://antigravity.google/cli/install.sh | bash",
+          "darwin": "curl -fsSL https://antigravity.google/cli/install.sh | bash"
+        },
+        "docsUrl": "https://antigravity.google/cli"
+      }
+    }
+  },
+  {
+    "id": "pi",
+    "label": "Pi",
+    "stock": true,
+    "discovery": {
+      "binaries": ["pi"],
+      "searchDirs": ["~/.local/bin", "/usr/local/bin", "~/.bun/bin", "~/.npm-global/bin", "~/bin"],
+      "version": {
+        "arg": "--version",
+        "regex": "(?:^|\\s)(\\d+\\.\\d+\\.\\d+)",
+        "requireVersionMatch": true
+      },
+      "install": {
+        "command": {
+          "linux": "npm install -g --ignore-scripts @earendil-works/pi-coding-agent",
+          "darwin": "npm install -g --ignore-scripts @earendil-works/pi-coding-agent"
+        },
+        "npmPackage": "@earendil-works/pi-coding-agent",
+        "docsUrl": "https://pi.dev"
+      }
+    }
+  }
+]
