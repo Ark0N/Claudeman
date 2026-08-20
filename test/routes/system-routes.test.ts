@@ -102,7 +102,7 @@ vi.mock('../../src/utils/cli-resolver.js', async (importOriginal) => {
 });
 
 import fs from 'node:fs/promises';
-import { existsSync, readdirSync } from 'node:fs';
+import { existsSync, mkdirSync, readdirSync } from 'node:fs';
 import { subagentWatcher } from '../../src/subagent-watcher.js';
 import { getLifecycleLog } from '../../src/session-lifecycle-log.js';
 import { isOpenCodeAvailable, resolveOpenCodeDir } from '../../src/utils/opencode-cli-resolver.js';
@@ -114,6 +114,7 @@ import { resolveCliBinDir, resolveCliVersion } from '../../src/utils/cli-resolve
 const mockedReadFile = vi.mocked(fs.readFile);
 const mockedWriteFile = vi.mocked(fs.writeFile);
 const mockedExistsSync = vi.mocked(existsSync);
+const mockedMkdirSync = vi.mocked(mkdirSync);
 const mockedReaddirSync = vi.mocked(readdirSync);
 const mockedSubagentWatcher = vi.mocked(subagentWatcher);
 const mockedGetLifecycleLog = vi.mocked(getLifecycleLog);
@@ -959,6 +960,162 @@ describe('system-routes', () => {
       expect(body.data.path).toBeNull();
     });
   });
+
+  // ========== CLI registry writes (App Settings → Agents & CLIs) ==========
+
+  // Unlike every other handler in this file, the CLI registry writer does REAL disk IO
+  // (~/.codeman/clis.json under the per-test temp HOME from test/setup.ts) rather than
+  // going through a mocked store — the top-of-file `existsSync`/`mkdirSync` mocks
+  // (`existsSync` always `true`, `mkdirSync` a no-op) exist for every OTHER route's
+  // benefit and would otherwise make the registry's own read-modify-write believe the
+  // file exists while never actually creating its parent directory. Delegate to the REAL
+  // implementations for this one block, restored by the outer per-test `vi.clearAllMocks()`
+  // + default re-application in the top-level `beforeEach` once this block's tests finish.
+  describe('CLI registry writes', () => {
+    beforeEach(async () => {
+      const actualFs = await vi.importActual<typeof import('node:fs')>('node:fs');
+      mockedExistsSync.mockImplementation(actualFs.existsSync);
+      mockedMkdirSync.mockImplementation(actualFs.mkdirSync as typeof mkdirSync);
+    });
+
+    describe('PUT /api/clis/:id/enabled', () => {
+      it('disables a stock CLI and returns the resolved list reflecting the change', async () => {
+        const res = await harness.app.inject({
+          method: 'PUT',
+          url: '/api/clis/gemini/enabled',
+          payload: { enabled: false },
+        });
+        expect(res.statusCode).toBe(200);
+        const body = JSON.parse(res.body);
+        expect(body.success).toBe(true);
+        const gemini = body.data.entries.find((c: { id: string }) => c.id === 'gemini');
+        expect(gemini.enabled).toBe(false);
+      });
+
+      it('400s for an unknown id', async () => {
+        const res = await harness.app.inject({
+          method: 'PUT',
+          url: '/api/clis/not-a-real-cli/enabled',
+          payload: { enabled: false },
+        });
+        expect(res.statusCode).toBe(400);
+        expect(JSON.parse(res.body).success).toBe(false);
+      });
+
+      it('400s on a malformed body', async () => {
+        const res = await harness.app.inject({
+          method: 'PUT',
+          url: '/api/clis/gemini/enabled',
+          payload: { enabled: 'not-a-boolean' },
+        });
+        expect(res.statusCode).toBe(400);
+      });
+    });
+
+    describe('PUT /api/clis/order', () => {
+      it('reorders the given ids and returns the resolved list in the new order', async () => {
+        const res = await harness.app.inject({
+          method: 'PUT',
+          url: '/api/clis/order',
+          payload: { order: ['pi', 'claude', 'shell'] },
+        });
+        expect(res.statusCode).toBe(200);
+        const body = JSON.parse(res.body);
+        const byId = new Map(body.data.entries.map((c: { id: string; order: number }) => [c.id, c.order]));
+        expect(byId.get('pi')).toBeLessThan(byId.get('claude') as number);
+        expect(byId.get('claude')).toBeLessThan(byId.get('shell') as number);
+      });
+    });
+
+    describe('POST /api/clis/:id and DELETE /api/clis/:id', () => {
+      const CUSTOM_CLI = {
+        label: 'Copilot',
+        shortBadge: 'GH',
+        accent: '#24292f',
+        enabled: true,
+        order: 60,
+        kind: 'agent',
+        discovery: {
+          binaries: ['copilot'],
+          searchDirs: ['~/.local/bin'],
+          install: { command: { linux: 'npm install -g @githubnext/github-copilot-cli' } },
+        },
+        launch: { params: {}, variants: [{ id: 'default', args: [{ lit: 'copilot' }] }] },
+        env: {
+          exports: [],
+          unset: [],
+          tmuxSetenvKeys: [],
+          dockerExecEnvNames: [],
+          allowedPrefixes: ['COPILOT_'],
+          allowedKeys: [],
+        },
+        capabilities: {
+          external: true,
+          requiresMux: true,
+          hooks: false,
+          transcript: 'none',
+          altScreen: 'strip-mux-only',
+          echo: { policy: 'buffer', anchor: { kind: 'cursor' } },
+          wheelForward: { mode: 'never' },
+          keyboardAccessory: 'agent',
+          privilegedCommandGate: false,
+          startMode: 'interactive',
+          stripInkBloat: true,
+          ralph: false,
+          respawn: false,
+          effort: false,
+          agentSkillInjection: false,
+          statusLineTelemetry: false,
+          model: { source: 'none' },
+          privilegedParams: [],
+          gates: {},
+        },
+        overlays: {},
+      };
+
+      it('adds a custom CLI, then removes it', async () => {
+        const addRes = await harness.app.inject({ method: 'POST', url: '/api/clis/copilot', payload: CUSTOM_CLI });
+        expect(addRes.statusCode).toBe(200);
+        const addBody = JSON.parse(addRes.body);
+        expect(addBody.success).toBe(true);
+        const added = addBody.data.entries.find((c: { id: string }) => c.id === 'copilot');
+        expect(added.label).toBe('Copilot');
+        expect(added.stock).toBe(false);
+
+        const listRes = await harness.app.inject({ method: 'GET', url: '/api/clis' });
+        expect(JSON.parse(listRes.body).data.some((c: { id: string }) => c.id === 'copilot')).toBe(true);
+
+        const delRes = await harness.app.inject({ method: 'DELETE', url: '/api/clis/copilot' });
+        expect(delRes.statusCode).toBe(200);
+        const afterDelete = await harness.app.inject({ method: 'GET', url: '/api/clis' });
+        expect(JSON.parse(afterDelete.body).data.some((c: { id: string }) => c.id === 'copilot')).toBe(false);
+      });
+
+      it('400s on a malformed custom CLI body', async () => {
+        const res = await harness.app.inject({
+          method: 'POST',
+          url: '/api/clis/broken',
+          payload: { ...CUSTOM_CLI, accent: 'not-a-colour' },
+        });
+        expect(res.statusCode).toBe(400);
+      });
+
+      it('refuses to add a custom CLI shadowing a stock id', async () => {
+        const res = await harness.app.inject({ method: 'POST', url: '/api/clis/codex', payload: CUSTOM_CLI });
+        expect(res.statusCode).toBe(400);
+      });
+
+      it('refuses to remove a stock CLI', async () => {
+        const res = await harness.app.inject({ method: 'DELETE', url: '/api/clis/pi' });
+        expect(res.statusCode).toBe(400);
+      });
+
+      it('400s removing an id that was never added', async () => {
+        const res = await harness.app.inject({ method: 'DELETE', url: '/api/clis/never-added' });
+        expect(res.statusCode).toBe(400);
+      });
+    });
+  }); // end CLI registry writes
 
   // ========== GET /api/execution/model-config ==========
 

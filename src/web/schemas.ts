@@ -1405,6 +1405,12 @@ export const CpuLimitSchema = z.object({
 /** PUT /api/execution/model-config */
 export const ModelConfigUpdateSchema = z.record(z.string(), z.unknown());
 
+/** PUT /api/clis/:id/enabled */
+export const CliEnabledUpdateSchema = z.object({ enabled: z.boolean() }).strict();
+
+/** PUT /api/clis/order — the full desired id order, front to back. */
+export const CliOrderUpdateSchema = z.object({ order: z.array(z.string().min(1).max(24)).min(1).max(64) }).strict();
+
 /** PUT /api/subagent-window-states */
 export const SubagentWindowStatesSchema = z
   .object({

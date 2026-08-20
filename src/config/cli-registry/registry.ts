@@ -215,6 +215,110 @@ export function cliIds(): string[] {
   return listClis().map((e) => e.id as string);
 }
 
+// ---------------------------------------------------------------------------
+// Writes — settings-UI mutations (App Settings → Agents & CLIs)
+// ---------------------------------------------------------------------------
+
+export interface CliUpdateResult {
+  success: boolean;
+  /** Human-readable problems: a failed stock override, a dropped custom entry, an IO error. */
+  warnings: string[];
+  /** The resolved registry AFTER the mutation, when it succeeded. */
+  entries?: CliEntry[];
+}
+
+const STOCK_IDS = new Set(STOCK_CLIS.map((e) => e.id as string));
+
+/**
+ * Read-modify-write the raw override file: ensures it exists (seeding via
+ * `loadCliRegistry()` if needed), applies `mutate` to a fresh, uncached read, validates the
+ * result, persists, and reloads the shared cache so every other module sees the change on
+ * its next `getCli()`/`listClis()` call. `mutate` throwing aborts the write entirely — the
+ * on-disk file is untouched (the read happens before any write).
+ */
+function withRegistryFile(mutate: (file: CliRegistryFile) => void): CliUpdateResult {
+  const path = filePath();
+  const warnings: string[] = [];
+  loadCliRegistry(); // ensure the file exists and newly-shipped stock ids are seeded
+  const existing = readRegistryFile(path, warnings) ?? {
+    schemaVersion: SCHEMA_VERSION,
+    seededStockIds: STOCK_CLIS.map((e) => e.id as string),
+    clis: {},
+  };
+
+  mutate(existing);
+
+  // resolveRegistry() never throws — a bad entry is dropped/falls back with a warning —
+  // so run it here to surface those as part of THIS mutation's result rather than silently
+  // on the next unrelated read.
+  const validationWarnings: string[] = [];
+  resolveRegistry(STOCK_CLIS, existing, validationWarnings);
+
+  try {
+    writeSeed(path, existing);
+  } catch (err) {
+    return { success: false, warnings: [...warnings, `Failed to persist ${path}: ${(err as Error).message}`] };
+  }
+  reloadCliRegistry();
+  const { entries, warnings: loadWarnings } = loadCliRegistry();
+  return { success: true, warnings: [...warnings, ...validationWarnings, ...loadWarnings], entries };
+}
+
+/** Enable or disable ANY registered CLI (stock or custom) — the settings list's toggle. */
+export function setCliEnabled(id: string, enabled: boolean): CliUpdateResult {
+  if (!getCli(id)) return { success: false, warnings: [`Unknown CLI: ${id}`] };
+  return withRegistryFile((file) => {
+    file.clis[id] = deepMerge((file.clis[id] as object) ?? {}, { enabled });
+  });
+}
+
+/**
+ * Reorder the run-menu/settings-list position of every id in `orderedIds`, in the order
+ * given. Ids not listed keep their current `order`. Multiplied by 10 so a future insertion
+ * between two adjacent entries never requires renumbering the whole list.
+ */
+export function setCliOrder(orderedIds: string[]): CliUpdateResult {
+  return withRegistryFile((file) => {
+    orderedIds.forEach((id, index) => {
+      file.clis[id] = deepMerge((file.clis[id] as object) ?? {}, { order: index * 10 });
+    });
+  });
+}
+
+/**
+ * Add or update a CUSTOM CLI (never a stock one — `stock` is always forced server-side
+ * regardless of what the request claims, same as the loader). `entry` is validated as a
+ * COMPLETE `CliEntry` up front so a malformed request fails with a clear schema error
+ * instead of being silently dropped by `resolveRegistry`'s own fallback on the next read.
+ */
+export function upsertCustomCli(id: string, entry: unknown): CliUpdateResult {
+  if (STOCK_IDS.has(id)) {
+    return {
+      success: false,
+      warnings: [`"${id}" is a stock CLI id — edit it with setCliEnabled or an override, not upsertCustomCli.`],
+    };
+  }
+  const candidate = typeof entry === 'object' && entry !== null ? { ...entry, id, stock: false } : entry;
+  const parsed = CliEntrySchema.safeParse(candidate);
+  if (!parsed.success) {
+    return { success: false, warnings: [parsed.error.message] };
+  }
+  return withRegistryFile((file) => {
+    file.clis[id] = parsed.data;
+  });
+}
+
+/** Remove a custom CLI entirely. Stock entries can only be disabled, never removed. */
+export function removeCustomCli(id: string): CliUpdateResult {
+  if (STOCK_IDS.has(id)) {
+    return { success: false, warnings: [`"${id}" is a stock CLI — disable it instead of removing it.`] };
+  }
+  if (!getCli(id)) return { success: false, warnings: [`Unknown CLI: ${id}`] };
+  return withRegistryFile((file) => {
+    delete file.clis[id];
+  });
+}
+
 /**
  * Build the "CLI not found" error message for a mode with no resolved binary directory,
  * naming the registry's own label and per-platform install command. Shared by

@@ -22,6 +22,8 @@ import {
   ConfigUpdateSchema,
   SettingsUpdateSchema,
   ModelConfigUpdateSchema,
+  CliEnabledUpdateSchema,
+  CliOrderUpdateSchema,
   CpuLimitSchema,
   SubagentWindowStatesSchema,
   SubagentParentMapSchema,
@@ -424,6 +426,59 @@ export function registerSystemRoutes(
         installHint: available ? null : missingCliMessage(entry.id),
       },
     };
+  });
+
+  // Settings-UI mutations (App Settings → Agents & CLIs). Admin-only in multi-user mode —
+  // the registry is process-wide config, not scoped to a single user's workspace, same
+  // posture as the workflow/subagent aggregates above. All four return the FULL resolved
+  // list on success, so the frontend can just replace its in-memory copy rather than
+  // re-deriving what changed.
+  app.put<{ Params: { id: string } }>('/api/clis/:id/enabled', async (req, reply) => {
+    if (isMultiUserMode() && !requireAdmin(req, reply)) return;
+    const { enabled } = parseBody(CliEnabledUpdateSchema, req.body, 'Invalid request body');
+    const { setCliEnabled } = await import('../../config/cli-registry/registry.js');
+    const result = setCliEnabled(req.params.id, enabled);
+    if (!result.success) {
+      return reply.code(400).send(createErrorResponse(ApiErrorCode.INVALID_INPUT, result.warnings.join('; ')));
+    }
+    return { success: true, data: { entries: result.entries, warnings: result.warnings } };
+  });
+
+  app.put('/api/clis/order', async (req, reply) => {
+    if (isMultiUserMode() && !requireAdmin(req, reply)) return;
+    const { order } = parseBody(CliOrderUpdateSchema, req.body, 'Invalid request body');
+    const { setCliOrder } = await import('../../config/cli-registry/registry.js');
+    const result = setCliOrder(order);
+    if (!result.success) {
+      return reply.code(400).send(createErrorResponse(ApiErrorCode.INVALID_INPUT, result.warnings.join('; ')));
+    }
+    return { success: true, data: { entries: result.entries, warnings: result.warnings } };
+  });
+
+  // Add or replace a CUSTOM CLI. The body is a complete CliEntry (validated by the SAME
+  // schema the on-disk file is validated against — see config/cli-registry/schema.ts's
+  // file header for what that schema does and does not allow, notably that no field can
+  // ever carry raw shell text). `id` is taken from the URL, never trusted from the body.
+  app.post<{ Params: { id: string } }>('/api/clis/:id', async (req, reply) => {
+    if (isMultiUserMode() && !requireAdmin(req, reply)) return;
+    const { upsertCustomCli } = await import('../../config/cli-registry/registry.js');
+    const result = upsertCustomCli(req.params.id, req.body);
+    if (!result.success) {
+      return reply.code(400).send(createErrorResponse(ApiErrorCode.INVALID_INPUT, result.warnings.join('; ')));
+    }
+    return { success: true, data: { entries: result.entries, warnings: result.warnings } };
+  });
+
+  // Remove a custom CLI. Refuses for a stock id (disable it instead) — see
+  // removeCustomCli's own doc comment.
+  app.delete<{ Params: { id: string } }>('/api/clis/:id', async (req, reply) => {
+    if (isMultiUserMode() && !requireAdmin(req, reply)) return;
+    const { removeCustomCli } = await import('../../config/cli-registry/registry.js');
+    const result = removeCustomCli(req.params.id);
+    if (!result.success) {
+      return reply.code(400).send(createErrorResponse(ApiErrorCode.INVALID_INPUT, result.warnings.join('; ')));
+    }
+    return { success: true, data: { entries: result.entries, warnings: result.warnings } };
   });
 
   // ========== Claude ==========
