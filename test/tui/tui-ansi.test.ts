@@ -54,13 +54,28 @@ describe('toDisplayLines', () => {
   it('splits a row-addressed repaint into lines, which is how an Ink TUI paints', () => {
     // Claude Code emits almost no newlines: without this the whole screen is
     // one line and nothing in the preview is readable.
-    expect(toDisplayLines('\x1b[1;1Hfirst\x1b[2;1Hsecond\x1b[3;1Hthird')).toEqual(['', 'first', 'second', 'third']);
+    expect(toDisplayLines('\x1b[1;1Hfirst\x1b[2;1Hsecond\x1b[3;1Hthird')).toEqual(['first', 'second', 'third']);
     // A jump inside a row is a write position, not a new line.
-    expect(toDisplayLines('\x1b[1;1Hab\x1b[1;5Hcd')).toEqual(['', 'ab  cd']);
-    expect(toDisplayLines('\x1b[1;1Habcdef\x1b[1;2HXY')).toEqual(['', 'aXYdef']);
-    // Both parameters default to 1, so a bare CUP is a fresh row.
-    expect(toDisplayLines('a\x1b[Hb')).toEqual(['a', 'b']);
+    expect(toDisplayLines('\x1b[1;1Hab\x1b[1;5Hcd')).toEqual(['ab  cd']);
+    expect(toDisplayLines('\x1b[1;1Habcdef\x1b[1;2HXY')).toEqual(['aXYdef']);
     expect(toDisplayLines('a\x1b[3;1fb')).toEqual(['a', 'b']);
+  });
+
+  it('starts a new frame at a cursor HOME, instead of stacking repaints', () => {
+    // ⚠️ A home is a full-screen app announcing a repaint from the top, and
+    // everything on screen is about to be overwritten in place. This replay is
+    // line-based and cannot overwrite, so starting over is the faithful
+    // equivalent. Without it every repaint was APPENDED: a real claude pane's
+    // 198KB tail replayed as FIFTY stacked copies of the same frame, and the
+    // preview showed the last N lines, which on a tall terminal spanned two of
+    // them — the overview appeared to show the session twice.
+    expect(toDisplayLines('old frame\x1b[1;1Hnew frame')).toEqual(['new frame']);
+    // Both parameters default to 1, so a bare CUP is a home too.
+    expect(toDisplayLines('a\x1b[Hb')).toEqual(['b']);
+    // Only row 1 column 1. Any other address is a write position within the
+    // frame being painted, and resetting on those would erase live content.
+    expect(toDisplayLines('keep\x1b[2;1Hnext')).toEqual(['keep', 'next']);
+    expect(toDisplayLines('keep\x1b[1;3Hxx')).toEqual(['kexx']);
   });
 
   it('refuses to allocate a line for a column no terminal has', () => {

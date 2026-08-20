@@ -51,13 +51,18 @@ interface EscapeScan {
   sgr?: string;
   /** 1-based column of a cursor-position sequence (`CSI r ; c H` or `f`). */
   column?: number;
+  /** 1-based row of that same sequence. Row 1 means a repaint is starting. */
+  row?: number;
 }
 
-/** The column a `CSI r ; c H` addresses. Both parameters default to 1. */
-function cursorColumn(params: string): number {
+/** The row and column a `CSI r ; c H` addresses. Both parameters default to 1. */
+function cursorPosition(params: string): { row: number; column: number } {
   const parts = params.split(';');
-  const column = Number.parseInt(parts[1] ?? '', 10);
-  return Number.isSafeInteger(column) && column > 0 ? column : 1;
+  const read = (index: number): number => {
+    const value = Number.parseInt(parts[index] ?? '', 10);
+    return Number.isSafeInteger(value) && value > 0 ? value : 1;
+  };
+  return { row: read(0), column: read(1) };
 }
 
 /** Scan a CSI body starting at `from` (params, then intermediates, then a final byte). */
@@ -69,7 +74,7 @@ function readCsi(text: string, start: number, from: number, keepSgr: boolean): E
   const next = j + 1;
   if (keepSgr && text[j] === 'm') return { next, sgr: text.slice(start, next) };
   if (keepSgr && (text[j] === 'H' || text[j] === 'f')) {
-    return { next, column: cursorColumn(text.slice(from, j)) };
+    return { next, ...cursorPosition(text.slice(from, j)) };
   }
   return { next };
 }
@@ -423,6 +428,18 @@ export function toDisplayLines(raw: string): string[] {
       if (scan.sgr !== undefined) {
         active = applySgr(active, scan.sgr);
         sgr = active.join('');
+      } else if (scan.row === 1 && scan.column === 1) {
+        // ⚠️ A HOME is a full-screen app announcing that it is repainting from
+        // the top, and everything already on screen is about to be overwritten
+        // in place. This replay is line-based and cannot overwrite, so the
+        // faithful equivalent is to start over — without it every repaint was
+        // APPENDED, and a claude pane's tail carried fifty stacked copies of
+        // the same frame. The preview then showed the last N lines, which on a
+        // tall terminal spanned two of them (reported from the beta as the
+        // overview showing the session twice).
+        lines.length = 0;
+        cells = [];
+        col = 0;
       } else if (scan.column !== undefined) {
         // Column 1 is a fresh row, which is the only thing a repainting TUI
         // gives us to split lines on.
