@@ -58,6 +58,7 @@ import {
   ATTACH_BANNER_MARKER,
   TuiClient,
   type TuiSessionOptions,
+  type TuiWindowSizing,
   type TuiApprovalAnswer,
   type TuiEventStream,
   type TuiLiveSessionMetrics,
@@ -541,8 +542,6 @@ export async function beginAttachHandoff(
   // dots. `latest` (not a one-off resize to our size) is also what makes a
   // terminal resized MID-attach follow along: tmux recomputes on every SIGWINCH
   // and the caller is blocked in `spawnSync`.
-  const sizing = await client.readWindowSizing(muxName);
-  await client.followAttachingClient(muxName);
   // Claimed only when tmux has nothing there: an attach must never shadow a
   // binding the user put in their own config.
   const alias = heldCtrlAlias(detachKey ?? DEFAULT_DETACH_KEY);
@@ -593,6 +592,7 @@ export async function beginAttachHandoff(
   // you actually are.
   const banner = bannerFor(muxName, label);
   const dressed: Array<{ muxName: string; options: TuiSessionOptions }> = [];
+  const resized: Array<{ muxName: string; sizing: TuiWindowSizing }> = [];
   const targets = new Map<string, string>([[muxName, label]]);
   for (const tab of tabs.slice(0, 9)) {
     if (tab.muxName && !targets.has(tab.muxName)) targets.set(tab.muxName, tab.label);
@@ -601,6 +601,16 @@ export async function beginAttachHandoff(
     const snapshot = await client.readSessionOptions(target, Object.keys(banner));
     if (snapshot) dressed.push({ muxName: target, options: snapshot });
     await client.applySessionOptions(target, bannerFor(target, targetLabel));
+    // ⚠️ Sizing for EVERY switchable session, not just the one being attached.
+    // Codeman pins each window `window-size manual` at the BROWSER's size, so a
+    // session switched into from inside a pane stays pinned and tmux pads the
+    // gap with dots — the pane filled half the terminal and the rest was a dot
+    // grid (reported from the beta, with a screenshot, after Alt+N switching
+    // shipped). `latest` makes each window follow whichever client is looking
+    // at it, which is the same reason the attached one gets it.
+    const sizing = await client.readWindowSizing(target);
+    if (sizing) resized.push({ muxName: target, sizing });
+    await client.followAttachingClient(target);
   }
   return {
     chord: oneKey ? ONE_KEY_DETACH : detachChord(prefix, detachKey),
@@ -612,7 +622,7 @@ export async function beginAttachHandoff(
       // back to the pane, and the resize is what re-pins the browser's
       // authority over the window.
       for (const entry of dressed) await client.restoreSessionOptions(entry.muxName, entry.options);
-      if (sizing) await client.restoreWindowSizing(muxName, sizing);
+      for (const entry of resized) await client.restoreWindowSizing(entry.muxName, entry.sizing);
     },
   };
 }
