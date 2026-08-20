@@ -19,6 +19,7 @@ import {
   detachChord,
   heldCtrlAlias,
   ONE_KEY_DETACH,
+  buildAttachTabs,
   nextSessionName,
   footerKeysFor,
   formatPrefixKey,
@@ -460,16 +461,17 @@ describe('the dead-row resume offer', () => {
 describe('the one-key way out', () => {
   it('names a single key with no modifier at all', () => {
     // The whole point: three beta rounds died on a chord that had to be typed
-    // in the right order with the modifier released at the right moment.
-    expect(ONE_KEY_DETACH).toBe('F12');
+    // in the right order with the modifier released at the right moment. F1
+    // rather than F12 so it sits beside Esc, where a hand backing out goes.
+    expect(ONE_KEY_DETACH).toBe('F1');
     expect(ONE_KEY_DETACH).not.toContain('C-');
     expect(ONE_KEY_DETACH).not.toContain('+');
   });
 
   it('puts ONE instruction on the bar, not a menu of ways out', () => {
-    const banner = buildAttachBanner({ prefix: 'C-b', detachKey: 'd', heldAlias: 'C-d', oneKey: 'F12' });
+    const banner = buildAttachBanner({ prefix: 'C-b', detachKey: 'd', heldAlias: 'C-d', oneKey: 'F1' });
     const bar = banner['status-format[0]'];
-    expect(bar).toContain('press #[bold]F12#[nobold] to get back to the codeman dashboard');
+    expect(bar).toContain('#[bold]F1#[nobold] back to the codeman dashboard');
     // Even though both fallbacks still work, the bar must not offer them: a bar
     // listing three ways to leave is what the tester called way too complicated.
     expect(bar).not.toContain('Ctrl+B');
@@ -483,6 +485,58 @@ describe('the one-key way out', () => {
     expect(bar).toContain('Ctrl+B then d');
     expect(bar).toContain('(or Ctrl+D)');
     expect(bar).not.toContain('F12');
+  });
+});
+
+describe('the attach tab strip', () => {
+  const tabs = (count: number, activeIndex: number) =>
+    Array.from({ length: count }, (_, i) => ({ index: i + 1, label: `w${i + 1}-case`, active: i === activeIndex }));
+
+  it('draws every session when they all fit, numbered as the dashboard numbers them', () => {
+    const strip = buildAttachTabs(tabs(3, 1));
+    expect(strip).toContain('1 w1-case');
+    expect(strip).toContain('2 w2-case');
+    expect(strip).toContain('3 w3-case');
+    expect(strip).not.toContain('…');
+  });
+
+  it('inverts the session you are actually in', () => {
+    const strip = buildAttachTabs(tabs(3, 1));
+    expect(strip).toContain('#[reverse] 2 w2-case #[noreverse]');
+    expect(strip).not.toContain('#[reverse] 1 w1-case');
+  });
+
+  it('windows around the active tab rather than overflowing the bar', () => {
+    // Overflow would push the way-out hint off the end, which is the one thing
+    // on the bar that must survive.
+    const strip = buildAttachTabs(tabs(20, 9), 6);
+    expect(strip).toContain('10 w10-case');
+    expect(strip.startsWith('…')).toBe(true);
+    expect(strip.endsWith('…')).toBe(true);
+    expect(strip).not.toContain('1 w1-case ');
+  });
+
+  it('marks only the end that is actually cut', () => {
+    const first = buildAttachTabs(tabs(20, 0), 6);
+    expect(first.startsWith('…')).toBe(false);
+    expect(first.endsWith('…')).toBe(true);
+    const last = buildAttachTabs(tabs(20, 19), 6);
+    expect(last.startsWith('…')).toBe(true);
+    expect(last.endsWith('…')).toBe(false);
+  });
+
+  it('truncates a long session name instead of eating the whole strip', () => {
+    const strip = buildAttachTabs([{ index: 1, label: 'w1-an-extremely-long-session-name', active: true }]);
+    expect(strip).toContain('…');
+    expect(strip.length).toBeLessThan(60);
+  });
+
+  it('is empty with no sessions, so the bar falls back to the plain label', () => {
+    expect(buildAttachTabs([])).toBe('');
+  });
+
+  it('escapes a name that would otherwise open a tmux format', () => {
+    expect(buildAttachTabs([{ index: 1, label: 'fix #42', active: false }])).toContain('fix ##42');
   });
 });
 
@@ -569,10 +623,13 @@ describe('the way out of an attach', () => {
 
   it('builds ONE status-format option, so tmux draws no window list beside it', () => {
     const banner = buildAttachBanner({ prefix: 'C-b', label: 'w3-codeman' });
-    expect(Object.keys(banner).sort()).toEqual(['status', 'status-format[0]', 'status-style']);
+    expect(Object.keys(banner).sort()).toEqual(['status', 'status-format[0]', 'status-position', 'status-style']);
     expect(banner.status).toBe('on');
+    // Top, where the web UI keeps its tabs.
+    expect(banner['status-position']).toBe('top');
     expect(banner['status-format[0]']).toContain('#[bold]Ctrl+B then d#[nobold]');
-    expect(banner['status-format[0]']).toContain('#[align=right] w3-codeman ');
+    // With no strip to draw, the session's own name is the fallback.
+    expect(banner['status-format[0]']).toContain('w3-codeman');
   });
 
   it('sets status-style, or tmux paints its stock green bar under the bar', () => {
@@ -595,15 +652,25 @@ describe('the way out of an attach', () => {
 
   it('truncates a long label instead of pushing the instruction off the bar', () => {
     const banner = buildAttachBanner({ label: 'w12-codeman: a very long session label indeed' });
-    const right = (banner['status-format[0]'].split('#[align=right]')[1] ?? '').replace('#[default]', '');
+    const left = (banner['status-format[0]'].split('#[align=right]')[0] ?? '').replace('#[align=left]', '');
     // 28 characters of label plus the space either side.
-    expect(right.length).toBeLessThanOrEqual(30);
-    expect(right).toContain('…');
-    expect(banner['status-format[0]']).toContain('detach, back to the codeman dashboard');
+    expect(left.length).toBeLessThanOrEqual(30);
+    expect(left).toContain('…');
+    expect(banner['status-format[0]']).toContain('back to the codeman dashboard');
   });
 
-  it('leaves the right side out entirely when there is no label', () => {
-    expect(buildAttachBanner({})['status-format[0]']).not.toContain('#[align=right]');
+  it('always keeps the way out on the bar, whatever else is on it', () => {
+    // The hint is the one thing that must never be crowded off: it is the only
+    // instruction a user gets while tmux owns the terminal.
+    const crowded = buildAttachBanner({
+      oneKey: 'F1',
+      tabs: Array.from({ length: 20 }, (_, i) => ({
+        index: i + 1,
+        label: `w${i + 1}-a-long-session-name`,
+        active: i === 9,
+      })),
+    });
+    expect(crowded['status-format[0]']).toContain('#[bold]F1#[nobold] back to the codeman dashboard');
   });
 
   it("tells the help overlay how to get back, in the socket's own prefix", () => {

@@ -274,12 +274,13 @@ export const DEFAULT_DETACH_KEY = 'd';
  * The instruction itself was the problem ("release Ctrl and THEN d" is, in the
  * tester's words, very unclear), so the way out stopped being a chord.
  *
- * F12 because it is a single keystroke with no modifier to hold or release, and
- * because no CLI that runs in these panes wants it: claude, codex, a shell and
- * vim all leave it alone, and tmux ships an EMPTY root table apart from mouse
- * bindings, so claiming it shadows nothing.
+ * F1 because it is a single keystroke with no modifier to hold or release, it
+ * sits next to Esc where a hand reaching to back out already goes, and no CLI
+ * that runs in these panes wants it: claude, codex, a shell and vim all leave
+ * it alone, and tmux ships an EMPTY root table apart from mouse bindings, so
+ * claiming it shadows nothing.
  */
-export const ONE_KEY_DETACH = 'F12';
+export const ONE_KEY_DETACH = 'F1';
 
 /**
  * The key a user produces when they DON'T let go of Ctrl: `d` becomes `C-d`.
@@ -345,6 +346,8 @@ export function buildAttachBanner(options: {
   heldAlias?: string;
   /** The prefix-less key, when the attach managed to claim it. Preferred over every chord. */
   oneKey?: string;
+  /** The other sessions, drawn as a strip so they stay visible from inside a pane. */
+  tabs?: readonly TuiAttachTab[];
 }): Record<string, string> {
   const chord = escapeTmuxFormat(detachChord(options.prefix, options.detachKey));
   // Named on the bar because it is what people actually type: keeping Ctrl held
@@ -356,21 +359,70 @@ export function buildAttachBanner(options: {
   // owns the whole line, which is what removes tmux's window list (`0:bash*`)
   // from the middle of it. The window-status options that would otherwise hide
   // it are WINDOW options, so `set-option -t <session>` cannot even reach them.
-  const right = label ? `#[align=right] ${label} ` : '';
+  // The strip names the session it highlights, so the standalone label is only
+  // a fallback for when there is no strip to draw (degraded mode has no list).
+  const strip = buildAttachTabs(options.tabs ?? []);
+  const left = strip || (label ? ` ${label} ` : '');
   return {
     status: 'on',
     'status-style': 'bg=default,fg=default',
+    // At the TOP, where the web UI keeps its tabs and where a strip of sessions
+    // is read as a strip of sessions rather than as a footer.
+    'status-position': 'top',
     // One key when we have one, the chord only as a fallback. The bar is the
     // ONLY instruction a user gets during an attach, so it names the simplest
     // thing that is known to work, never a menu of ways.
     'status-format[0]': options.oneKey
-      ? `#[align=left] press #[bold]${escapeTmuxFormat(options.oneKey)}#[nobold] to get ${ATTACH_BANNER_MARKER}${right}#[default]`
-      : `#[align=left] press #[bold]${chord}#[nobold]${alias} to detach, ${ATTACH_BANNER_MARKER}${right}#[default]`,
+      ? `#[align=left]${left}#[align=right] #[bold]${escapeTmuxFormat(options.oneKey)}#[nobold] ${ATTACH_BANNER_MARKER} #[default]`
+      : `#[align=left]${left}#[align=right] #[bold]${chord}#[nobold]${alias} ${ATTACH_BANNER_MARKER} #[default]`,
   };
 }
 
 /** Long enough for a session name, short enough to survive a narrow terminal. */
 const ATTACH_BANNER_LABEL_MAX = 28;
+
+/** One session as the attach bar draws it. */
+export interface TuiAttachTab {
+  /** The number that selects it on the dashboard, so the bar and the list agree. */
+  index: number;
+  label: string;
+  active: boolean;
+}
+
+/** Per-tab label cap. Eight of these plus separators still fit an 80-column terminal. */
+const ATTACH_TAB_LABEL_MAX = 12;
+
+/**
+ * The session strip the attach bar carries, so the other sessions stay visible
+ * from inside a pane instead of the dashboard vanishing the moment you enter
+ * one.
+ *
+ * A WINDOW around the active tab rather than the whole list: the bar is one
+ * line shared with the way-out hint, and a strip that overflowed would push
+ * that hint off the end, which is the one thing on the bar that must never be
+ * lost. Ellipses mark what is not shown, so a truncated strip reads as
+ * truncated rather than as the whole list.
+ */
+export function buildAttachTabs(tabs: readonly TuiAttachTab[], maxTabs = 6): string {
+  if (tabs.length === 0) return '';
+  const active = Math.max(
+    0,
+    tabs.findIndex((tab) => tab.active)
+  );
+  let start = Math.max(0, Math.min(active - Math.floor(maxTabs / 2), tabs.length - maxTabs));
+  if (start < 0) start = 0;
+  const shown = tabs.slice(start, start + maxTabs);
+  const parts = shown.map((tab) => {
+    const label = truncateLabel(tab.label, ATTACH_TAB_LABEL_MAX);
+    const text = escapeTmuxFormat(`${tab.index} ${label}`);
+    // The active tab is inverted rather than bracketed: brackets cost two
+    // columns per tab and read as punctuation next to the session names.
+    return tab.active ? `#[reverse] ${text} #[noreverse]` : ` ${text} `;
+  });
+  const head = start > 0 ? '…' : '';
+  const tail = start + maxTabs < tabs.length ? '…' : '';
+  return `${head}${parts.join('')}${tail}`;
+}
 
 /**
  * The name a newly started session gets: `w<n>-<case>`, the same convention the
@@ -448,7 +500,12 @@ export interface TuiAttachHandoff {
  * `window-size manual` with no status bar (what Codeman creates) is exactly
  * that again after the detach.
  */
-export async function beginAttachHandoff(client: TuiClient, muxName: string, label: string): Promise<TuiAttachHandoff> {
+export async function beginAttachHandoff(
+  client: TuiClient,
+  muxName: string,
+  label: string,
+  tabs: readonly TuiAttachTab[] = []
+): Promise<TuiAttachHandoff> {
   const prefix = (await client.readPrefixKey(muxName)) ?? undefined;
   // Read, not assumed: see detachChord() for the `d` vs `D` mix-up this closes.
   const detachKey = (await client.readDetachKey()) ?? undefined;
@@ -475,6 +532,7 @@ export async function beginAttachHandoff(client: TuiClient, muxName: string, lab
     ...(claimed && alias ? { heldAlias: alias } : {}),
     ...(oneKey ? { oneKey: ONE_KEY_DETACH } : {}),
     label,
+    tabs,
   });
   const options = await client.readSessionOptions(muxName, Object.keys(banner));
   await client.applySessionOptions(muxName, banner);
@@ -1459,6 +1517,27 @@ class TuiApp {
     this.handle({ type: 'char', value });
   }
 
+  /**
+   * The live sessions, numbered the way the dashboard numbers them, for the
+   * strip the attach bar draws.
+   *
+   * A SNAPSHOT taken at attach time and not refreshed: the TUI is blocked in
+   * `spawnSync` for the whole attach, so there is no loop to update it from,
+   * and tmux's own format language cannot map a `codeman-<hex>` session name
+   * back to the label a human recognises. A strip that is a few minutes stale
+   * about a session created elsewhere is worth far more than no strip.
+   */
+  private attachTabs(activeId: string): TuiAttachTab[] {
+    const tabs: TuiAttachTab[] = [];
+    let index = 0;
+    for (const row of this.model.rows()) {
+      if (row.group === 'recent') continue;
+      index += 1;
+      tabs.push({ index, label: rowLabel(row.session), active: row.session.sessionId === activeId });
+    }
+    return tabs;
+  }
+
   /** Every key can change the selection or the mode, and both steer the preview. */
   private afterInput(): void {
     if (this.exiting) return;
@@ -2089,7 +2168,12 @@ class TuiApp {
     // The way OUT, set up before tmux takes the terminal: a status bar that
     // stays for the whole attach. The line written below is on a screen tmux
     // repaints a moment later, so it is not what the user reads.
-    const handoff = await beginAttachHandoff(this.client, muxName, rowLabel(row.session));
+    const handoff = await beginAttachHandoff(
+      this.client,
+      muxName,
+      rowLabel(row.session),
+      this.attachTabs(row.session.sessionId)
+    );
     this.detachChordLabel = handoff.chord;
     this.screen.leave();
     this.stdout.write(`${handoff.chord} detaches and brings you back here.\n`);
