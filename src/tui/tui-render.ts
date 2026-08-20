@@ -615,7 +615,7 @@ const FOOTER_KEYS: Record<string, (glyphs: TuiGlyphSet) => string> = {
     [
       `${g.updown} select`,
       `${g.enter} attach`,
-      '1-9 jump',
+      '1-9 switch',
       'y/n answer',
       'p prompt',
       'n new',
