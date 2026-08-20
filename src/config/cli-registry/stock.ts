@@ -26,6 +26,7 @@ const NO_PRIVILEGED_PARAMS: CliEntry['capabilities']['privilegedParams'] = [];
 /** Shared skeleton for the "agent CLI, no unusual behaviour" case (pi's own shape). */
 function agentDefaults(): Pick<
   CliEntry['capabilities'],
+  | 'external'
   | 'requiresMux'
   | 'hooks'
   | 'transcript'
@@ -45,6 +46,7 @@ function agentDefaults(): Pick<
   | 'gates'
 > {
   return {
+    external: true,
     requiresMux: true,
     hooks: false,
     transcript: 'none',
@@ -169,6 +171,7 @@ const CLAUDE: CliEntry = {
     allowedKeys: ['CLAUDE_CONFIG_DIR'],
   },
   capabilities: {
+    external: false,
     requiresMux: false,
     hooks: true,
     transcript: 'claude-jsonl',
@@ -223,6 +226,7 @@ const SHELL: CliEntry = {
     allowedKeys: [],
   },
   capabilities: {
+    external: false,
     requiresMux: false,
     hooks: false,
     transcript: 'none',

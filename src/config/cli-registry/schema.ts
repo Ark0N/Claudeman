@@ -201,6 +201,7 @@ const echoSchema = z
 
 const capabilitiesSchema = z
   .object({
+    external: z.boolean(),
     requiresMux: z.boolean(),
     hooks: z.boolean(),
     transcript: z.enum(['claude-jsonl', 'codex-rollout', 'none']),

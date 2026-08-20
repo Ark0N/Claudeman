@@ -56,6 +56,7 @@ import {
 } from './types.js';
 import { probeDockerCliVersion } from './docker-hosts.js';
 import { probeRemoteCliVersion } from './remote-hosts.js';
+import { getCli } from './config/cli-registry/registry.js';
 import type { TerminalMultiplexer, MuxSession } from './mux-interface.js';
 import { TaskTracker, type BackgroundTask } from './task-tracker.js';
 import { RalphTracker } from './ralph-tracker.js';
@@ -169,28 +170,18 @@ const CTRL_L_PATTERN = /\x0c/g;
 /** Pattern to split by newlines (CR or LF) */
 const NEWLINE_SPLIT_PATTERN = /\r?\n/;
 
-/** True for external-CLI run modes (non-Claude) that use their own TUI and output format. */
+/**
+ * True for external-CLI run modes (non-Claude) that use their own TUI and output format.
+ * Backed by the registry's `capabilities.external` flag rather than an id list — see
+ * `CliCapabilities`'s own doc comment for why `external`/`hooks`/`transcript` are kept as
+ * three INDEPENDENT fields instead of deriving one from another.
+ */
 export function isExternalCliMode(mode: SessionMode): boolean {
-  return mode === 'opencode' || mode === 'codex' || mode === 'gemini' || mode === 'antigravity' || mode === 'pi';
+  return getCli(mode)?.capabilities.external ?? true;
 }
 
 function getModeLabel(mode: SessionMode): string {
-  switch (mode) {
-    case 'opencode':
-      return 'OpenCode';
-    case 'codex':
-      return 'Codex';
-    case 'gemini':
-      return 'Gemini';
-    case 'antigravity':
-      return 'Antigravity';
-    case 'pi':
-      return 'Pi';
-    case 'shell':
-      return 'Shell';
-    case 'claude':
-      return 'Claude';
-  }
+  return getCli(mode)?.label ?? mode;
 }
 
 /**
@@ -218,7 +209,7 @@ function getModeLabel(mode: SessionMode): string {
  * vim inside a tmux `shell` session.
  */
 export function isAltScreenStripMode(mode: SessionMode): boolean {
-  return mode === 'codex' || mode === 'claude' || mode === 'gemini';
+  return getCli(mode)?.capabilities.altScreen === 'strip-full';
 }
 
 /**
@@ -1820,25 +1811,12 @@ export class Session extends EventEmitter {
 
     // Fallback to direct PTY if mux is not used
     if (!this.ptyProcess) {
-      // OpenCode sessions require tmux for env var injection (API keys via setenv)
-      if (this.mode === 'opencode') {
-        throw new Error('OpenCode sessions require tmux. Direct PTY fallback is not supported.');
-      }
-      // Codex sessions require tmux for OPENAI_API_KEY injection via setenv
-      if (this.mode === 'codex') {
-        throw new Error('Codex sessions require tmux. Direct PTY fallback is not supported.');
-      }
-      // Gemini sessions require tmux for Gemini/Google auth env injection via setenv
-      if (this.mode === 'gemini') {
-        throw new Error('Gemini sessions require tmux. Direct PTY fallback is not supported.');
-      }
-      // Antigravity sessions require tmux for env override injection via setenv
-      if (this.mode === 'antigravity') {
-        throw new Error('Antigravity sessions require tmux. Direct PTY fallback is not supported.');
-      }
-      // Pi sessions require tmux for env override injection via setenv
-      if (this.mode === 'pi') {
-        throw new Error('Pi sessions require tmux. Direct PTY fallback is not supported.');
+      // A CLI whose secrets ride tmux setenv (API keys, auth env) has no direct-PTY
+      // equivalent — there is nowhere else to inject them without putting a secret on
+      // the spawn command line. `capabilities.requiresMux` names that set; it used to
+      // be five separate `this.mode === '<id>'` checks, one per external CLI.
+      if (getCli(this.mode)?.capabilities.requiresMux) {
+        throw new Error(`${getModeLabel(this.mode)} sessions require tmux. Direct PTY fallback is not supported.`);
       }
       try {
         // Pass --session-id to use the SAME ID as the Codeman session

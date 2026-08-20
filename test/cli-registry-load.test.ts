@@ -61,6 +61,7 @@ describe('resolveRegistry (pure merge)', () => {
         allowedKeys: [],
       },
       capabilities: {
+        external: true,
         requiresMux: true,
         hooks: false,
         transcript: 'none' as const,

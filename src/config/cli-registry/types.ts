@@ -168,6 +168,13 @@ export interface CliEnv {
  * Keeping them as separate fields makes that invariant structural rather than commented.
  */
 export interface CliCapabilities {
+  /**
+   * Non-Claude run mode that uses its own TUI and output format (`isExternalCliMode`):
+   * no Claude transcript, no hooks, no Claude-format token/BashTool parsing. An explicit
+   * field rather than derived from `hooks`/`kind`, precisely because it must stay
+   * independent — see this interface's own doc comment.
+   */
+  external: boolean;
   /** No direct-PTY fallback: the CLI must run inside tmux (secrets ride tmux setenv). */
   requiresMux: boolean;
   /** Emits Codeman hook events, so `stop`/`blocked` wait signals can ever fire. */
