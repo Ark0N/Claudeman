@@ -40,6 +40,39 @@ const ASK_USER_QUESTION_FRAME = [
   'Enter to select · ↑/↓ to navigate · Esc to cancel',
 ].join('\n');
 
+// Both frames captured off a live Claude Code v2.1.237 pane. They are the
+// discriminator behind the late-hook resolution: a modal dialog BLOCKS the
+// turn, so a working line and a dialog cannot coexist. Note the dialog frame
+// carries no `esc to interrupt` footer either — the dialog replaces it.
+const LIVE_DIALOG_FRAME = [
+  '● Bash(sleep 12; echo "slept 12s")',
+  '  ⎿  slept 12s',
+  '────────────────────────────────────────',
+  ' ☐ Proceed',
+  '',
+  'Proceed?',
+  '',
+  '❯ 1. Yes',
+  '     Go ahead and proceed.',
+  '  2. No',
+  '     Do not proceed.',
+  '  3. Type something.',
+  '────────────────────────────────────────',
+  '  4. Chat about this',
+  '',
+  'Enter to select · ↑/↓ to navigate · Esc to cancel',
+].join('\n');
+
+const WORKING_FRAME = [
+  '● Bash(sleep 25)',
+  '  ⎿  Tip: Use git worktrees to run multiple Claude sessions in parallel.',
+  '✢ Clauding… (13s · ↓ 1.4k tokens)',
+  '────────────────────────────────────────',
+  '❯',
+  '────────────────────────────────────────',
+  '  ⏵⏵ bypass permissions on (shift+tab to cycle) · esc to interrupt · ← for agents',
+].join('\n');
+
 function collect(inbox: ApprovalInbox) {
   const pending: ApprovalItem[] = [];
   const updated: ApprovalItem[] = [];
@@ -330,6 +363,186 @@ describe('ApprovalInbox', () => {
 
     it('is true for unknown ids only as false (missing item refuses)', () => {
       expect(inbox.verifyStillAnswerable('nope:1')).toBe(false);
+    });
+  });
+
+  describe('answered-in-the-terminal staleness', () => {
+    // Claude Code delays the Notification hook behind the dialog (measured 6s
+    // on v2.1.237, documented up to ~30s), so the 600ms re-capture routinely
+    // lands on a frame the user has ALREADY answered. Erasing `options` there
+    // made the item permanently unsweepable, because a missing `options` is how
+    // "we never could read this dialog" is expressed, and such items stay
+    // answerable on purpose. The red tab alert then survived every
+    // `GET /api/approvals` and every reload, clearing only on `stop`.
+    it('a re-capture taken after the answer does not erase parsed options', () => {
+      const { updated } = collect(inbox);
+      let frame = ASK_USER_QUESTION_FRAME;
+      const item = inbox.notePrompt({
+        sessionId: 's1',
+        sessionName: 'w1',
+        kind: 'permission',
+        capture: () => frame,
+      });
+      expect(item.options).toHaveLength(5);
+
+      // Answered in the terminal before the re-capture fires.
+      frame = "● User answered Claude's questions:\n  ⎿  · Which color do you prefer? → Red\n\n✶ Cooking… (6s)";
+      vi.advanceTimersByTime(600);
+
+      expect(updated).toHaveLength(1);
+      expect(inbox.getById(item.id)?.context).toContain('User answered');
+      expect(inbox.getById(item.id)?.options).toHaveLength(5);
+      // ...which keeps the staleness check conclusive instead of inconclusive.
+      expect(inbox.verifyStillAnswerable(item.id)).toBe(false);
+      expect(inbox.getById(item.id)).toBeUndefined();
+    });
+
+    it('resolveIfDialogGone resolves a dialog answered in the terminal', () => {
+      const { resolved } = collect(inbox);
+      let frame = PERMISSION_FRAME;
+      const item = inbox.notePrompt({ sessionId: 's1', sessionName: 'w1', kind: 'permission', capture: () => frame });
+      frame = 'the dialog is gone, claude is typing';
+
+      inbox.resolveIfDialogGone('s1');
+
+      expect(inbox.getById(item.id)).toBeUndefined();
+      expect(resolved.at(-1)).toMatchObject({ id: item.id, resolution: 'resolved_in_terminal' });
+    });
+
+    it('resolveIfDialogGone keeps a dialog that is still on screen', () => {
+      const item = inbox.notePrompt({
+        sessionId: 's1',
+        sessionName: 'w1',
+        kind: 'permission',
+        capture: () => PERMISSION_FRAME,
+      });
+      inbox.resolveIfDialogGone('s1');
+      expect(inbox.getById(item.id)).toBeDefined();
+    });
+
+    it('resolveIfDialogGone never touches an idle item (that is the working signal job)', () => {
+      const item = inbox.notePrompt({
+        sessionId: 's1',
+        sessionName: 'w1',
+        kind: 'idle',
+        capture: () => 'composer is empty',
+      });
+      inbox.resolveIfDialogGone('s1');
+      expect(inbox.getById(item.id)).toBeDefined();
+    });
+
+    // The late-hook hole: Claude Code fires the Notification behind the dialog,
+    // so a prompt answered before the hook lands produces an item whose FIRST
+    // capture already has no dialog in it. Nothing ever parsed, so "options
+    // vanished" can never fire, and `stop` had already gone by too — the red
+    // alert then survived reloads until the 12h TTL.
+    it('resolves an item that never parsed options once the pane is visibly working', () => {
+      const { resolved } = collect(inbox);
+      const item = inbox.notePrompt({
+        sessionId: 's1',
+        sessionName: 'w1',
+        kind: 'permission',
+        capture: () => WORKING_FRAME,
+      });
+      expect(item.options).toBeUndefined();
+
+      expect(inbox.verifyStillAnswerable(item.id)).toBe(false);
+      expect(inbox.getById(item.id)).toBeUndefined();
+      expect(resolved.at(-1)).toMatchObject({ id: item.id, resolution: 'resolved_in_terminal' });
+    });
+
+    it('keeps an unreadable dialog answerable when the pane is NOT visibly working', () => {
+      // The conservative rule this fix must not loosen: no options and no proof
+      // the turn is running means "we cannot read it", not "it is gone".
+      const item = inbox.notePrompt({
+        sessionId: 's1',
+        sessionName: 'w1',
+        kind: 'permission',
+        capture: () => 'some dialog shape we cannot parse',
+      });
+      expect(item.options).toBeUndefined();
+      expect(inbox.verifyStillAnswerable(item.id)).toBe(true);
+      expect(inbox.getById(item.id)).toBeDefined();
+    });
+
+    it('a real live-dialog frame carries no working line, so it is never false-resolved', () => {
+      const item = inbox.notePrompt({
+        sessionId: 's1',
+        sessionName: 'w1',
+        kind: 'permission',
+        capture: () => LIVE_DIALOG_FRAME,
+      });
+      expect(item.options).toHaveLength(4);
+      expect(inbox.verifyStillAnswerable(item.id)).toBe(true);
+      expect(inbox.getById(item.id)).toBeDefined();
+    });
+
+    it('resolveIfDialogGone clears a late-hook item on the next working signal', () => {
+      const item = inbox.notePrompt({
+        sessionId: 's1',
+        sessionName: 'w1',
+        kind: 'permission',
+        capture: () => WORKING_FRAME,
+      });
+      inbox.resolveIfDialogGone('s1');
+      expect(inbox.getById(item.id)).toBeUndefined();
+    });
+
+    it('the delayed staleness pass resolves a late-hook item with no working signal needed', () => {
+      const { resolved } = collect(inbox);
+      const item = inbox.notePrompt({
+        sessionId: 's1',
+        sessionName: 'w1',
+        kind: 'permission',
+        capture: () => WORKING_FRAME,
+      });
+      expect(item.options).toBeUndefined();
+
+      vi.advanceTimersByTime(600); // re-capture: enrichment only, never resolves
+      expect(inbox.getById(item.id)).toBeDefined();
+
+      vi.advanceTimersByTime(2400); // the delayed staleness pass
+      expect(inbox.getById(item.id)).toBeUndefined();
+      expect(resolved.at(-1)).toMatchObject({ id: item.id, resolution: 'resolved_in_terminal' });
+    });
+
+    it('a dialog Ink paints late is NOT resolved by the delayed pass', () => {
+      // The paint race the re-capture exists for: the hook can beat Ink to the
+      // screen. Resolving inside that window would clear the alert for a dialog
+      // that was about to appear, so the frame is what decides, every time.
+      let frame = WORKING_FRAME;
+      const item = inbox.notePrompt({
+        sessionId: 's1',
+        sessionName: 'w1',
+        kind: 'permission',
+        capture: () => frame,
+      });
+      frame = LIVE_DIALOG_FRAME; // Ink finishes painting
+
+      vi.advanceTimersByTime(600);
+      expect(inbox.getById(item.id)?.options).toHaveLength(4);
+      vi.advanceTimersByTime(2400);
+      expect(inbox.getById(item.id)).toBeDefined();
+    });
+
+    it('resolving cancels both pending timers', () => {
+      const { updated } = collect(inbox);
+      const item = inbox.notePrompt({
+        sessionId: 's1',
+        sessionName: 'w1',
+        kind: 'permission',
+        capture: () => PERMISSION_FRAME,
+      });
+      inbox.dismiss(item.id);
+      vi.advanceTimersByTime(5000);
+      expect(updated).toHaveLength(0);
+      expect(inbox.listPending()).toHaveLength(0);
+    });
+
+    it('resolveIfDialogGone is a no-op for a session with nothing pending', () => {
+      const { resolved } = collect(inbox);
+      expect(() => inbox.resolveIfDialogGone('nobody')).not.toThrow();
+      expect(resolved).toHaveLength(0);
     });
   });
 

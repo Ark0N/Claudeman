@@ -41,8 +41,17 @@ Object.assign(CodemanApp.prototype, {
   _onHookElicitationComplete(data) {
     // Question answered in the terminal: clear the action alert without
     // waiting for `stop` (the turn may keep running for a long time).
+    // ⚠️ BOTH action kinds, matching the server's APPROVAL_RESOLVING_EVENTS,
+    // which resolves a session's pending item whatever its kind. An
+    // AskUserQuestion dialog arrives as `permission_prompt` (only MCP
+    // elicitation is `elicitation_dialog`), so clearing just the elicitation
+    // entry left the red alert armed on exactly the dialog these events are
+    // most often about. Normally the server's `approval:resolved` broadcast
+    // clears it too; this is the path that still works when the store holds no
+    // item for the session (restart, superseded).
     if (data.sessionId) {
       this.clearPendingHooks(data.sessionId, 'elicitation_dialog');
+      this.clearPendingHooks(data.sessionId, 'permission_prompt');
     }
   },
 

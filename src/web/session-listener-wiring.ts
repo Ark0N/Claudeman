@@ -219,10 +219,18 @@ export function createSessionListeners(session: Session, deps: SessionListenerDe
       // An idle-prompt inbox item means "composer is waiting"; any working
       // transition means input arrived, so the item is moot. ONLY the idle
       // kind: `working` is heuristic and can flap mid-turn, so clearing a
-      // pending permission/question dialog on it would false-clear real
-      // approvals (those resolve via stop / elicitation hooks / answer-time
-      // re-capture instead).
+      // pending permission/question dialog on the signal ALONE would
+      // false-clear real approvals.
       approvalInbox.resolveForSession(session.id, 'resolved_in_terminal', ['idle']);
+      // A permission/question dialog gets the pane-VERIFIED variant instead:
+      // the signal only decides when to look, `verifyStillAnswerable` re-reads
+      // the screen and resolves only when the dialog is really gone. Without
+      // this, answering a dialog in the terminal left its red "needs you" alert
+      // armed for the rest of the turn, because the only other staleness check
+      // lives in `GET /api/approvals` and nothing calls that while a page is
+      // open. `stop` was the first thing to clear it, which on a long turn is
+      // minutes away.
+      approvalInbox.resolveIfDialogGone(session.id);
       deps.broadcast(SseEvent.SessionWorking, { id: session.id });
       // Full state ride-along: the home screens sort the running group on
       // lastSubmitAt, and without this the browser keeps the stamp it loaded

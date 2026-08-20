@@ -22,14 +22,14 @@
  * - Acknowledgement (`acknowledge()`, idle items only) is NOT resolution: the
  *   item stays pending, it just stops arming the tab alert on every client.
  *
- * @dependencies utils (stripAnsi)
+ * @dependencies utils (stripAnsi, CLAUDE_WORKING_LINE_PATTERN)
  * @consumedby web/routes/hook-event-routes (notePrompt/resolve), web/routes/approval-routes,
  *   web/session-listener-wiring (working/exit resolution), web/server (emit callbacks + stop)
  *
  * @module web/approval-inbox
  */
 
-import { stripAnsi } from '../utils/index.js';
+import { stripAnsi, CLAUDE_WORKING_LINE_PATTERN } from '../utils/index.js';
 
 // ─── Types ───────────────────────────────────────────────────────────────────
 
@@ -106,6 +106,12 @@ const ITEM_TTL_MS = 12 * 60 * 60 * 1000;
  * single delayed re-capture picks up the frame the immediate capture missed.
  */
 const RECAPTURE_DELAY_MS = 600;
+/**
+ * Delayed staleness pass for the late-hook case (see notePrompt). Comfortably
+ * clear of RECAPTURE_DELAY_MS so a dialog Ink has not painted yet is never
+ * mistaken for one that is gone.
+ */
+const STALE_CHECK_DELAY_MS = 3000;
 /** Context kept per item: enough for a dialog plus a few lines above it. */
 const MAX_CONTEXT_CHARS = 4000;
 const MAX_CONTEXT_LINES = 30;
@@ -195,7 +201,8 @@ export function parseDialogOptions(context: string | undefined): ApprovalOption[
 export class ApprovalInbox {
   /** Keyed by sessionId; the one-active-item-per-session invariant lives here. */
   private items = new Map<string, ApprovalItem>();
-  private recaptureTimers = new Map<string, ReturnType<typeof setTimeout>>();
+  /** Post-capture timers per item id (re-capture + the delayed staleness check). */
+  private itemTimers = new Map<string, ReturnType<typeof setTimeout>[]>();
   /** Capture callbacks kept for answer-time re-verification; dropped on remove. */
   private captures = new Map<string, () => string | null>();
   private seq = 0;
@@ -229,31 +236,55 @@ export class ApprovalInbox {
     if (args.capture) this.captures.set(args.sessionId, args.capture);
     this.onPending?.(item);
     if (args.capture && !this.stopped) {
-      const timer = setTimeout(() => {
-        this.recaptureTimers.delete(item.id);
-        // Only update the item if it is still the live one for the session.
-        if (this.items.get(args.sessionId)?.id !== item.id) return;
+      // Pass 1 (600ms): enrich the card with the painted frame.
+      this.scheduleForItem(item, RECAPTURE_DELAY_MS, () => {
         this.applyCapture(item, args.capture);
         this.onUpdated?.(item);
-      }, RECAPTURE_DELAY_MS);
-      this.recaptureTimers.set(item.id, timer);
+      });
+      // Pass 2: the late-hook staleness check. Claude Code fires the
+      // Notification behind the dialog, so a prompt answered before the hook
+      // lands creates an item for a dialog that is ALREADY gone: nothing ever
+      // parsed, so the "options vanished" test can never fire, `stop` may have
+      // gone by already, and the red alert then outlived reloads until the 12h
+      // TTL. This pass re-reads the pane and resolves when the frame proves no
+      // dialog is up. Deliberately LATER than the re-capture, whose whole
+      // reason for existing is that Ink may not have painted the dialog yet:
+      // resolving inside that window could clear the alert for a dialog that
+      // was about to appear.
+      this.scheduleForItem(item, STALE_CHECK_DELAY_MS, () => {
+        this.verifyStillAnswerable(item.id);
+      });
     }
     return item;
   }
 
   /**
    * Answer-time guard: re-capture the pane and check the dialog is still on
-   * screen before keystrokes are sent at it. Only conclusive when the ORIGINAL
-   * frame parsed options: if a fresh capture then parses none, the dialog is
-   * gone (answered in the terminal moments ago), so the item resolves and the
-   * answer must be refused, because the digit would land in whatever now has
-   * focus. Unparseable-from-the-start items stay answerable (approve/deny
-   * only), same risk the terminal user already carries.
+   * screen before keystrokes are sent at it. If the dialog is gone (answered in
+   * the terminal moments ago) the item resolves and the answer is refused,
+   * because the digit would land in whatever now has focus.
+   *
+   * A fresh frame that parses NO options is conclusive in two cases, and only
+   * those; anything else stays answerable, so an unreadable capture keeps the
+   * alert rather than losing a live dialog:
+   *
+   * 1. The item HAD parsed options. They cannot vanish while the dialog is up.
+   * 2. The frame shows Claude actively running a turn. A modal dialog BLOCKS
+   *    the turn, so a working line and a dialog cannot coexist — measured on
+   *    v2.1.237: a live-dialog frame carries neither the `… (13s` timer nor
+   *    even the `esc to interrupt` footer, which the dialog replaces with
+   *    `Enter to select · ↑/↓ to navigate · Esc to cancel`.
+   *
+   * Case 2 is what closes the late-hook hole. Claude Code fires the
+   * Notification behind the dialog, so a prompt answered before the hook lands
+   * produces an item whose FIRST capture already has no dialog in it — never
+   * parsed, so case 1 can never fire, and the red alert then outlived even
+   * `stop` (which had already fired) and survived reloads until the 12h TTL.
    */
   verifyStillAnswerable(id: string): boolean {
     const item = this.getById(id);
     if (!item) return false;
-    if (item.kind === 'idle' || !item.options) return true;
+    if (item.kind === 'idle') return true;
     const capture = this.captures.get(item.sessionId);
     if (!capture) return true;
     let raw: string | null = null;
@@ -266,12 +297,37 @@ export class ApprovalInbox {
     if (!context) return true;
     const options = parseDialogOptions(context);
     if (!options) {
-      this.remove(item, 'resolved_in_terminal');
-      return false;
+      if (item.options || CLAUDE_WORKING_LINE_PATTERN.test(context)) {
+        this.remove(item, 'resolved_in_terminal');
+        return false;
+      }
+      return true; // never parsed and the pane is not visibly working: unreadable, not gone
     }
     item.context = context;
     item.options = options;
     return true;
+  }
+
+  /**
+   * "This session's pane started moving again": re-verify its pending DIALOG
+   * item against the screen and resolve it if the dialog is gone.
+   *
+   * The staleness check itself lived only in `GET /api/approvals`, which
+   * nothing calls while a page is open (`seedApprovals()` runs on init and
+   * reconnect), so a dialog answered in the terminal kept its red tab alert for
+   * the whole rest of the turn. The `working` signal is exactly the moment an
+   * answer lands, and routing it through `verifyStillAnswerable` is what makes
+   * it safe to act on for a permission/question item: `working` is heuristic
+   * and can flap, but it only decides WHEN to look — the pane decides the
+   * outcome, and an unreadable capture keeps the alert.
+   *
+   * Cheap by construction: a Map miss unless a dialog item is actually pending,
+   * and the item is gone after the first successful resolve.
+   */
+  resolveIfDialogGone(sessionId: string): void {
+    const item = this.getForSession(sessionId);
+    if (!item || item.kind === 'idle') return;
+    this.verifyStillAnswerable(item.id);
   }
 
   /** Pending item for a session, TTL-checked. */
@@ -359,10 +415,25 @@ export class ApprovalInbox {
   /** Clear all timers (shutdown/tests). Items become inert; no events fire after this. */
   stop(): void {
     this.stopped = true;
-    for (const timer of this.recaptureTimers.values()) clearTimeout(timer);
-    this.recaptureTimers.clear();
+    for (const timers of this.itemTimers.values()) for (const timer of timers) clearTimeout(timer);
+    this.itemTimers.clear();
     this.items.clear();
     this.captures.clear();
+  }
+
+  /**
+   * Run `fn` after `delayMs` if the item is still the live one for its session,
+   * tracking the timer so `remove()`/`stop()` can cancel it.
+   */
+  private scheduleForItem(item: ApprovalItem, delayMs: number, fn: () => void): void {
+    const timer = setTimeout(() => {
+      const timers = this.itemTimers.get(item.id)?.filter((t) => t !== timer) ?? [];
+      if (timers.length > 0) this.itemTimers.set(item.id, timers);
+      else this.itemTimers.delete(item.id);
+      if (this.items.get(item.sessionId)?.id !== item.id) return;
+      fn();
+    }, delayMs);
+    this.itemTimers.set(item.id, [...(this.itemTimers.get(item.id) ?? []), timer]);
   }
 
   private applyCapture(item: ApprovalItem, capture?: () => string | null): void {
@@ -377,17 +448,30 @@ export class ApprovalInbox {
     if (!context) return;
     item.context = context;
     // Idle prompts are not dialogs; never offer digit answers for them.
-    if (item.kind !== 'idle') item.options = parseDialogOptions(context);
+    if (item.kind === 'idle') return;
+    const options = parseDialogOptions(context);
+    // ⚠️ ADD-ONLY: a re-capture that parses NOTHING must never erase options a
+    // previous capture found. Claude Code delays the Notification hook behind
+    // the dialog (measured 6s here, up to ~30s), so the 600ms re-capture very
+    // often lands AFTER the user has already answered in the terminal, on a
+    // frame with no dialog in it. Clearing the field there was the whole bug:
+    // `verifyStillAnswerable` reads a MISSING `options` as "never parsed" and
+    // keeps such an item answerable by design, so a cleared field made the item
+    // permanently unsweepable — the red "needs you" alert then survived every
+    // `GET /api/approvals` and every page reload and only went away on `stop`
+    // (owner report 2026-08-20: a confirmed question left a tab flowing red for
+    // ~8 minutes while the turn ran on), and the stale card still accepted an
+    // answer, typing a bare `1` into a composer with no dialog under it.
+    // Keeping the parse means a later capture is CONCLUSIVE: options present +
+    // fresh frame without them == answered in the terminal.
+    if (options) item.options = options;
   }
 
   private remove(item: ApprovalItem, resolution: ApprovalResolution): void {
     this.items.delete(item.sessionId);
     this.captures.delete(item.sessionId);
-    const timer = this.recaptureTimers.get(item.id);
-    if (timer) {
-      clearTimeout(timer);
-      this.recaptureTimers.delete(item.id);
-    }
+    for (const timer of this.itemTimers.get(item.id) ?? []) clearTimeout(timer);
+    this.itemTimers.delete(item.id);
     if (!this.stopped) {
       this.onResolved?.({ id: item.id, sessionId: item.sessionId, kind: item.kind, resolution });
     }
