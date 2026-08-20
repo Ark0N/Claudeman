@@ -23,7 +23,14 @@ export type CliId = string & { readonly __cliId: unique symbol };
 // ---------------------------------------------------------------------------
 
 /** Values the ENGINE supplies. Config may reference these by name but never author them. */
-export type EngineValue = 'sessionId' | 'sessionName' | 'muxName' | 'effortLevel' | 'effortSettingsJson';
+export type EngineValue =
+  | 'sessionId'
+  | 'sessionName'
+  | 'muxName'
+  | 'effortLevel'
+  | 'effortSettingsJson'
+  /** `sessionId` prefixed `codeman_<id>` — codex's unique per-pane rollout originator. */
+  | 'codemanPrefixedSessionId';
 
 /**
  * A declared launch parameter. `token` params carry caller-supplied data and are therefore
@@ -87,6 +94,23 @@ export interface CliLaunch {
    */
   chain?: 'first' | 'fallback';
   variants: CliVariant[];
+  /**
+   * Maps a declared param name to the field name it arrives under on the legacy
+   * `POST /api/sessions` wire shape (`OpenCodeConfig.continueSession`, etc — the per-mode
+   * config objects predate this registry and stay on the wire for compatibility). A param
+   * with no entry here is looked up under its own name. This is what lets the spawn-command
+   * bridge (`session-cli-registry-bridge.ts`) stay generic: it reads the raw legacy config
+   * object through this DATA-declared alias table instead of a per-mode `if (mode === ...)`.
+   */
+  legacyConfigAliases?: Record<string, string>;
+  /**
+   * How to APPEND a resume id onto an already-built base command, for the docker in-container
+   * "tmux was re-created, resume the surviving transcript" path (`appendResumeFlag` in
+   * tmux-manager.ts) — a narrower, append-only sibling of the full `variants` shape above,
+   * which builds a whole command from scratch. Absent = this CLI has no resume flag to
+   * append (shell, opencode: opencode's docker resume goes through its own config object).
+   */
+  resumeAppend?: { style: 'flag'; flag: string } | { style: 'positional'; token: string };
 }
 
 // ---------------------------------------------------------------------------

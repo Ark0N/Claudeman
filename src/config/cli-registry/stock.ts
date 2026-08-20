@@ -161,6 +161,9 @@ const CLAUDE: CliEntry = {
         ],
       },
     ],
+    // Claude has no `<Mode>Config` object of its own — the bridge synthesizes one from its
+    // discrete top-level spawn fields, under their EXISTING field name `resumeSessionId`.
+    legacyConfigAliases: { resumeId: 'resumeSessionId' },
   },
   env: {
     exports: [],
@@ -307,6 +310,7 @@ const OPENCODE: CliEntry = {
         ],
       },
     ],
+    legacyConfigAliases: { resumeId: 'continueSession' },
   },
   env: {
     exports: [],
@@ -361,7 +365,6 @@ const CODEX: CliEntry = {
       animations: { type: 'bool' },
       model: { type: 'token', pattern: 'model' },
       resumeId: { type: 'token', pattern: 'id' },
-      sessionId: { type: 'engine', source: 'sessionId' },
     },
     variants: [
       {
@@ -377,11 +380,13 @@ const CODEX: CliEntry = {
         ],
       },
     ],
+    legacyConfigAliases: { bypassApprovals: 'dangerouslyBypassApprovals', resumeId: 'resumeSessionId' },
+    resumeAppend: { style: 'positional', token: 'resume' },
   },
   env: {
     exports: [
       { name: 'COLORTERM', value: 'truecolor' },
-      { name: 'CODEX_INTERNAL_ORIGINATOR_OVERRIDE', value: { engine: 'sessionId' } },
+      { name: 'CODEX_INTERNAL_ORIGINATOR_OVERRIDE', value: { engine: 'codemanPrefixedSessionId' } },
     ],
     unset: ['NO_COLOR'],
     tmuxSetenvKeys: ['OPENAI_API_KEY', 'CODEX_API_KEY', 'CODEX_HOME'],
@@ -453,6 +458,8 @@ const GEMINI: CliEntry = {
         ],
       },
     ],
+    legacyConfigAliases: { resumeId: 'resumeSession' },
+    resumeAppend: { style: 'flag', flag: '--resume' },
   },
   env: {
     exports: [{ name: 'COLORTERM', value: 'truecolor' }],
@@ -522,6 +529,8 @@ const ANTIGRAVITY: CliEntry = {
         ],
       },
     ],
+    legacyConfigAliases: { resumeId: 'resumeConversationId' },
+    resumeAppend: { style: 'flag', flag: '--conversation' },
   },
   env: {
     exports: [{ name: 'COLORTERM', value: 'truecolor' }],
@@ -600,6 +609,8 @@ const PI: CliEntry = {
         ],
       },
     ],
+    legacyConfigAliases: { resumeId: 'resumeSessionId' },
+    resumeAppend: { style: 'flag', flag: '--session' },
   },
   env: {
     exports: [{ name: 'COLORTERM', value: 'truecolor' }],

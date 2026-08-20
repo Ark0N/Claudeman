@@ -61,7 +61,14 @@ const paramSpecSchema = z.union([
   z
     .object({
       type: z.literal('engine'),
-      source: z.enum(['sessionId', 'sessionName', 'muxName', 'effortLevel', 'effortSettingsJson']),
+      source: z.enum([
+        'sessionId',
+        'sessionName',
+        'muxName',
+        'effortLevel',
+        'effortSettingsJson',
+        'codemanPrefixedSessionId',
+      ]),
     })
     .strict(),
 ]);
@@ -91,6 +98,13 @@ const launchSchema = z
     params: z.record(z.string(), paramSpecSchema),
     chain: z.enum(['first', 'fallback']).optional(),
     variants: z.array(variantSchema).min(1).max(4),
+    legacyConfigAliases: z.record(z.string(), z.string()).optional(),
+    resumeAppend: z
+      .union([
+        z.object({ style: z.literal('flag'), flag: flagToken }).strict(),
+        z.object({ style: z.literal('positional'), token: shellToken }).strict(),
+      ])
+      .optional(),
   })
   .strict()
   .superRefine((launch, ctx) => {
@@ -113,6 +127,17 @@ const launchSchema = z
           message: 'the last variant of a fallback chain must have no `when` (it must be the guaranteed terminal case)',
           path: ['variants', launch.variants.length - 1, 'when'],
         });
+      }
+    }
+    if (launch.legacyConfigAliases) {
+      for (const paramName of Object.keys(launch.legacyConfigAliases)) {
+        if (!paramNames.has(paramName)) {
+          ctx.addIssue({
+            code: 'custom',
+            message: `legacyConfigAliases key "${paramName}" is not a declared param`,
+            path: ['legacyConfigAliases', paramName],
+          });
+        }
       }
     }
   });
@@ -158,7 +183,16 @@ const envExportSchema = z
     value: z.union([
       shellToken,
       z
-        .object({ engine: z.enum(['sessionId', 'sessionName', 'muxName', 'effortLevel', 'effortSettingsJson']) })
+        .object({
+          engine: z.enum([
+            'sessionId',
+            'sessionName',
+            'muxName',
+            'effortLevel',
+            'effortSettingsJson',
+            'codemanPrefixedSessionId',
+          ]),
+        })
         .strict(),
     ]),
     when: condSchema.optional(),

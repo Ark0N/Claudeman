@@ -50,7 +50,8 @@ import {
   type SessionDocker,
   type DockerCommandMode,
 } from './types.js';
-import { buildEffortCliArgs, buildNameCliArgs } from './session-cli-builder.js';
+import { buildSpawnCommandFromRegistry } from './session-cli-registry-bridge.js';
+import { getCli } from './config/cli-registry/registry.js';
 import {
   buildSshConnectionArgs,
   defaultRemoteCommandForMode,
@@ -70,19 +71,8 @@ import {
   type DockerMount,
   type DockerSeedCopy,
 } from './docker-hosts.js';
-import {
-  wrapWithNice,
-  SAFE_PATH_PATTERN,
-  findClaudeDir,
-  getClaudeCliVersion,
-  resolveOpenCodeDir,
-  resolveCodexDir,
-  resolveGeminiDir,
-  resolveAntigravityDir,
-  resolvePiDir,
-  resolveLocalShell,
-  loginShellArgs,
-} from './utils/index.js';
+import { wrapWithNice, SAFE_PATH_PATTERN, resolveLocalShell, loginShellArgs } from './utils/index.js';
+import { resolveCliBinDir } from './utils/cli-resolver.js';
 import type {
   TerminalMultiplexer,
   MuxSession,
@@ -629,203 +619,55 @@ function buildClaudePermissionFlags(claudeMode?: ClaudeMode, allowedTools?: stri
 }
 
 /**
- * Build the opencode CLI command with appropriate flags.
- */
-function buildOpenCodeCommand(config?: OpenCodeConfig): string {
-  const parts = ['opencode'];
-
-  // Model selection — allow provider/model format (alphanumeric, dots, hyphens, slashes)
-  if (config?.model) {
-    const safeModel = /^[a-zA-Z0-9._\-/]+$/.test(config.model) ? config.model : undefined;
-    if (safeModel) parts.push('--model', safeModel);
-  }
-
-  // Continue existing session
-  if (config?.continueSession) {
-    const safeId = /^[a-zA-Z0-9_-]+$/.test(config.continueSession) ? config.continueSession : undefined;
-    if (safeId) parts.push('--session', safeId);
-    if (safeId && config.forkSession) parts.push('--fork');
-  }
-
-  return parts.join(' ');
-}
-
-/**
- * Build the codex CLI command with appropriate flags.
- *
- * Codeman launches Codex's native TUI and handles replay/scrollback by
- * stripping destructive terminal sequences before xterm.js sees them.
+ * Build the codex CLI command with appropriate flags. Thin wrapper over the CLI registry's
+ * argv engine (see `buildSpawnCommand` below); kept as its own exported function only
+ * because `test/tmux-manager.test.ts` calls it directly with a bare `CodexConfig`.
  */
 export function buildCodexCommand(config?: CodexConfig): string {
-  const parts = ['codex'];
-
-  if (config?.dangerouslyBypassApprovals) {
-    parts.push('--dangerously-bypass-approvals-and-sandbox');
-  }
-
-  if (config?.animations !== undefined) {
-    parts.push('--config', `tui.animations=${config.animations ? 'true' : 'false'}`);
-  }
-
-  if (config?.model) {
-    const safeModel = /^[a-zA-Z0-9._\-/]+$/.test(config.model) ? config.model : undefined;
-    if (safeModel) parts.push('--model', safeModel);
-  }
-
-  if (config?.resumeSessionId) {
-    const safeId = /^[a-zA-Z0-9_-]+$/.test(config.resumeSessionId) ? config.resumeSessionId : undefined;
-    if (safeId) parts.push('resume', safeId);
-  }
-
-  return parts.join(' ');
+  const codex = getCli('codex');
+  if (!codex) return 'codex'; // registry corrupt/empty — degrade to the bare binary, never throw
+  return (
+    buildSpawnCommandFromRegistry(codex, {
+      mode: 'codex',
+      sessionId: '', // codex's launch spec never references sessionId
+      codexConfig: config,
+    }) ?? 'codex'
+  );
 }
 
 /**
- * Build the Gemini CLI command with appropriate flags.
- *
- * `--skip-trust` avoids a first-run workspace trust prompt inside Codeman.
- * Approval mode defaults to `yolo` for parity with Codeman's Claude default
- * of `--dangerously-skip-permissions`; users can override it later through
- * Gemini config once Codeman exposes richer Gemini settings.
+ * Build the "CLI not found" error message for a mode with no resolved binary directory,
+ * naming the registry's own label and per-platform install command — replaces six
+ * hand-written "<CLI> CLI not found. Install with: <command>" throws, one per external
+ * CLI. Returns null for a mode the registry doesn't know (never actually reached: a mode
+ * that failed schema validation never gets this far), so the caller degrades to a generic
+ * failure rather than throwing a message about "undefined".
  */
-function buildGeminiCommand(config?: GeminiConfig): string {
-  const parts = ['gemini', '--skip-trust'];
-
-  const approvalMode = config?.approvalMode || 'yolo';
-  if (['default', 'auto_edit', 'yolo', 'plan'].includes(approvalMode)) {
-    parts.push('--approval-mode', approvalMode);
-  }
-
-  if (config?.model) {
-    const safeModel = /^[a-zA-Z0-9._\-/]+$/.test(config.model) ? config.model : undefined;
-    if (safeModel) parts.push('--model', safeModel);
-  }
-
-  if (config?.resumeSession) {
-    const safeId = /^[a-zA-Z0-9._-]+$/.test(config.resumeSession) ? config.resumeSession : undefined;
-    if (safeId) parts.push('--resume', safeId);
-  }
-
-  return parts.join(' ');
+function missingCliMessage(mode: SessionMode): string | null {
+  const entry = getCli(mode);
+  if (!entry) return null;
+  const platform = process.platform === 'win32' ? 'win32' : process.platform === 'darwin' ? 'darwin' : 'linux';
+  const command =
+    entry.discovery.install.command[platform] ??
+    entry.discovery.install.command.linux ??
+    Object.values(entry.discovery.install.command)[0];
+  return command
+    ? `${entry.label} CLI not found. Install with: ${command}`
+    : `${entry.label} CLI not found. See its docs for install instructions.`;
 }
 
 /**
- * Build the Antigravity CLI (agy) command with appropriate flags.
+ * Build the spawn command for any session mode. Shared by createSession() and
+ * respawnPane() to avoid duplication.
  *
- * Unlike gemini's yolo default, `--dangerously-skip-permissions` is only added
- * when the config explicitly asks for it (the frontend sends it for parity with
- * Codeman's Claude default; the multi-user clamp strips it for non-granted owners,
- * and an ABSENT config stays at agy's own prompting default — safe like Codex).
+ * Every mode but `shell` renders through the CLI registry's argv engine
+ * (`buildSpawnCommandFromRegistry` in session-cli-registry-bridge.ts): the per-mode flag
+ * logic that used to live here (buildOpenCodeCommand, buildGeminiCommand,
+ * buildAntigravityCommand, buildPiCommand, and claude's own resume/model/effort/name
+ * assembly) is now DATA in config/cli-registry/stock.ts, proven byte-identical to the old
+ * hand-written builders by test/cli-registry-spawn-bridge-parity.test.ts. `shell` has no CLI
+ * to template — it resolves the actual login shell in code below, unchanged.
  */
-function buildAntigravityCommand(config?: AntigravityConfig): string {
-  const parts = ['agy'];
-
-  if (config?.dangerouslySkipPermissions) {
-    parts.push('--dangerously-skip-permissions');
-  }
-
-  if (config?.model) {
-    const safeModel = /^[a-zA-Z0-9._\-/]+$/.test(config.model) ? config.model : undefined;
-    if (safeModel) parts.push('--model', safeModel);
-  }
-
-  if (config?.resumeConversationId) {
-    const safeId = /^[a-zA-Z0-9._-]+$/.test(config.resumeConversationId) ? config.resumeConversationId : undefined;
-    if (safeId) parts.push('--conversation', safeId);
-  }
-
-  return parts.join(' ');
-}
-
-/** Pi's `--thinking` levels. Runtime allowlist — defense in depth beyond the Zod enum. */
-const PI_THINKING_LEVELS = new Set(['off', 'minimal', 'low', 'medium', 'high', 'xhigh', 'max']);
-
-/**
- * Build the Pi CLI (pi.dev) command with appropriate flags.
- *
- * Pi has NO permission prompts and no `--dangerously-skip-permissions` analog, so
- * there is deliberately nothing bypass-shaped here. The privileged knob is the
- * TRI-STATE `approveProjectTrust`: `true` -> `--approve` (trust repo-local `.pi/`
- * config, which means loading and EXECUTING repository TypeScript and installing
- * missing project packages), `false` -> `--no-approve` (force-deny, used by the
- * multi-user clamp so the trust prompt never appears), absent -> pi's own
- * `defaultProjectTrust`.
- *
- * `--api-key` is deliberately NEVER wired: it would put a provider secret on the
- * spawn command line (visible in `ps` and tmux state), which is exactly what the
- * socket-scoped `tmux setenv` discipline exists to prevent.
- *
- * Like the sibling builders, every user value is regex-allowlisted and silently
- * DROPPED on failure — the result is interpolated into a `bash -c "..."` string.
- */
-function buildPiCommand(config?: PiConfig): string {
-  const parts = ['pi'];
-
-  if (config?.approveProjectTrust === true) {
-    parts.push('--approve');
-  } else if (config?.approveProjectTrust === false) {
-    parts.push('--no-approve');
-  }
-
-  if (config?.model) {
-    // `:` for a thinking suffix (`sonnet:high`), `/` for `provider/id` (`openai/gpt-4o`).
-    const safeModel = /^[a-zA-Z0-9._\-/:]+$/.test(config.model) ? config.model : undefined;
-    if (safeModel) parts.push('--model', safeModel);
-  }
-
-  if (config?.provider) {
-    const safeProvider = /^[a-z0-9-]+$/.test(config.provider) ? config.provider : undefined;
-    if (safeProvider) parts.push('--provider', safeProvider);
-  }
-
-  if (config?.thinking && PI_THINKING_LEVELS.has(config.thinking)) {
-    parts.push('--thinking', config.thinking);
-  }
-
-  // --session and -c conflict; a valid explicit session id wins.
-  const safeSessionId =
-    config?.resumeSessionId && /^[a-zA-Z0-9._-]+$/.test(config.resumeSessionId) ? config.resumeSessionId : undefined;
-  if (safeSessionId) {
-    parts.push('--session', safeSessionId);
-  } else if (config?.continueSession) {
-    parts.push('-c');
-  }
-
-  return parts.join(' ');
-}
-
-/**
- * Build the spawn command for any session mode.
- * Shared by createSession() and respawnPane() to avoid duplication.
- */
-/**
- * Build the shell fragment carrying the effort level as a SOFT default
- * (see buildEffortCliArgs — `--effort <level>` for regular levels incl. max,
- * `--settings '{"ultracode":true}'` for ultracode; deliberately not the
- * CLAUDE_CODE_EFFORT_LEVEL env var, which hard-locks /effort switching).
- *
- * Injection-safe: effort is validated against the EFFORT_LEVELS allowlist inside
- * buildEffortCliArgs, so the single-quoted values contain no user-controlled characters.
- */
-function buildEffortSettingsFlag(effort?: EffortLevel): string {
-  const [flag, value] = buildEffortCliArgs(effort);
-  return flag && value ? ` ${flag} '${value}'` : '';
-}
-
-/**
- * Build the ` --name "<session name>"` shell fragment, or '' when it must be
- * omitted. Version-gated FAIL-CLOSED in buildNameCliArgs (an older/unknown CLI
- * aborts startup on an unknown flag, which would kill every claude spawn), and
- * the value is allowlist-sanitized there, so it contains none of the characters
- * that are special inside this double-quoted interpolation. The peer name is a
- * soft default (in-session /rename still wins), which is why this rides the
- * spawn command rather than any persisted config.
- */
-function buildClaudeNameFlag(sessionName: string | undefined, cliVersion: string | null): string {
-  const [flag, value] = buildNameCliArgs(sessionName, cliVersion);
-  return flag && value ? ` ${flag} "${value}"` : '';
-}
-
 export function buildSpawnCommand(options: {
   mode: SessionMode;
   sessionId: string;
@@ -849,42 +691,10 @@ export function buildSpawnCommand(options: {
    */
   claudeCliVersion?: string | null;
 }): string {
-  if (options.mode === 'claude') {
-    // Validate model to prevent command injection
-    const safeModel = options.model && /^[a-zA-Z0-9._\-[\]]+$/.test(options.model) ? options.model : undefined;
-    const modelFlag = safeModel ? ` --model "${safeModel}"` : '';
-    const effortFlag = buildEffortSettingsFlag(options.effort);
-    const nameFlag = buildClaudeNameFlag(
-      options.sessionName,
-      options.claudeCliVersion !== undefined ? options.claudeCliVersion : getClaudeCliVersion()
-    );
-    // Use --resume to restore a previous conversation, otherwise --session-id for new sessions.
-    // Wrap --resume in a fallback: if it exits non-zero (session not found, corrupt, etc.),
-    // fall back to a new session with --session-id so the pane doesn't die.
-    const safeResumeId =
-      options.resumeSessionId && /^[a-f0-9-]+$/.test(options.resumeSessionId) ? options.resumeSessionId : undefined;
-    const permFlags = buildClaudePermissionFlags(options.claudeMode, options.allowedTools);
-    if (safeResumeId) {
-      const resumeCmd = `claude${permFlags} --resume "${safeResumeId}"${modelFlag}${effortFlag}${nameFlag}`;
-      const fallbackCmd = `claude${permFlags} --session-id "${options.sessionId}"${modelFlag}${effortFlag}${nameFlag}`;
-      return `${resumeCmd} || ${fallbackCmd}`;
-    }
-    return `claude${permFlags} --session-id "${options.sessionId}"${modelFlag}${effortFlag}${nameFlag}`;
-  }
-  if (options.mode === 'opencode') {
-    return buildOpenCodeCommand(options.openCodeConfig);
-  }
-  if (options.mode === 'codex') {
-    return buildCodexCommand(options.codexConfig);
-  }
-  if (options.mode === 'gemini') {
-    return buildGeminiCommand(options.geminiConfig);
-  }
-  if (options.mode === 'antigravity') {
-    return buildAntigravityCommand(options.antigravityConfig);
-  }
-  if (options.mode === 'pi') {
-    return buildPiCommand(options.piConfig);
+  const entry = getCli(options.mode);
+  if (entry) {
+    const rendered = buildSpawnCommandFromRegistry(entry, options);
+    if (rendered !== undefined) return rendered;
   }
   // #208: NOT the literal '$SHELL'. This string is embedded in the `bash -c "…"`
   // argument of the respawn-pane line, which execSync runs through `/bin/sh -c`,
@@ -1092,18 +902,11 @@ const RESUME_ID_SAFE = /^[A-Za-z0-9._-]+$/;
  */
 function appendResumeFlag(modeCommand: string, mode: SessionMode, resumeId: string): string {
   if (!RESUME_ID_SAFE.test(resumeId)) return modeCommand;
-  switch (mode) {
-    case 'gemini':
-      return `${modeCommand} --resume ${resumeId}`;
-    case 'codex':
-      return `${modeCommand} resume ${resumeId}`;
-    case 'antigravity':
-      return `${modeCommand} --conversation ${resumeId}`;
-    case 'pi':
-      return `${modeCommand} --session ${resumeId}`;
-    default:
-      return modeCommand; // shell / opencode: no resume
-  }
+  const resumeAppend = getCli(mode)?.launch.resumeAppend;
+  if (!resumeAppend) return modeCommand; // claude/shell/opencode: no resume-append shape
+  return resumeAppend.style === 'flag'
+    ? `${modeCommand} ${resumeAppend.flag} ${resumeId}`
+    : `${modeCommand} ${resumeAppend.token} ${resumeId}`;
 }
 
 /**
@@ -1398,12 +1201,15 @@ function buildRemoteSessionCommand(options: {
 }
 
 /**
- * Set sensitive environment variables on a tmux session via setenv.
- * These are inherited by panes but not visible in ps output or tmux history.
+ * Set a CLI's sensitive environment variables (API keys, auth env) on a tmux session via
+ * setenv, reading which var NAMES to forward from the registry's `env.tmuxSetenvKeys` —
+ * VALUES always come from the server's own `process.env`, never from the CLI or client, so
+ * a secret can never appear on the bash command line or in `ps`/tmux history. Replaces
+ * three near-identical hand-written functions (one each for opencode/codex/gemini); their
+ * key lists are now DATA in config/cli-registry/stock.ts.
  */
-function setOpenCodeEnvVars(tmuxCmd: string, muxName: string): void {
-  const sensitiveVars = ['ANTHROPIC_API_KEY', 'OPENAI_API_KEY', 'GOOGLE_API_KEY'];
-  for (const key of sensitiveVars) {
+function setCliSensitiveEnvVars(tmuxCmd: string, muxName: string, keys: readonly string[]): void {
+  for (const key of keys) {
     const val = process.env[key];
     if (val) {
       // Shell-escape: wrap in single quotes, escape any inner single quotes
@@ -1422,65 +1228,14 @@ function setOpenCodeEnvVars(tmuxCmd: string, muxName: string): void {
 }
 
 /**
- * Set sensitive environment variables for Codex on a tmux session via setenv.
- * Codex (OpenAI CLI) needs OPENAI_API_KEY; we also forward CODEX_* keys.
+ * Set a CLI's JSON config-content env var on a tmux session via setenv, under the NAME the
+ * registry declares (`env.configContentVar`). Uses tmux setenv to avoid shell metacharacter
+ * injection from user-supplied JSON. Only opencode declares one today, and the
+ * `autoAllowTools` merge logic below is genuinely opencode-shaped (its config-file schema),
+ * not a hard-coded id check — a future CLI with its own config-content var reuses this
+ * function by declaring `configContentVar` and passing its own config shape in.
  */
-function setCodexEnvVars(tmuxCmd: string, muxName: string): void {
-  const sensitiveVars = ['OPENAI_API_KEY', 'CODEX_API_KEY', 'CODEX_HOME'];
-  for (const key of sensitiveVars) {
-    const val = process.env[key];
-    if (val) {
-      const escaped = val.replace(/'/g, "'\\''");
-      try {
-        execSync(`${tmuxCmd} setenv -t '${muxName}' ${key} '${escaped}'`, {
-          encoding: 'utf8',
-          timeout: EXEC_TIMEOUT_MS,
-          stdio: ['pipe', 'pipe', 'pipe'],
-        });
-      } catch {
-        /* Non-critical — key may not be needed */
-      }
-    }
-  }
-}
-
-/**
- * Set sensitive environment variables for Gemini on a tmux session via setenv.
- * Gemini Pro/Ultra users usually authenticate via cached Google login; these
- * variables cover API-key and Vertex AI paths without putting secrets in ps.
- */
-function setGeminiEnvVars(tmuxCmd: string, muxName: string): void {
-  const sensitiveVars = [
-    'GEMINI_API_KEY',
-    'GEMINI_MODEL',
-    'GOOGLE_API_KEY',
-    'GOOGLE_CLOUD_PROJECT',
-    'GOOGLE_CLOUD_LOCATION',
-    'GOOGLE_APPLICATION_CREDENTIALS',
-    'GOOGLE_GENAI_USE_VERTEXAI',
-  ];
-  for (const key of sensitiveVars) {
-    const val = process.env[key];
-    if (val) {
-      const escaped = val.replace(/'/g, "'\\''");
-      try {
-        execSync(`${tmuxCmd} setenv -t '${muxName}' ${key} '${escaped}'`, {
-          encoding: 'utf8',
-          timeout: EXEC_TIMEOUT_MS,
-          stdio: ['pipe', 'pipe', 'pipe'],
-        });
-      } catch {
-        /* Non-critical — key may not be needed */
-      }
-    }
-  }
-}
-
-/**
- * Set OPENCODE_CONFIG_CONTENT on a tmux session via setenv.
- * Uses tmux setenv to avoid shell metacharacter injection from user-supplied JSON.
- */
-function setOpenCodeConfigContent(tmuxCmd: string, muxName: string, config?: OpenCodeConfig): void {
+function setOpenCodeConfigContent(tmuxCmd: string, muxName: string, varName: string, config?: OpenCodeConfig): void {
   if (!config) return;
 
   let jsonContent: string | undefined;
@@ -1511,7 +1266,7 @@ function setOpenCodeConfigContent(tmuxCmd: string, muxName: string, config?: Ope
   if (jsonContent) {
     const escaped = jsonContent.replace(/'/g, "'\\''");
     try {
-      execSync(`${tmuxCmd} setenv -t '${muxName}' OPENCODE_CONFIG_CONTENT '${escaped}'`, {
+      execSync(`${tmuxCmd} setenv -t '${muxName}' ${varName} '${escaped}'`, {
         encoding: 'utf8',
         timeout: EXEC_TIMEOUT_MS,
         stdio: ['pipe', 'pipe', 'pipe'],
@@ -1666,19 +1421,32 @@ export class TmuxManager extends EventEmitter implements TerminalMultiplexer {
    * command line (visible in `ps`). This also sidesteps shell-metachar injection via keys.
    */
   private buildEnvExports(sessionId: string, muxName: string, mode: SessionMode): string[] {
-    const exports = [
+    const entry = getCli(mode);
+    // Per-CLI exports/unsets are DATA (config/cli-registry/stock.ts's `env.exports` /
+    // `env.unset`) — e.g. codex's COLORTERM=truecolor + unset NO_COLOR + its unique
+    // CODEX_INTERNAL_ORIGINATOR_OVERRIDE (so the response-viewer can locate THIS pane's
+    // rollout: codex writes the value into session_meta.originator of every rollout it
+    // creates, and without a unique one two panes in the same cwd bleed into each other),
+    // claude's `unset CLAUDECODE` + `unset COLORTERM`. Order between exports/unsets carries
+    // no bash semantics (independent variable names), so this need not reproduce the exact
+    // historical interleaving.
+    const perCliUnsets = (entry?.env.unset ?? []).map((name) => `unset ${name}`);
+    const perCliExports = (entry?.env.exports ?? []).map((e) => {
+      const value =
+        typeof e.value === 'string'
+          ? e.value
+          : e.value.engine === 'sessionId'
+            ? sessionId
+            : e.value.engine === 'codemanPrefixedSessionId'
+              ? `codeman_${sessionId}`
+              : '';
+      return `export ${e.name}=${value}`;
+    });
+    return [
       'export LANG=en_US.UTF-8',
       'export LC_ALL=en_US.UTF-8',
-      mode === 'codex' || mode === 'gemini' || mode === 'antigravity' || mode === 'pi'
-        ? 'export COLORTERM=truecolor'
-        : 'unset COLORTERM',
-      ...(mode === 'codex' || mode === 'gemini' || mode === 'antigravity' || mode === 'pi' ? ['unset NO_COLOR'] : []),
-      // Stamp each Codex pane with a unique originator so the response-viewer
-      // can locate THIS pane's rollout exactly — codex writes the value into
-      // session_meta.originator of every rollout it creates. Without it,
-      // rollouts are matched by cwd+mtime and two panes in the same directory
-      // bleed into each other.
-      ...(mode === 'codex' ? [`export CODEX_INTERNAL_ORIGINATOR_OVERRIDE=codeman_${sessionId}`] : []),
+      ...perCliUnsets,
+      ...perCliExports,
       'export CODEMAN_MUX=1',
       `export CODEMAN_SESSION_ID=${sessionId}`,
       `export CODEMAN_MUX_NAME=${muxName}`,
@@ -1691,9 +1459,6 @@ export class TmuxManager extends EventEmitter implements TerminalMultiplexer {
       // execution time, so the COD-54 hook secret stays off the command line.
       `export CODEMAN_HOOK_SECRET_FILE="${dataPath('hook-secret')}"`,
     ];
-    // Only unset CLAUDECODE for Claude sessions
-    if (mode === 'claude') exports.splice(2, 0, 'unset CLAUDECODE');
-    return exports;
   }
 
   /**
@@ -1743,58 +1508,26 @@ export class TmuxManager extends EventEmitter implements TerminalMultiplexer {
    * In createSession(), a missing binary dir throws — the caller handles that separately.
    */
   private buildPathExport(mode: SessionMode): { pathExport: string; dir: string | null } {
-    if (mode === 'claude') {
-      const dir = findClaudeDir();
-      return { pathExport: dir ? `export PATH="${dir}:$PATH" && ` : '', dir };
-    }
-    if (mode === 'opencode') {
-      const dir = resolveOpenCodeDir();
-      return { pathExport: dir ? `export PATH="${dir}:$PATH" && ` : '', dir };
-    }
-    if (mode === 'codex') {
-      const dir = resolveCodexDir();
-      return { pathExport: dir ? `export PATH="${dir}:$PATH" && ` : '', dir };
-    }
-    if (mode === 'gemini') {
-      const dir = resolveGeminiDir();
-      return { pathExport: dir ? `export PATH="${dir}:$PATH" && ` : '', dir };
-    }
-    if (mode === 'antigravity') {
-      const dir = resolveAntigravityDir();
-      return { pathExport: dir ? `export PATH="${dir}:$PATH" && ` : '', dir };
-    }
-    if (mode === 'pi') {
-      const dir = resolvePiDir();
-      return { pathExport: dir ? `export PATH="${dir}:$PATH" && ` : '', dir };
-    }
-    return { pathExport: '', dir: null };
+    const dir = resolveCliBinDir(mode);
+    return { pathExport: dir ? `export PATH="${dir}:$PATH" && ` : '', dir };
   }
 
   /**
-   * Configure OpenCode-specific environment on a tmux session.
-   * Sets sensitive API keys and config content via tmux setenv
-   * (not visible in ps output or tmux history, inherited by panes).
+   * Configure a CLI's environment on a tmux session: its sensitive API keys/auth env
+   * (`env.tmuxSetenvKeys`) and, if it declares one, its JSON config-content var
+   * (`env.configContentVar` — today only opencode). All via `tmux setenv`, so nothing
+   * appears in the bash command line or `ps`/tmux history, and inherited by every pane
+   * including `respawn-pane`. Replaces three per-CLI methods (`_configureOpenCode`,
+   * `_configureCodex`, `_configureGemini`) with one generic call over registry data.
    */
-  private _configureOpenCode(muxName: string, openCodeConfig?: OpenCodeConfig): void {
+  private _configureCliEnv(mode: SessionMode, muxName: string, openCodeConfig?: OpenCodeConfig): void {
+    const entry = getCli(mode);
+    if (!entry) return;
     const tmuxCmd = this.tmux();
-    setOpenCodeEnvVars(tmuxCmd, muxName);
-    setOpenCodeConfigContent(tmuxCmd, muxName, openCodeConfig);
-  }
-
-  /**
-   * Configure Codex-specific environment on a tmux session.
-   * Sets OPENAI_API_KEY (and related keys) via tmux setenv so secrets don't
-   * appear in the bash command line.
-   */
-  private _configureCodex(muxName: string): void {
-    setCodexEnvVars(this.tmux(), muxName);
-  }
-
-  /**
-   * Configure Gemini-specific environment on a tmux session.
-   */
-  private _configureGemini(muxName: string): void {
-    setGeminiEnvVars(this.tmux(), muxName);
+    setCliSensitiveEnvVars(tmuxCmd, muxName, entry.env.tmuxSetenvKeys);
+    if (entry.env.configContentVar) {
+      setOpenCodeConfigContent(tmuxCmd, muxName, entry.env.configContentVar, openCodeConfig);
+    }
   }
 
   /**
@@ -1855,27 +1588,9 @@ export class TmuxManager extends EventEmitter implements TerminalMultiplexer {
 
     // Resolve CLI binary directory based on mode
     const { pathExport, dir: cliDir } = this.buildPathExport(mode);
-    if (mode === 'claude' && !cliDir) {
-      throw new Error('Claude CLI not found. Install it with: curl -fsSL https://claude.ai/install.sh | bash');
-    }
-    if (mode === 'opencode' && !cliDir) {
-      throw new Error('OpenCode CLI not found. Install with: curl -fsSL https://opencode.ai/install | bash');
-    }
-    if (mode === 'codex' && !cliDir) {
-      throw new Error('Codex CLI not found. Install with: npm install -g @openai/codex');
-    }
-    if (mode === 'gemini' && !cliDir) {
-      throw new Error('Gemini CLI not found. Install with: npm install -g @google/gemini-cli');
-    }
-    if (mode === 'antigravity' && !cliDir) {
-      throw new Error(
-        'Antigravity CLI not found. Install with: curl -fsSL https://antigravity.google/cli/install.sh | bash'
-      );
-    }
-    if (mode === 'pi' && !cliDir) {
-      throw new Error(
-        'Pi CLI not found. Install with: npm install -g --ignore-scripts @earendil-works/pi-coding-agent'
-      );
+    if (!cliDir && mode !== 'shell') {
+      const message = missingCliMessage(mode);
+      if (message) throw new Error(message);
     }
 
     const envExportsStr = this.buildEnvExports(sessionId, muxName, mode).join(' && ');
@@ -1939,17 +1654,11 @@ export class TmuxManager extends EventEmitter implements TerminalMultiplexer {
         /* Non-critical */
       }
 
-      // For OpenCode: set sensitive env vars and config via tmux setenv
-      // (not visible in ps output or tmux history, inherited by panes)
-      if (mode === 'opencode') {
-        this._configureOpenCode(muxName, openCodeConfig);
-      } else if (mode === 'codex') {
-        this._configureCodex(muxName);
-      }
-      // For Gemini: set Gemini/Google auth env vars via tmux setenv
-      if (mode === 'gemini') {
-        this._configureGemini(muxName);
-      }
+      // Set sensitive env vars (and, for opencode, its config-content var) via tmux setenv —
+      // not visible in ps output or tmux history, inherited by panes. A no-op for a CLI that
+      // declares no tmuxSetenvKeys and no configContentVar (claude, shell, antigravity, pi
+      // today), so this runs unconditionally instead of a per-mode dispatch.
+      this._configureCliEnv(mode, muxName, openCodeConfig);
 
       // Apply user-supplied env overrides (e.g., CLAUDE_CODE_EFFORT_LEVEL) via tmux setenv
       // so secret values stay off the bash command line. Must run before respawn-pane.
@@ -2170,16 +1879,9 @@ export class TmuxManager extends EventEmitter implements TerminalMultiplexer {
         : localFullCmd;
 
     try {
-      // For OpenCode: set sensitive env vars via tmux setenv before respawn
-      if (mode === 'opencode') {
-        this._configureOpenCode(muxName, openCodeConfig);
-      } else if (mode === 'codex') {
-        this._configureCodex(muxName);
-      }
-      // For Gemini: set Gemini/Google auth env vars via tmux setenv before respawn
-      if (mode === 'gemini') {
-        this._configureGemini(muxName);
-      }
+      // Set sensitive env vars via tmux setenv before respawn (see createSession() for
+      // why this runs unconditionally — a no-op for a CLI with nothing to configure).
+      this._configureCliEnv(mode, muxName, openCodeConfig);
 
       // Re-apply user env overrides before respawn so the new shell inherits them.
       this.applyEnvOverrides(muxName, envOverrides);

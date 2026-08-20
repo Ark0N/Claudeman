@@ -23,6 +23,7 @@ import { homedir } from 'node:os';
 import { EXEC_TIMEOUT_MS } from '../config/exec-timeout.js';
 import { compileVersionRegex } from '../config/cli-registry/patterns.js';
 import type { CliVersionProbe } from '../config/cli-registry/types.js';
+import { getCli } from '../config/cli-registry/registry.js';
 
 /** Expand a leading `~` to the current homedir. Search dirs carry no other expansion. */
 function expandHome(dir: string): string {
@@ -278,4 +279,39 @@ export function augmentPath(dir: string | null, currentPath: string): string {
     return `${dir}${delimiter}${currentPath}`;
   }
   return currentPath;
+}
+
+/**
+ * Generic, memoized-by-id directory resolution for ANY registered CLI. Chooses
+ * `createVersionGatedResolver` when the entry's discovery declares
+ * `requireVersionMatch` (pi's shape) and `createDirResolver` otherwise (every other
+ * entry today) — so callers that need only a binary DIRECTORY (not a live version,
+ * which the six per-CLI resolver modules still own) can look one up for ANY id
+ * without a per-mode branch, including a custom CLI that isn't one of the six
+ * hand-named modules at all.
+ *
+ * Each id gets its own resolver instance the first time it is requested, cached for
+ * the process lifetime exactly like the six per-CLI modules already cache themselves
+ * — this does not create a second competing cache for claude/opencode/codex/gemini
+ * /antigravity/pi, since callers that already import those modules' own functions
+ * keep using them; this is for generic code that only has a `CliId` string in hand.
+ */
+const _dirResolvers = new Map<string, DirResolver>();
+
+export function resolveCliBinDir(id: string): string | null {
+  let resolver = _dirResolvers.get(id);
+  if (!resolver) {
+    const entry = getCli(id);
+    if (!entry || entry.discovery.binaries.length === 0) return null; // e.g. `shell`
+    resolver = entry.discovery.version?.requireVersionMatch
+      ? createVersionGatedResolver(
+          entry.discovery.binaries,
+          entry.discovery.searchDirs,
+          entry.discovery.version,
+          `CliResolver:${id}`
+        )
+      : createDirResolver(entry.discovery.binaries, entry.discovery.searchDirs);
+    _dirResolvers.set(id, resolver);
+  }
+  return resolver.resolveDir();
 }
