@@ -6,13 +6,13 @@ import { exec } from 'node:child_process';
 import { promisify } from 'node:util';
 import type {
   RemoteCase,
-  RemoteCommandMode,
   RemoteHost,
   RemoteSessionInfo,
   RemoteSshOptions,
   SessionMode,
   SessionRemote,
 } from './types.js';
+import { getCli } from './config/cli-registry/registry.js';
 
 const execAsync = promisify(exec);
 
@@ -89,33 +89,30 @@ export function remoteLoginShellCommand(command: string): string {
   return `exec ${REMOTE_LOGIN_SHELL} -i -l -c ${shellescape(command)}`;
 }
 
+/** `exec $SHELL -i -l`, no `-c` — the remote user's actual login shell, interactive. */
+function remoteLoginShellOnly(): string {
+  // $SHELL, not a hardcoded bash: sshd sets it from the remote user's /etc/passwd entry,
+  // so this launches their actual login shell (zsh, fish, etc.). -i -l so it sources rc
+  // files (~/.zshrc etc.), matching the local shell-mode launch.
+  return `exec ${REMOTE_LOGIN_SHELL} -i -l`;
+}
+
 export function defaultRemoteCommandForMode(mode: SessionMode): string {
-  // Agent CLIs (claude/opencode/codex/gemini/antigravity) are typically installed
-  // under per-user paths like ~/.local/bin or ~/.opencode/bin, added to PATH only by
-  // the remote user's interactive-login shell startup files (~/.zshrc etc.). ssh's
-  // remote-command execution is neither interactive nor login, so a bare `exec
-  // claude` sees only sshd's minimal default PATH and fails with "command not
-  // found" (exit 127) — confirmed via `tmux capture-pane` on the
-  // remain-on-exit-preserved dead pane. Route through `$SHELL -i -l -c`, the same
-  // fix already used for shell mode below, so PATH is fully resolved before the
-  // CLI name is looked up.
-  const commands: Record<RemoteCommandMode, string> = {
-    // $SHELL, not a hardcoded bash: sshd sets it from the remote user's
-    // /etc/passwd entry, so this launches their actual login shell (zsh,
-    // fish, etc.). -i -l so it sources rc files (~/.zshrc etc.), matching
-    // the local shell-mode launch.
-    shell: `exec ${REMOTE_LOGIN_SHELL} -i -l`,
-    // Mirror the LOCAL claude default so the remote agent runs non-interactively
-    // (no trust-folder/permission prompt that nothing on the remote answers). The
-    // per-host `commands.claude` override stays the escape hatch.
-    claude: remoteLoginShellCommand('claude --dangerously-skip-permissions'),
-    opencode: remoteLoginShellCommand('opencode'),
-    codex: remoteLoginShellCommand('codex'),
-    gemini: remoteLoginShellCommand('gemini'),
-    antigravity: remoteLoginShellCommand('agy'),
-    pi: remoteLoginShellCommand('pi'),
-  };
-  return commands[mode as RemoteCommandMode] || commands.shell;
+  const entry = getCli(mode);
+  if (!entry || entry.kind === 'shell') return remoteLoginShellOnly();
+
+  const overlay = entry.overlays.remote;
+  if (overlay && 'disabled' in overlay) return remoteLoginShellOnly();
+
+  // Agent CLIs are typically installed under per-user paths like ~/.local/bin or
+  // ~/.opencode/bin, added to PATH only by the remote user's interactive-login shell
+  // startup files (~/.zshrc etc.). ssh's remote-command execution is neither interactive
+  // nor login, so a bare `exec claude` sees only sshd's minimal default PATH and fails
+  // with "command not found" (exit 127) — confirmed via `tmux capture-pane` on the
+  // remain-on-exit-preserved dead pane. Route through `$SHELL -i -l -c` so PATH is fully
+  // resolved before the CLI name is looked up.
+  const command = overlay?.command ?? entry.discovery.binaries[0];
+  return command ? remoteLoginShellCommand(command) : remoteLoginShellOnly();
 }
 
 export function remoteSshTarget(host: Pick<RemoteHost, 'username' | 'host'>): string {
@@ -258,20 +255,6 @@ export async function checkRemoteTmuxAvailable(
 }
 
 /**
- * The CLI binary each session mode runs on the remote host. Antigravity's
- * binary is `agy` (the mode name is not the command); shell has no CLI to
- * probe, so it is absent.
- */
-const REMOTE_CLI_BIN: Partial<Record<SessionMode, string>> = {
-  claude: 'claude',
-  opencode: 'opencode',
-  codex: 'codex',
-  gemini: 'gemini',
-  antigravity: 'agy',
-  pi: 'pi',
-};
-
-/**
  * Build the SSH command that reads the remote CLI's version (`claude --version`
  * on the remote host). The version query is routed through
  * `remoteLoginShellCommand` (the SAME `$SHELL -i -l -c` wrapper the real
@@ -279,13 +262,15 @@ const REMOTE_CLI_BIN: Partial<Record<SessionMode, string>> = {
  * interactive-login startup files run (see defaultRemoteCommandForMode); a bare
  * `claude --version` over ssh exits 127. Connection options come from the
  * shared `buildSshConnectionArgs`, so the probe reaches exactly the hosts the
- * launch can reach. Returns null for modes with no CLI (shell).
+ * launch can reach. Returns null for modes with no CLI (shell) — the registry's own
+ * `discovery.binaries[0]` is the "CLI binary each mode runs" lookup (e.g. antigravity's
+ * mode is `antigravity` but its binary is `agy`), so there is nothing to duplicate here.
  */
 export function buildRemoteCliVersionProbeCommand(
   host: Pick<RemoteHost, 'username' | 'host' | 'port'> & RemoteSshOptions,
   mode: SessionMode
 ): string | null {
-  const bin = REMOTE_CLI_BIN[mode];
+  const bin = getCli(mode)?.discovery.binaries[0];
   if (!bin) return null;
   return [
     ...buildSshConnectionArgs(host),

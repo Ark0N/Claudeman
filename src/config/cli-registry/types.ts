@@ -257,9 +257,15 @@ export interface CliCredStore {
 }
 
 export interface CliOverlays {
-  /** Which launch variant to use over SSH, or that remote is unsupported. */
-  remote: { variant: string } | { disabled: true };
-  docker: { variant: string } | { disabled: true };
+  /**
+   * The remote/docker DEFAULT pane command: just the CLI invocation (e.g. `claude
+   * --dangerously-skip-permissions`), independent of each location's own wrapping
+   * (remote: login-shell `-c`; docker: `exec`). Absent `command` = the bare
+   * `discovery.binaries[0]`. `disabled: true` = this location has no story for this CLI at
+   * all (docker for `shell`) — distinct from "no override", which still gets a default.
+   */
+  remote?: { command?: string } | { disabled: true };
+  docker?: { command?: string } | { disabled: true };
   credStore?: CliCredStore;
 }
 

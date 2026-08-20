@@ -30,10 +30,10 @@ import { createHash } from 'node:crypto';
 import { execFile, spawn } from 'node:child_process';
 import { promisify } from 'node:util';
 import { dataPath } from './config/instance.js';
-import { getCli } from './config/cli-registry/registry.js';
+import { getCli, listClis } from './config/cli-registry/registry.js';
+import type { CliCredStore } from './config/cli-registry/types.js';
 import type {
   DockerCase,
-  DockerCommandMode,
   DockerEngine,
   DockerHost,
   DockerNetworkMode,
@@ -135,19 +135,22 @@ export function dockerContainerName(caseName: string): string {
   return `${CONTAINER_NAME_PREFIX}${caseName}`;
 }
 
-/** Default pane command per CLI mode (mirror of defaultRemoteCommandForMode). */
+/**
+ * Default in-container pane command per CLI mode (mirror of defaultRemoteCommandForMode).
+ * Reads the registry's `overlays.docker` default and falls back to the bare
+ * `discovery.binaries[0]` when the entry declares no override — the docker analog of
+ * remote-hosts.ts's `defaultRemoteCommandForMode`, minus the login-shell `-c` wrapping
+ * (a container's `exec` already runs as the container user with its own PATH).
+ */
 export function defaultDockerCommandForMode(mode: SessionMode): string {
-  const commands: Record<DockerCommandMode, string> = {
-    shell: 'exec bash -l',
-    // Mirror the LOCAL claude default so the in-container agent runs non-interactively.
-    claude: 'exec claude --dangerously-skip-permissions',
-    opencode: 'exec opencode',
-    codex: 'exec codex',
-    gemini: 'exec gemini',
-    antigravity: 'exec agy',
-    pi: 'exec pi',
-  };
-  return commands[mode as DockerCommandMode] || commands.shell;
+  const entry = getCli(mode);
+  if (!entry || entry.kind === 'shell') return 'exec bash -l';
+
+  const overlay = entry.overlays.docker;
+  if (overlay && 'disabled' in overlay) return 'exec bash -l';
+
+  const command = overlay?.command ?? entry.discovery.binaries[0];
+  return command ? `exec ${command}` : 'exec bash -l';
 }
 
 /** `container:/workdir` display string (mirror of remoteDisplayPath's `user@host:path`). */
@@ -583,41 +586,22 @@ export function resolveDockerClaudeArtifacts(
  * seeded. The other three have no host-read/resume dependency and are fully
  * seed-copied (writable copy in the container, no write-back to the host).
  */
-interface CredStorePolicy {
-  /** Path relative to HOME (host + container), e.g. '.codex' or '.config/gcloud'. */
-  rel: string;
-  /** Subdirs bind-mounted RW (shared: resume + host reads). */
-  shareDirs?: string[];
-  /** Files bind-mounted RW (append-only, e.g. codex history.jsonl — never renamed). */
-  shareFiles?: string[];
-  /** Files seeded (RO mount → cp) into the container's own copy. */
-  seedFiles?: string[];
-  /** Seed the WHOLE dir (RO mount → cp -a) — for stores with no shared/host-read state. */
-  seedWhole?: boolean;
+/**
+ * Every registered CLI's credential-store policy (`overlays.credStore` in
+ * config/cli-registry/stock.ts — codex, gemini, pi, opencode today), plus the one entry
+ * that belongs to no single CLI: `.config/gcloud` is the general Google Cloud SDK
+ * credential store, which gemini's Vertex AI auth path and other tools may read
+ * regardless of run mode, so it is not owned by any one entry's `credStore` field.
+ * Antigravity needs no entry of its own: `agy` nests its whole state (auth
+ * `jetski_state.pbtxt`, `conversations/`, `knowledge/`) under `~/.gemini/antigravity-cli/`,
+ * which gemini's `seedWhole` entry already covers — there is no `~/.antigravity` dir.
+ */
+function collectCredStores(): CliCredStore[] {
+  const fromRegistry = listClis()
+    .map((entry) => entry.overlays.credStore)
+    .filter((store): store is CliCredStore => store !== undefined);
+  return [...fromRegistry, { rel: '.config/gcloud', seedWhole: true }];
 }
-
-const CRED_STORES: CredStorePolicy[] = [
-  { rel: '.codex', shareDirs: ['sessions'], shareFiles: ['history.jsonl'], seedFiles: ['auth.json', 'config.toml'] },
-  // Also covers Antigravity: `agy` nests its whole state (auth `jetski_state.pbtxt`,
-  // `conversations/`, `knowledge/`) under `~/.gemini/antigravity-cli/`, so it needs no
-  // entry of its own. There is no `~/.antigravity` credential dir to add.
-  { rel: '.gemini', seedWhole: true },
-  // Pi (pi.dev) keeps auth + config in `~/.pi/agent`, but that dir ALSO holds
-  // `sessions/`, `extensions/`, `skills/` and the installed package trees
-  // (`npm/`, `git/`) — easily gigabytes on an active host, so seedWhole would
-  // `cp -a` all of it into every container start. Seed only what pi needs to
-  // authenticate and behave consistently; `models.json` is in the list because it
-  // holds user-defined custom providers. Consequence to document: in-container pi
-  // sessions are invisible host-side, so `pi -c` inside a Docker case only sees
-  // that container's own history (unlike codex, whose `sessions/` is shared RW
-  // precisely because Codeman reads it host-side).
-  {
-    rel: '.pi/agent',
-    seedFiles: ['auth.json', 'settings.json', 'trust.json', 'models.json', 'models-store.json'],
-  },
-  { rel: '.config/gcloud', seedWhole: true },
-  { rel: '.config/opencode', seedWhole: true },
-];
 
 /**
  * Resolve the ISOLATED codex/gemini/gcloud/opencode artifacts (replaces the old
@@ -628,7 +612,7 @@ const CRED_STORES: CredStorePolicy[] = [
 export function resolveDockerCredentialArtifacts(home: string = homedir()): DockerClaudeArtifacts {
   const mounts: DockerMount[] = [];
   const seedCopies: DockerSeedCopy[] = [];
-  for (const store of CRED_STORES) {
+  for (const store of collectCredStores()) {
     const hostBase = join(home, store.rel);
     if (!existsSync(hostBase)) continue;
     const containerBase = `${CONTAINER_HOME}/${store.rel}`;

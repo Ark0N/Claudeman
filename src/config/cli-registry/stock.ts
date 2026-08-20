@@ -195,8 +195,11 @@ const CLAUDE: CliEntry = {
     gates: { nameFlag: { minVersion: '2.1.224', failClosed: true } },
   },
   overlays: {
-    remote: { variant: 'new' },
-    docker: { variant: 'new' },
+    // Mirrors the local default so the remote/in-container agent runs non-interactively
+    // (no trust-folder/permission prompt that nothing on that side can answer). A per-host
+    // `commands.claude` override, or the docker multi-user clamp, stays the escape hatch.
+    remote: { command: 'claude --dangerously-skip-permissions' },
+    docker: { command: 'claude --dangerously-skip-permissions' },
     // Claude's docker/remote credential handling has its own dedicated code path
     // (claudeDockerPaneCommand, artifacts at docker-hosts.ts:537-575) — no generic credStore.
   },
@@ -250,7 +253,8 @@ const SHELL: CliEntry = {
     gates: {},
   },
   overlays: {
-    remote: { variant: 'shell' },
+    // No `remote` entry: defaultRemoteCommandForMode special-cases kind==='shell' directly
+    // (an interactive login shell, no `-c '<command>'` wrapping at all).
     docker: { disabled: true },
   },
 };
@@ -327,8 +331,6 @@ const OPENCODE: CliEntry = {
     echo: { policy: 'buffer', anchor: { kind: 'cursor' }, predictProfile: undefined },
   },
   overlays: {
-    remote: { variant: 'default' },
-    docker: { variant: 'default' },
     credStore: { rel: '.config/opencode', seedWhole: true },
   },
 };
@@ -403,8 +405,6 @@ const CODEX: CliEntry = {
     maxFrameBytes: 32 * 1024,
   },
   overlays: {
-    remote: { variant: 'default' },
-    docker: { variant: 'default' },
     credStore: {
       rel: '.codex',
       shareDirs: ['sessions'],
@@ -483,8 +483,6 @@ const GEMINI: CliEntry = {
     echo: { policy: 'buffer', anchor: { kind: 'cursor' } },
   },
   overlays: {
-    remote: { variant: 'default' },
-    docker: { variant: 'default' },
     credStore: { rel: '.gemini', seedWhole: true }, // also covers antigravity — see its own entry
   },
 };
@@ -546,8 +544,6 @@ const ANTIGRAVITY: CliEntry = {
     echo: { policy: 'buffer', anchor: { kind: 'cursor' } },
   },
   overlays: {
-    remote: { variant: 'default' },
-    docker: { variant: 'default' },
     // No credStore of its own: agy nests its whole state under ~/.gemini/antigravity-cli/,
     // which gemini's seedWhole entry already covers.
   },
@@ -629,8 +625,6 @@ const PI: CliEntry = {
     echo: { policy: 'buffer', anchor: { kind: 'cursor' } },
   },
   overlays: {
-    remote: { variant: 'default' },
-    docker: { variant: 'default' },
     credStore: {
       rel: '.pi/agent',
       seedFiles: ['auth.json', 'settings.json', 'trust.json', 'models.json', 'models-store.json'],

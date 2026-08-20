@@ -274,15 +274,30 @@ const credStoreSchema = z
   })
   .strict();
 
+/**
+ * A remote/docker default pane command: space-separated bare words from the SAME safe
+ * charset as `shellToken` (no shell metacharacters), so `claude --dangerously-skip-permissions`
+ * is expressible while still excluding `;`, `|`, `$`, backticks and quotes — this is not an
+ * escape hatch into arbitrary shell text, it is one bare command plus bare flags.
+ */
+const commandLine = z
+  .string()
+  .min(1)
+  .max(200)
+  .regex(
+    /^[A-Za-z0-9._:@=+/,-]+( [A-Za-z0-9._:@=+/,-]+)*$/,
+    'must be space-separated bare words with no shell metacharacters'
+  );
+
 const overlayTargetSchema = z.union([
-  z.object({ variant: z.string().min(1).max(40) }).strict(),
+  z.object({ command: commandLine.optional() }).strict(),
   z.object({ disabled: z.literal(true) }).strict(),
 ]);
 
 const overlaysSchema = z
   .object({
-    remote: overlayTargetSchema,
-    docker: overlayTargetSchema,
+    remote: overlayTargetSchema.optional(),
+    docker: overlayTargetSchema.optional(),
     credStore: credStoreSchema.optional(),
   })
   .strict();
@@ -305,12 +320,6 @@ export const CliEntrySchema = z
   })
   .strict()
   .superRefine((entry, ctx) => {
-    const variantIds = new Set(entry.launch.variants.map((v) => v.id));
-    for (const target of [entry.overlays.remote, entry.overlays.docker]) {
-      if ('variant' in target && !variantIds.has(target.variant)) {
-        ctx.addIssue({ code: 'custom', message: `overlay references unknown launch variant "${target.variant}"` });
-      }
-    }
     const gateNames = new Set(Object.keys(entry.capabilities.gates));
     const walkConds = (cond: import('./types.js').Cond | undefined) => {
       if (!cond) return;

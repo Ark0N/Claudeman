@@ -81,7 +81,7 @@ describe('resolveRegistry (pure merge)', () => {
         privilegedParams: [],
         gates: {},
       },
-      overlays: { remote: { variant: 'default' }, docker: { variant: 'default' } },
+      overlays: {},
     };
     const file: CliRegistryFile = { schemaVersion: 1, seededStockIds: [], clis: { copilot: custom } };
     const { entries, warnings } = resolveRegistry(STOCK_CLIS, file, []);
