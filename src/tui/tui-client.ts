@@ -1004,6 +1004,13 @@ export class TuiClient {
       // It is already the right size (see presizeWindow), so `latest` changes
       // nothing on arrival and costs no repaint — it matters only if the
       // terminal is resized while sitting in that session.
+      //
+      // ⚠️ The separator MUST be an escaped `\;`. A bare `;` is a command
+      // separator to tmux's own parser, so it ends the `bind-key` and RUNS
+      // what follows immediately: the binding kept only `switch-client`, and
+      // every session got `window-size latest` executed on it at attach time.
+      // That is what left sessions on `latest` after a detach, since the
+      // snapshot was then taken from already-corrupted state.
       await this.exec('tmux', [
         '-L',
         this.socket,
@@ -1014,7 +1021,7 @@ export class TuiClient {
         'switch-client',
         '-t',
         target,
-        ';',
+        '\\;',
         'set-window-option',
         '-t',
         target,
