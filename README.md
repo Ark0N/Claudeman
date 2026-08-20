@@ -668,7 +668,7 @@ codeman tui --list       # numbered session list, then exit (scriptable)
 codeman tui 2            # attach straight to session 2 of that list
 ```
 
-Sessions are grouped **NEEDS YOU → WORKING → IDLE → RECENT**, longest-waiting first. `↑↓`/`j`/`k` select, `Enter` attaches into the tmux pane (`Ctrl+B D` to come back), `1`-`9` jump-attach. `y`/`n`/digit answer a pending permission dialog right from the list, `p` sends a one-line prompt, `n` starts a session, `x` kills one after a typed confirmation, `/` searches, `g` shows the away digest, `?` is help, `q` quits. Below 72 columns it drops the preview pane and becomes a single-column list, so it stays usable in Termius on a phone. With no server running it still starts in attach-only degraded mode.
+Sessions are grouped **NEEDS YOU → WORKING → IDLE → RECENT**, longest-waiting first. `↑↓`/`j`/`k` select, `1`-`9` and `[`/`]` switch between sessions, `Enter` attaches into the tmux pane (**`F1`** to come back). Inside a pane the bar across the top keeps the session strip visible and `Alt+1`-`Alt+9` switch without leaving. `y`/`n`/digit answer a pending permission dialog right from the list, `p` sends a one-line prompt, `n` starts a session and opens straight into it, `x` kills one (`y` confirms), `/` searches, `g` shows the away digest, `?` is help, `q` quits. Below 72 columns it drops the preview pane and becomes a single-column list, so it stays usable in Termius on a phone. With no server running it still starts in attach-only degraded mode.
 
 The web UI remains the primary surface; see **[docs/tui.md](docs/tui.md)** for the full guide.
 
@@ -684,7 +684,7 @@ sc 2            # Quick attach to session 2
 sc -l           # List sessions
 ```
 
-Single-digit selection (1-9), color-coded status, token counts, auto-refresh. Detach with `Ctrl+B D` (tmux's default prefix, which Codeman does not change for local sessions).
+Single-digit selection (1-9), color-coded status, token counts, auto-refresh. Come back from an attached pane with `F1`.
 
 ---
 

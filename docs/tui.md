@@ -119,7 +119,7 @@ same item announced twice does not ring twice.
 | `y` | Approve the selected session's dialog |
 | `n` | Deny it, or **start a new session** when there is no dialog |
 | `p` | Send one line to the selected session without attaching |
-| `x` | Kill the selected session, with a typed confirmation |
+| `x` | Kill the selected session; `y` confirms, any other key cancels |
 | `/` | Search sessions, events and files |
 | `g` | Away digest: what happened while you were gone |
 | `?` | Help overlay |
@@ -165,18 +165,41 @@ reply path and the footer says `p reply` instead of `p prompt`.
 
 `Enter` suspends the dashboard (main screen back, cooked mode back) and hands the
 terminal to tmux with `stdio: inherit`. Colors, mouse and paste are tmux's, at full
-fidelity. Detach with **`Ctrl+B D`** (tmux's default prefix, which Codeman does not
-change for local sessions) and the dashboard comes back and refreshes.
+fidelity.
 
-You do not have to remember that: for as long as the attach lasts, the session wears
-a status bar reading **`Ctrl+B D  detach, back to the codeman dashboard`**, in the
-prefix your own `~/.tmux.conf` sets if you remapped it. Codeman keeps the status bar
-off on its panes (the web UI carries that information around the terminal instead),
-so the TUI turns it on for the attach and puts it back exactly as it was on detach —
-along with the window size, which follows your terminal while you are attached and
-returns to the browser's afterwards. Detaching leaves the agent running; typing
-`exit` or pressing `Ctrl+D` would end it, which is the difference the bar exists to
-make obvious.
+**Press `F1` to come back.** One key, no modifier to hold or release, nothing to
+type in a particular order. tmux's own way out is a chord — press the prefix, let
+go, then a letter — and beta testing showed that is genuinely hard to convey: the
+bar first named the wrong letter (tmux binds lowercase `d` to `detach-client` and
+capital `D` to `choose-client`), and once corrected it still failed for anyone who
+kept Ctrl held, because that sends `Ctrl+D`, which tmux leaves unbound. So the TUI
+claims `F1` in tmux's prefix-less key table for the length of the attach and gives
+it back afterwards. The chord still works; it is simply not what you are told to
+press.
+
+You do not have to remember any of it. For as long as the attach lasts the pane
+wears a bar across the top:
+
+```
+ 1 w3-codeman-…  2 w4-codeman-…  3 testcase …     alt+1-9 switch · F1 back to the codeman dashboard
+```
+
+That is the **session strip**: the other sessions stay visible from inside a pane,
+numbered exactly as the dashboard numbers them, with the one you are in inverted.
+`Alt+1`..`Alt+9` switch between them without going back to the dashboard first. With
+more sessions than fit, the strip shows a window around the current one and marks
+each cut end with `…`; the way-out hint is measured first and always keeps its space.
+
+Codeman keeps the status bar off on its panes (the web UI carries that information
+around the terminal instead), so the TUI turns it on for the attach and puts it back
+exactly as it was on detach, along with each window's size. Every session the strip
+can switch to is dressed and sized the same way, so switching is instant and lands
+in a pane that already fills your terminal.
+
+Detaching leaves the agent running; typing `exit` or pressing `Ctrl+D` would end it,
+which is the difference the bar exists to make obvious. If an agent does exit, its
+pane stays as a corpse: the TUI refuses to attach to a dead pane and offers `r` to
+resume the conversation in a fresh one instead.
 
 Three cases:
 
@@ -184,7 +207,7 @@ Three cases:
 | --- | --- |
 | Not in tmux | `tmux -L codeman attach-session` |
 | Already in tmux on Codeman's socket | `switch-client`, so you do not nest |
-| In tmux on a **different** socket | Refused, with an explanation: detach first (`Ctrl+B D`), then run `codeman tui` again |
+| In tmux on a **different** socket | Refused, with an explanation: detach from that tmux first, then run `codeman tui` again |
 
 A direct-PTY session has no pane to attach to, and says so.
 
@@ -230,7 +253,7 @@ explicitly when you run more than one.
 
 **"this terminal is already inside tmux on socket ..."** You are in a tmux session
 on a socket that is not Codeman's, so attaching would nest two multiplexers whose
-prefix keys collide. Detach (`Ctrl+B D`) and run `codeman tui` from outside.
+prefix keys collide. Detach from that tmux and run `codeman tui` from outside.
 
 **Boxes and glyphs render as garbage.** The TUI picks a glyph tier from the
 environment: no `TERM` (or `dumb`), or a non-UTF-8 locale, gets the ASCII set
