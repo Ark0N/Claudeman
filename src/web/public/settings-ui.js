@@ -381,6 +381,10 @@ Object.assign(CodemanApp.prototype, {
     document.getElementById('appSettingsTunnelEnabled').checked = settings.tunnelEnabled ?? false;
     this.loadTunnelStatus();
     document.getElementById('appSettingsLocalEcho').checked = settings.localEchoEnabled ?? MobileDetection.isTouchDevice();
+    // Auto Copy (copy-on-select): per-device, default OFF everywhere. It quietly
+    // overwrites the system clipboard on a gesture the user may have meant only as
+    // a way to read, so it is opt-in rather than a default anyone has to discover.
+    document.getElementById('appSettingsAutoCopySelection').checked = settings.autoCopySelection === true;
     document.getElementById('appSettingsTerminalFont').value = settings.terminalFontFamily || '';
     document.getElementById('appSettingsTerminalWheelLocal').checked =
       settings.terminalWheelLocalScrollback ?? defaults.terminalWheelLocalScrollback ?? false;
@@ -2007,6 +2011,7 @@ Object.assign(CodemanApp.prototype, {
       imageWatcherEnabled: document.getElementById('appSettingsImageWatcherEnabled').checked,
       tunnelEnabled: document.getElementById('appSettingsTunnelEnabled').checked,
       localEchoEnabled: document.getElementById('appSettingsLocalEcho').checked,
+      autoCopySelection: document.getElementById('appSettingsAutoCopySelection').checked,
       terminalFontFamily: document.getElementById('appSettingsTerminalFont').value.trim(),
       terminalWheelLocalScrollback: document.getElementById('appSettingsTerminalWheelLocal').checked,
       cjkInputEnabled: document.getElementById('appSettingsCjkInput').checked,
@@ -2203,6 +2208,11 @@ Object.assign(CodemanApp.prototype, {
       showFileViewerButton: _fvb,
       webglRendererEnabled: _wgl,
       terminalWheelLocalScrollback: _twls,
+      // Copy-on-select. Per-device (clipboard access differs by device and by
+      // origin: the plain-HTTP LAN install has no navigator.clipboard at all)
+      // and absent from SettingsUpdateSchema (.strict()), so sending it would
+      // 400 the whole settings PUT.
+      autoCopySelection: _acs,
       // Per-device by nature (the font must exist on the device) and absent
       // from SettingsUpdateSchema (.strict()) — sending it would 400 the PUT.
       terminalFontFamily: _tff,
@@ -2883,6 +2893,7 @@ Object.assign(CodemanApp.prototype, {
           'terminalFontFamily',
           'language',
           'terminalWheelLocalScrollback',
+          'autoCopySelection',
           'showSessionButton', 'showAwayDigestButton', 'showCronButton',
           'showTabDetachButton',
           'mobileOverviewEnabled',

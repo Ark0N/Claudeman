@@ -592,8 +592,34 @@ Object.assign(CodemanApp.prototype, {
         this._touchSelectionActive = false;
         this._touchSelectionAnchor = null;
         this._hideTouchSelectionBar();
+        // Nothing highlighted, nothing for Auto Copy to flush. xterm drops the
+        // selection on any keypress, so without this a keystroke would leave a
+        // stale flush armed for the next unrelated mouseup.
+        this._autoCopyPending = false;
+        return;
       }
+      // Auto Copy arms here and fires at the END of the gesture (below). This
+      // callback runs on EVERY cell the drag crosses, so copying here would be
+      // one clipboard write per mouse move.
+      this._autoCopyPending = true;
     });
+
+    // Auto Copy (copy-on-select, per-device `autoCopySelection`, default OFF).
+    //
+    // ⚠️ The flush is SYNCHRONOUS inside the mouseup handler, deliberately: both
+    // clipboard paths need user activation (Firefox gates navigator.clipboard
+    // .writeText on it, and Safari requires document.execCommand('copy'), the
+    // plain-HTTP fallback install.sh's LAN option lands on, to run inside the
+    // gesture's own task). Deferring to a timer or to onSelectionChange loses it.
+    //
+    // ⚠️ document-level, because a drag that ends outside the terminal (the user
+    // sweeps up past the header) delivers its mouseup to the document, not to
+    // the container. Unrelated mouseups elsewhere on the page are filtered by
+    // decideAutoCopy, not by the listener's target.
+    if (!this._autoCopyListenerInstalled) {
+      this._autoCopyListenerInstalled = true;
+      document.addEventListener('mouseup', () => this._flushAutoCopySelection());
+    }
 
     // Mouse wheel: forward to the TUI only for sessions verified to handle SGR
     // wheel reports (claude 2.1.187+ — see _shouldForwardWheelToApp), local
@@ -1892,6 +1918,11 @@ Object.assign(CodemanApp.prototype, {
     this._suppressTrustedTapMouseEvents();
     this._armTouchSelectionFocusGuard();
     this._positionTouchSelectionBar();
+    // Auto Copy's other entry point. The touchend that ends this gesture is
+    // preventDefault()ed (that is what stops the compat mouse pair from
+    // stealing the selection back), so the document mouseup listener never sees
+    // this surface at all, so a phone would have a dead toggle without this call.
+    this._flushAutoCopySelection();
   },
 
   /** Whole logical line under the anchor — the common case a word selection just missed. */
@@ -1912,6 +1943,9 @@ Object.assign(CodemanApp.prototype, {
     this._touchSelectionAnchor = { index, length };
     this._applyTouchSelection(index, length);
     this._positionTouchSelectionBar();
+    // Widening to the whole line is a new selection the user asked for, and the
+    // button's click carries the activation both clipboard paths need.
+    this._flushAutoCopySelection();
   },
 
   /** Copy through the shared path: Clipboard API, else execCommand (plain-HTTP installs). */
@@ -3876,6 +3910,98 @@ Object.assign(CodemanApp.prototype, {
     // is the CJK-aware focus router, not xterm's raw focus().
     this.terminal.focus();
     return ok;
+  },
+
+  /**
+   * Auto Copy's ON/OFF, read at flush time from the CACHED settings object
+   * (loadAppSettingsFromStorage memoizes, so this is not a localStorage hit).
+   *
+   * Reading it here rather than mirroring it into a field is deliberate: there
+   * is then no apply-path a future settings save can forget to call, and the
+   * toggle takes effect on the very next selection instead of the next reload.
+   */
+  _autoCopySelectionEnabled() {
+    try {
+      return this.loadAppSettingsFromStorage?.()?.autoCopySelection === true;
+    } catch {
+      return false;
+    }
+  },
+
+  /**
+   * Copy the current terminal selection because the user finished highlighting
+   * it. Called at the end of a selection GESTURE: the document mouseup
+   * installed in initTerminal, and the touch-selection gesture end (a touchend
+   * the touch path preventDefaults, so no mouseup ever arrives there).
+   *
+   * ⚠️ This is NOT copyTerminalSelection(): that one clears the selection (so a
+   * second Ctrl+C is an interrupt) and hands focus back to the terminal. Both
+   * are wrong here: clearing would make the text vanish from under the cursor
+   * that just highlighted it, and focusing opens the on-screen keyboard over
+   * the text on a phone. Focus is instead RESTORED to whatever held it, which
+   * only matters for the execCommand fallback (it focuses a temp textarea on
+   * the way through); the Clipboard API path never moves focus at all.
+   */
+  async _flushAutoCopySelection() {
+    const decide = window.CodemanAutoCopy?.decide;
+    if (!decide || !this.terminal) return;
+    const text = this.terminal.hasSelection?.() ? this.terminal.getSelection() : '';
+    const verdict = decide({
+      enabled: this._autoCopySelectionEnabled(),
+      text,
+      lastCopied: this._autoCopyLastText,
+      pending: !!this._autoCopyPending,
+    });
+    this._autoCopyPending = false;
+    if (verdict === 'skip') return;
+    if (verdict === 'too-large') {
+      this._autoCopyNotify('Selection too large to copy automatically. Press Ctrl+C.', 'warning');
+      return;
+    }
+
+    this._autoCopyLastText = text;
+    const focusedBefore = document.activeElement;
+    const ok = await this._copyText(text);
+    if (
+      focusedBefore &&
+      focusedBefore !== document.activeElement &&
+      focusedBefore.isConnected &&
+      typeof focusedBefore.focus === 'function'
+    ) {
+      try {
+        focusedBefore.focus();
+      } catch {}
+    }
+    if (!ok) {
+      // Let the next gesture retry the same text rather than dedupe itself into
+      // silence after a transient clipboard refusal.
+      this._autoCopyLastText = '';
+      this._autoCopyNotify('Auto Copy failed: the browser blocked clipboard access', 'error');
+      return;
+    }
+    // Silent on success, like every terminal emulator's copy-on-select, except
+    // ONCE per page load: a feature that works by doing nothing visible needs to
+    // say so the first time, or the user cannot tell it from a dead toggle.
+    if (!this._autoCopyHintShown) {
+      this._autoCopyHintShown = true;
+      this.showToast('Auto Copy: selection copied', 'success');
+    }
+  },
+
+  /**
+   * Failure/refusal toast, throttled. Auto Copy fires per gesture, so an
+   * install where the clipboard is permanently blocked would otherwise paint a
+   * toast on every drag, which trains the user to ignore toasts everywhere.
+   */
+  _autoCopyNotify(message, type) {
+    const now = Date.now();
+    const last = this._autoCopyNotifiedAt;
+    // `last === undefined` is checked rather than falling back to 0: the first
+    // failure must always be reported, and a `now - 0 < throttle` comparison
+    // only happens to hold because the wall clock is a big number.
+    if (last !== undefined && now - last < 10_000) return;
+    this._autoCopyNotifiedAt = now;
+    this.showToast(message, type);
   },
 
   _syncMobileHelperTextareaToCursor() {

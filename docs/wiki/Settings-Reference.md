@@ -45,6 +45,7 @@ supervised by systemd or launchd; npm installs report as non-updatable. See
 | CJK Input                     | Off                  | IME composition through a dedicated text field.                        |
 | Extended Keyboard Bar         | Per device           | Which accessory bar phones get. Shell sessions override it while they are active. |
 | Wheel Scrolls Local History   | Off                  | Keeps the wheel on the local buffer instead of forwarding it to the CLI. |
+| Auto Copy Selection           | Off                  | Copies highlighted terminal text to the clipboard the moment you finish selecting it. Ctrl+C still copies on demand. |
 | WebGL Renderer                | On                   | With a GPU-stall watchdog that falls back to DOM rendering.            |
 | Gesture Control               | Off                  | Camera hand tracking. Also needs `CODEMAN_GESTURE=1` on the server.    |
 
