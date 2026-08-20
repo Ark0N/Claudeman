@@ -140,7 +140,7 @@ describe('terminal touch tap mouse guard', () => {
   it('routes a readback row to the TUI while keeping the prompt row as keyboard input', () => {
     const { app } = loadTerminalUiHarness();
     app.activeSessionId = 'sess-1';
-    app.sessions = new Map([['sess-1', { mode: 'codex' }]]);
+    app.sessions = new Map([['sess-1', { mode: 'codex', cliMouseTracking: true }]]);
     app.terminal = createTerminalGrid(
       ['Agent readback mentions › inline', '  tap to collapse', '', '', '› ask', 'gpt-5 · Context 80% left'],
       4
@@ -155,7 +155,7 @@ describe('terminal touch tap mouse guard', () => {
   it('classifies Claude background-agent status as content rather than keyboard input', () => {
     const { app } = loadTerminalUiHarness();
     app.activeSessionId = 'sess-1';
-    app.sessions = new Map([['sess-1', { mode: 'claude', cliVersion: '2.1.220' }]]);
+    app.sessions = new Map([['sess-1', { mode: 'claude', cliVersion: '2.1.220', cliMouseTracking: true }]]);
     app.terminal = createTerminalGrid(
       ['', '', '', '• Working (1m 50s • esc to ', 'interrupt) · 1 background teammate', ''],
       4,
@@ -168,7 +168,7 @@ describe('terminal touch tap mouse guard', () => {
   it('keeps the live cursor focusable when Claude temporarily omits its prompt glyph', () => {
     const { app } = loadTerminalUiHarness();
     app.activeSessionId = 'sess-1';
-    app.sessions = new Map([['sess-1', { mode: 'claude' }]]);
+    app.sessions = new Map([['sess-1', { mode: 'claude', cliMouseTracking: true }]]);
     app.terminal = createTerminalGrid(['Prior response', '', 'ready for input', '', 'status footer', ''], 2);
 
     expect(app._classifyMobileTerminalTap(9, 33)).toBe('input');
@@ -178,7 +178,7 @@ describe('terminal touch tap mouse guard', () => {
   it('treats a highlighted numbered choice as TUI content, not an input prompt', () => {
     const { app } = loadTerminalUiHarness();
     app.activeSessionId = 'sess-1';
-    app.sessions = new Map([['sess-1', { mode: 'claude' }]]);
+    app.sessions = new Map([['sess-1', { mode: 'claude', cliMouseTracking: true }]]);
     app.terminal = createTerminalGrid(['Would you like to proceed?', '', '❯ 1. Yes', '  2. No', '', ''], 2);
 
     expect(app._classifyMobileTerminalTap(9, 33)).toBe('content');
@@ -193,7 +193,7 @@ describe('terminal touch tap mouse guard', () => {
     // commits an answer) as the only thing a phone could do.
     const { app, setActiveElement } = loadTerminalUiHarness();
     app.activeSessionId = 'sess-1';
-    app.sessions = new Map([['sess-1', { mode: 'claude' }]]);
+    app.sessions = new Map([['sess-1', { mode: 'claude', cliMouseTracking: true }]]);
     app.terminal = createTerminalGrid(
       ['Do you want to proceed?', '', '❯ 1. Yes', '  2. No, tell Claude what to do', '', ''],
       2
@@ -219,7 +219,7 @@ describe('terminal touch tap mouse guard', () => {
   it('collapses TUI readback content without opening or retaining the keyboard', () => {
     const { app, setActiveElement } = loadTerminalUiHarness();
     app.activeSessionId = 'sess-1';
-    app.sessions = new Map([['sess-1', { mode: 'codex' }]]);
+    app.sessions = new Map([['sess-1', { mode: 'codex', cliMouseTracking: true }]]);
     app.terminal = createTerminalGrid(
       ['Agent readback', '  tap to collapse', '', '', '› ask', 'gpt-5 · Context 80% left'],
       4
@@ -252,7 +252,7 @@ describe('terminal touch tap mouse guard', () => {
   it('closes the keyboard on a second tap of INERT transcript content', () => {
     const { app, setActiveElement } = loadTerminalUiHarness();
     app.activeSessionId = 'sess-1';
-    app.sessions = new Map([['sess-1', { mode: 'claude' }]]);
+    app.sessions = new Map([['sess-1', { mode: 'claude', cliMouseTracking: true }]]);
     app.terminal = createTerminalGrid(['transcript line', '', '', '', '❯ ', ''], 4);
     app._sendInputAsync = vi.fn();
 
@@ -328,7 +328,7 @@ describe('terminal touch tap mouse guard', () => {
     const { app } = loadTerminalUiHarness();
     const sent: Array<{ id: string; data: string }> = [];
     app.activeSessionId = 'sess-1';
-    app.sessions = new Map([['sess-1', { mode: 'claude' }]]);
+    app.sessions = new Map([['sess-1', { mode: 'claude', cliMouseTracking: true }]]);
     app._sendInputAsync = (id: string, data: string) => sent.push({ id, data });
     app.terminal = {
       cols: 80,
@@ -339,7 +339,7 @@ describe('terminal touch tap mouse guard', () => {
       _core: { _renderService: { dimensions: { css: { cell: { width: 8, height: 16 } } } } },
     };
 
-    expect(app._sessionUsesServerMouseStrip()).toBe(true);
+    expect(app._shouldReportMouseToCli()).toBe(true);
     // touch at x=10+8*20+1, y=20+16*5+1 → col 21, row 6 (1-based)
     app._sendSyntheticSgrTap(171, 101);
 
@@ -366,19 +366,60 @@ describe('terminal touch tap mouse guard', () => {
     expect(sent).toEqual(['\x1b[<0;1;24M\x1b[<0;1;24m']);
   });
 
-  it('does not treat shell sessions as server-mouse-strip mode', () => {
+  it('never hand-reports for a shell session, even with tracking somehow set', () => {
+    // Shell DECSETs are NOT stripped (narrow strip), so xterm's own encoder owns
+    // the mouse there and a second, hand-encoded report would double-report.
     const { app } = loadTerminalUiHarness();
     app.activeSessionId = 'sess-1';
-    app.sessions = new Map([['sess-1', { mode: 'shell' }]]);
+    app.sessions = new Map([['sess-1', { mode: 'shell', cliMouseTracking: true }]]);
 
-    expect(app._sessionUsesServerMouseStrip()).toBe(false);
+    expect(app._shouldReportMouseToCli()).toBe(false);
+  });
+
+  it('hand-reports only while the CLI actually has mouse tracking on', () => {
+    // The server strips the DECSETs, so xterm can never see them and the browser
+    // reported EVERY click. A claude pane sitting at its composer, or one that
+    // fell back to a shell prompt, was receiving mouse reports it never asked
+    // for; a shell prints those as literal text and they garble the next line.
+    const { app } = loadTerminalUiHarness();
+    app.activeSessionId = 'sess-1';
+
+    app.sessions = new Map([['sess-1', { mode: 'claude' }]]);
+    expect(app._shouldReportMouseToCli()).toBe(false);
+
+    app.sessions = new Map([['sess-1', { mode: 'claude', cliMouseTracking: false }]]);
+    expect(app._shouldReportMouseToCli()).toBe(false);
+
+    app.sessions = new Map([['sess-1', { mode: 'claude', cliMouseTracking: true }]]);
+    expect(app._shouldReportMouseToCli()).toBe(true);
+  });
+
+  it('desktop click: sends nothing while the CLI has no mouse mode on', () => {
+    const { app } = loadTerminalUiHarness();
+    const sent: string[] = [];
+    app.activeSessionId = 'sess-1';
+    app.sessions = new Map([['sess-1', { mode: 'claude' }]]);
+    app._sendInputAsync = (_id: string, data: string) => sent.push(data);
+    app.terminal = createTerminalGrid(['some output', '', '\u276f '], 2);
+    app._linkHovered = false;
+
+    app._handleDesktopTerminalClick({
+      isTrusted: true,
+      button: 0,
+      detail: 1,
+      clientX: 40,
+      clientY: 10,
+      target: { closest: (sel: string) => (sel === '.xterm-screen' ? {} : null) },
+    });
+
+    expect(sent).toEqual([]);
   });
 
   it('desktop click: encodes SGR press+release for a plain left-click in strip mode', () => {
     const { app } = loadTerminalUiHarness();
     const sent: Array<{ id: string; data: string }> = [];
     app.activeSessionId = 'sess-1';
-    app.sessions = new Map([['sess-1', { mode: 'claude' }]]);
+    app.sessions = new Map([['sess-1', { mode: 'claude', cliMouseTracking: true }]]);
     app._sendInputAsync = (id: string, data: string) => sent.push({ id, data });
     app.terminal = {
       cols: 80,
@@ -453,7 +494,7 @@ describe('terminal touch tap mouse guard', () => {
     const { app } = loadTerminalUiHarness();
     const sent: string[] = [];
     app.activeSessionId = 'sess-1';
-    app.sessions = new Map([['sess-1', { mode: 'claude' }]]);
+    app.sessions = new Map([['sess-1', { mode: 'claude', cliMouseTracking: true }]]);
     app._sendInputAsync = (_id: string, data: string) => sent.push(data);
     app.terminal = {
       cols: 80,
@@ -487,7 +528,7 @@ describe('terminal touch tap mouse guard', () => {
     const { app, setNow } = loadTerminalUiHarness();
     const sent: string[] = [];
     app.activeSessionId = 'sess-1';
-    app.sessions = new Map([['sess-1', { mode: 'claude' }]]);
+    app.sessions = new Map([['sess-1', { mode: 'claude', cliMouseTracking: true }]]);
     app._sendInputAsync = (_id: string, data: string) => sent.push(data);
     app.terminal = {
       cols: 80,
@@ -771,7 +812,7 @@ describe('terminal link tap', () => {
     const { app, windowRef } = harness;
     const sent: string[] = [];
     app.activeSessionId = 'sess-1';
-    app.sessions = new Map([['sess-1', { mode: 'claude' }]]);
+    app.sessions = new Map([['sess-1', { mode: 'claude', cliMouseTracking: true }]]);
     app._sendInputAsync = (_id: string, data: string) => sent.push(data);
     app.terminal = createTerminalGrid(lines, cursorY);
     app.terminal.registerLinkProvider = vi.fn();
@@ -802,7 +843,7 @@ describe('terminal link tap', () => {
     const line = 'see https://example.com/x for more';
     const { app, sent } = linkHarness([line, '', '❯ ']);
 
-    expect(app._sessionUsesServerMouseStrip()).toBe(true);
+    expect(app._shouldReportMouseToCli()).toBe(true);
     app._handleMobileTerminalTap(at(line.indexOf('https')), false, 'content');
 
     expect(sent).toEqual([]);

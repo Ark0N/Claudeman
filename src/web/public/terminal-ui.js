@@ -4044,7 +4044,7 @@ Object.assign(CodemanApp.prototype, {
 
     const mouseMode = this.terminal.modes?.mouseTrackingMode;
     const mouseTrackingOn = !!mouseMode && mouseMode !== 'none';
-    if (!mouseTrackingOn && !this._sessionUsesServerMouseStrip()) return 'input';
+    if (!mouseTrackingOn && !this._shouldReportMouseToCli()) return 'input';
 
     const buffer = this.terminal.buffer?.active;
     if (!buffer?.getLine) return 'input';
@@ -4344,9 +4344,10 @@ Object.assign(CodemanApp.prototype, {
       // xterm's mouse encoder owns live DECSET modes. The synthetic DOM click
       // follows the same path as a desktop click.
       this._dispatchSyntheticTerminalClick(touch.clientX, touch.clientY);
-    } else if (shouldActivate && this._sessionUsesServerMouseStrip()) {
+    } else if (shouldActivate && this._shouldReportMouseToCli()) {
       // Claude/Codex/Gemini DECSETs are stripped from the browser stream, so
-      // report directly to the PTY while retaining local touch scrollback.
+      // report directly to the PTY while retaining local touch scrollback. Only
+      // while the CLI actually has tracking on (see _shouldReportMouseToCli).
       this._sendSyntheticSgrTap(touch.clientX, touch.clientY);
     }
 
@@ -4414,9 +4415,32 @@ Object.assign(CodemanApp.prototype, {
   // output stream has mouse-tracking DECSET sequences stripped before reaching the
   // browser. For these, xterm's live mouseTrackingMode is useless as a gate — the
   // PTY-side TUI keeps tracking enabled, we just never see the enable sequence.
-  _sessionUsesServerMouseStrip() {
-    const mode = this.sessions?.get(this.activeSessionId)?.mode || 'claude';
-    return mode === 'claude' || mode === 'codex' || mode === 'gemini';
+  /**
+   * True when the browser has to hand-encode a click report for the CLI.
+   *
+   * Two conditions, and dropping either one is a bug that has already happened:
+   *
+   * 1. The session's mode is one whose mouse DECSETs the server STRIPS out of
+   *    the stream (claude/codex/gemini, `isAltScreenStripMode`), which is why
+   *    xterm's own encoder is permanently idle here and something has to stand
+   *    in for it.
+   * 2. The CLI actually has a mouse-tracking mode on right now. The server
+   *    records that as it strips (`_recordStrippedMouseMode` in session.ts) and
+   *    publishes it as `cliMouseTracking`. Without this half the browser
+   *    reported EVERY click, so a CLI sitting at its composer with no dialog
+   *    open, or a pane that has fallen back to a shell prompt, received mouse
+   *    reports it never asked for. A shell prints those as literal text
+   *    (`[<0;88;20M`) and they garble the next line typed.
+   *
+   * Fails toward silence: an unknown or stale flag reports nothing rather than
+   * injecting bytes. After a server restart the flag is false until the CLI
+   * re-emits its DECSET, which closing and reopening a dialog does.
+   */
+  _shouldReportMouseToCli() {
+    const session = this.sessions?.get(this.activeSessionId);
+    const mode = session?.mode || 'claude';
+    if (mode !== 'claude' && mode !== 'codex' && mode !== 'gemini') return false;
+    return session?.cliMouseTracking === true;
   },
 
   // True when xterm's viewport shows the live PTY screen (not scrolled up into
@@ -4682,7 +4706,7 @@ Object.assign(CodemanApp.prototype, {
 
   // Desktop counterpart of the touchend tap branch: hand-encode an SGR report
   // for a plain left-click when the server strips mouse DECSETs (see
-  // _sessionUsesServerMouseStrip). Every skip below is a click that already has
+  // _shouldReportMouseToCli). Every skip below is a click that already has
   // a meaning elsewhere: synthetic/compat clicks after a touch tap (touchend
   // reported already), modified clicks (shift keeps xterm's selection
   // override), double/triple clicks (word/line selection), drag-selections,
@@ -4696,7 +4720,7 @@ Object.assign(CodemanApp.prototype, {
     if (ev.shiftKey || ev.altKey || ev.ctrlKey || ev.metaKey) return;
     const mode = this.terminal.modes?.mouseTrackingMode;
     if (mode && mode !== 'none') return;
-    if (!this._sessionUsesServerMouseStrip()) return;
+    if (!this._shouldReportMouseToCli()) return;
     if (this.terminal.hasSelection?.()) return;
     if (this._linkHovered) return; // link provider hover/leave callbacks (registerFilePathLinkProvider)
     if (performance.now() <= (this._trustedTapMouseSuppressUntil || 0)) return;

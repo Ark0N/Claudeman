@@ -415,6 +415,15 @@ export class Session extends EventEmitter {
   // sequences split across PTY chunks can't slip past the alt-screen/scrollback
   // strip (see _handleTerminalOutput / isAltScreenStripMode)
   private _altScreenSeqCarry: string = '';
+
+  /**
+   * Mouse-tracking DECSET modes the CLI currently has ON, as observed while
+   * STRIPPING them out of the stream below. Kept as a set rather than a boolean
+   * because a TUI may enable 1002 and later disable 1000 (a mode it never
+   * enabled); tracking is on while any of them is.
+   */
+  private _cliMouseModes = new Set<number>();
+  private _cliMouseTracking = false;
   private resolvePromise: ((value: { result: string; cost: number }) => void) | null = null;
   private rejectPromise: ((reason: Error) => void) | null = null;
   private _promptResolved: boolean = false; // Guard against race conditions in runPrompt
@@ -1285,6 +1294,7 @@ export class Session extends EventEmitter {
       niceValue: this._niceConfig.niceValue,
       color: this._color,
       flickerFilterEnabled: this._flickerFilterEnabled,
+      cliMouseTracking: this._cliMouseTracking || undefined,
       cliVersion: this._cliVersion || undefined,
       cliModel: this._cliModel || undefined,
       cliAccountType: this._cliAccountType || undefined,
@@ -1546,6 +1556,46 @@ export class Session extends EventEmitter {
     };
   }
 
+  /**
+   * Remember whether the CLI currently wants to be told about mouse clicks.
+   *
+   * The strip in {@link _handleTerminalOutput} is the ONLY place these sequences
+   * exist. After it, neither the browser nor xterm can ever learn that the CLI
+   * asked for mouse tracking, so `terminal.modes.mouseTrackingMode` is
+   * permanently 'none' for a stripped mode. The browser hand-encodes SGR reports
+   * to compensate (`_sendSyntheticSgrTap` in terminal-ui.js), and with no state
+   * to consult it had to do that on EVERY click, delivering mouse reports to a
+   * CLI that never asked for them. Publishing this through `toState()` is what
+   * lets the browser report a click only when the CLI is listening.
+   *
+   * Only the TRACKING modes count. 1005/1006 select an encoding and 1007 is
+   * alt-scroll; a CLI that picks SGR encoding without turning a tracking mode on
+   * is not asking about clicks, and counting those would put the stray reports
+   * straight back.
+   *
+   * This must stay in lockstep with the strip regex that calls it: a sequence
+   * removed from the stream but not recorded here is one the browser can neither
+   * see nor be told about.
+   */
+  private _recordStrippedMouseMode(seq: string): void {
+    // eslint-disable-next-line no-control-regex
+    const match = /\x1b\[\?(\d+)([hl])$/.exec(seq);
+    if (!match) return;
+    const mode = Number(match[1]);
+    if (mode !== 1000 && mode !== 1001 && mode !== 1002 && mode !== 1003) return;
+    if (match[2] === 'h') this._cliMouseModes.add(mode);
+    else this._cliMouseModes.delete(mode);
+    this._syncCliMouseTracking();
+  }
+
+  /** Emit only on a real transition: a TUI re-emitting its enable on every repaint costs nothing. */
+  private _syncCliMouseTracking(): void {
+    const active = this._cliMouseModes.size > 0;
+    if (active === this._cliMouseTracking) return;
+    this._cliMouseTracking = active;
+    this.emit('mouseTrackingChanged', active);
+  }
+
   private _handleTerminalOutput(data: string): void {
     // Codex AND Claude Code emit sequences that wipe xterm.js scrollback, plus
     // mouse-tracking enables that hijack the scroll wheel so the user can't reach
@@ -1598,7 +1648,10 @@ export class Session extends EventEmitter {
           // eslint-disable-next-line no-control-regex
           .replace(/\x1b\[3J/g, '')
           // eslint-disable-next-line no-control-regex
-          .replace(/\x1b\[\?(?:1000|1001|1002|1003|1005|1006|1007)[hl]/g, '');
+          .replace(/\x1b\[\?(?:1000|1001|1002|1003|1005|1006|1007)[hl]/g, (seq) => {
+            this._recordStrippedMouseMode(seq);
+            return '';
+          });
       }
     }
 
@@ -2525,6 +2578,11 @@ export class Session extends EventEmitter {
     this._messages = [];
     this._lineBuffer = '';
     this._altScreenSeqCarry = '';
+    // A restarted pane starts with no mouse mode: the new program has not asked
+    // for one yet, and carrying the old CLI's state over would report clicks
+    // into a program that never enabled tracking.
+    this._cliMouseModes.clear();
+    this._syncCliMouseTracking();
     this._markActivity(true);
   }
 

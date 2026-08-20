@@ -52,6 +52,7 @@ export interface SessionListenerRefs {
   limitResumeCancelled: (data: { reason: string }) => void;
   respawnBreakerTripped: (data: { count: number }) => void;
   cliInfoUpdated: (data: { version?: string; model?: string; accountType?: string; latestVersion?: string }) => void;
+  mouseTrackingChanged: (active: boolean) => void;
   ralphLoopUpdate: (state: RalphTrackerState) => void;
   ralphTodoUpdate: (todos: RalphTodoItem[]) => void;
   ralphCompletionDetected: (phrase: string) => void;
@@ -342,6 +343,20 @@ export function createSessionListeners(session: Session, deps: SessionListenerDe
       deps.broadcastSessionStateDebounced(session.id);
     },
 
+    /**
+     * The CLI turned mouse tracking on or off (observed while stripping the
+     * DECSETs out of the stream). Rides the full session state so the browser
+     * learns it through the session object it already merges, with no new SSE
+     * event to keep in sync across the two registries.
+     *
+     * Broadcast IMMEDIATELY, not debounced: this flips when a dialog opens, and
+     * a user can click that dialog inside the 500ms debounce window, which is
+     * exactly the click that has to be reported.
+     */
+    mouseTrackingChanged: () => {
+      deps.broadcast(SseEvent.SessionUpdated, { session: deps.getSessionStateWithRespawn(session) });
+    },
+
     // ─── Ralph Tracking Events ──────────────────────────────
 
     /** Broadcasts `session:ralphLoopUpdate` — Ralph tracker loop state changed (iteration, phase) */
@@ -453,6 +468,7 @@ export function attachSessionListeners(session: Session, refs: SessionListenerRe
   session.on('limitResumeCancelled', refs.limitResumeCancelled);
   session.on('respawnBreakerTripped', refs.respawnBreakerTripped);
   session.on('cliInfoUpdated', refs.cliInfoUpdated);
+  session.on('mouseTrackingChanged', refs.mouseTrackingChanged);
   session.on('ralphLoopUpdate', refs.ralphLoopUpdate);
   session.on('ralphTodoUpdate', refs.ralphTodoUpdate);
   session.on('ralphCompletionDetected', refs.ralphCompletionDetected);
@@ -487,6 +503,7 @@ export function detachSessionListeners(session: Session, refs: SessionListenerRe
   session.off('limitResumeCancelled', refs.limitResumeCancelled);
   session.off('respawnBreakerTripped', refs.respawnBreakerTripped);
   session.off('cliInfoUpdated', refs.cliInfoUpdated);
+  session.off('mouseTrackingChanged', refs.mouseTrackingChanged);
   session.off('ralphLoopUpdate', refs.ralphLoopUpdate);
   session.off('ralphTodoUpdate', refs.ralphTodoUpdate);
   session.off('ralphCompletionDetected', refs.ralphCompletionDetected);
