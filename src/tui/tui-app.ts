@@ -57,6 +57,7 @@ import { formatAwayDigest } from './tui-digest.js';
 import {
   ATTACH_BANNER_MARKER,
   TuiClient,
+  type TuiSessionOptions,
   type TuiApprovalAnswer,
   type TuiEventStream,
   type TuiLiveSessionMetrics,
@@ -348,6 +349,8 @@ export function buildAttachBanner(options: {
   oneKey?: string;
   /** The other sessions, drawn as a strip so they stay visible from inside a pane. */
   tabs?: readonly TuiAttachTab[];
+  /** The attaching terminal's width, so the strip can be kept clear of the hint. */
+  cols?: number;
 }): Record<string, string> {
   const chord = escapeTmuxFormat(detachChord(options.prefix, options.detachKey));
   // Named on the bar because it is what people actually type: keeping Ctrl held
@@ -359,9 +362,17 @@ export function buildAttachBanner(options: {
   // owns the whole line, which is what removes tmux's window list (`0:bash*`)
   // from the middle of it. The window-status options that would otherwise hide
   // it are WINDOW options, so `set-option -t <session>` cannot even reach them.
+  // The hint is measured, not estimated, and the strip is given whatever is
+  // left. tmux truncates a status line that overflows, and what it drops is the
+  // RIGHT-aligned segment — which is the hint, the one thing on the bar a user
+  // cannot do without. Every width tested lost it before this budget existed.
+  const hint = options.oneKey
+    ? ` ${options.oneKey} ${ATTACH_BANNER_MARKER} `
+    : ` ${chord}${alias} ${ATTACH_BANNER_MARKER} `;
+  const budget = Math.max(0, (options.cols ?? Number.POSITIVE_INFINITY) - hint.length - 1);
   // The strip names the session it highlights, so the standalone label is only
   // a fallback for when there is no strip to draw (degraded mode has no list).
-  const strip = buildAttachTabs(options.tabs ?? []);
+  const strip = buildAttachTabs(options.tabs ?? [], 6, budget);
   const left = strip || (label ? ` ${label} ` : '');
   return {
     status: 'on',
@@ -387,6 +398,8 @@ export interface TuiAttachTab {
   index: number;
   label: string;
   active: boolean;
+  /** tmux session to switch to when its number is pressed inside a pane. */
+  muxName?: string;
 }
 
 /** Per-tab label cap. Eight of these plus separators still fit an 80-column terminal. */
@@ -403,7 +416,7 @@ const ATTACH_TAB_LABEL_MAX = 12;
  * lost. Ellipses mark what is not shown, so a truncated strip reads as
  * truncated rather than as the whole list.
  */
-export function buildAttachTabs(tabs: readonly TuiAttachTab[], maxTabs = 6): string {
+export function buildAttachTabs(tabs: readonly TuiAttachTab[], maxTabs = 6, budget = Number.POSITIVE_INFINITY): string {
   if (tabs.length === 0) return '';
   const active = Math.max(
     0,
@@ -412,16 +425,28 @@ export function buildAttachTabs(tabs: readonly TuiAttachTab[], maxTabs = 6): str
   let start = Math.max(0, Math.min(active - Math.floor(maxTabs / 2), tabs.length - maxTabs));
   if (start < 0) start = 0;
   const shown = tabs.slice(start, start + maxTabs);
-  const parts = shown.map((tab) => {
-    const label = truncateLabel(tab.label, ATTACH_TAB_LABEL_MAX);
+  const shownLabels = shown.map((tab) => truncateLabel(tab.label, ATTACH_TAB_LABEL_MAX));
+  const parts = shown.map((tab, i) => {
+    const label = shownLabels[i];
     const text = escapeTmuxFormat(`${tab.index} ${label}`);
     // The active tab is inverted rather than bracketed: brackets cost two
     // columns per tab and read as punctuation next to the session names.
     return tab.active ? `#[reverse] ${text} #[noreverse]` : ` ${text} `;
   });
+  // Drop tabs from the far end until the strip fits the space the hint leaves.
+  // ⚠️ Measured on the VISIBLE text, not the format string: `#[reverse]` and
+  // friends cost zero columns, and counting them made a strip that "fitted"
+  // truncate the hint on a real terminal at every width tested.
+  const visible = (index: number): number => shownLabels[index].length + String(shown[index].index).length + 3;
+  let width = shown.reduce((total, _tab, index) => total + visible(index), 0);
+  let last = shown.length;
+  while (last > 1 && width + 2 > budget) {
+    last -= 1;
+    width -= visible(last);
+  }
   const head = start > 0 ? '…' : '';
-  const tail = start + maxTabs < tabs.length ? '…' : '';
-  return `${head}${parts.join('')}${tail}`;
+  const tail = start + last < tabs.length ? '…' : '';
+  return `${head}${parts.slice(0, last).join('')}${tail}`;
 }
 
 /**
@@ -504,7 +529,8 @@ export async function beginAttachHandoff(
   client: TuiClient,
   muxName: string,
   label: string,
-  tabs: readonly TuiAttachTab[] = []
+  tabs: readonly TuiAttachTab[] = [],
+  cols?: number
 ): Promise<TuiAttachHandoff> {
   const prefix = (await client.readPrefixKey(muxName)) ?? undefined;
   // Read, not assumed: see detachChord() for the `d` vs `D` mix-up this closes.
@@ -521,30 +547,71 @@ export async function beginAttachHandoff(
   // binding the user put in their own config.
   const alias = heldCtrlAlias(detachKey ?? DEFAULT_DETACH_KEY);
   const claimed = alias && (await client.readPrefixBinding(alias)) === null ? await client.bindDetachKey(alias) : false;
-  // The one-key way out, in the prefix-less table. Same rule: only if free.
+  // The one-key way out, in the prefix-less table.
+  //
+  // ⚠️ "Already bound to detach-client" counts as CLAIMED, not as taken. An
+  // attach whose TUI was killed leaks the binding, and treating that leak as
+  // someone else's binding made every later attach fall back to advertising
+  // the tmux chord — so the bar stopped saying F1 while F1 still worked, which
+  // is the worst of both. Anything else there is genuinely the user's and is
+  // left alone.
+  const existing = await client.readPrefixBinding(ONE_KEY_DETACH, 'root');
   const oneKey =
-    (await client.readPrefixBinding(ONE_KEY_DETACH, 'root')) === null
-      ? await client.bindDetachKey(ONE_KEY_DETACH, 'root')
-      : false;
-  const banner = buildAttachBanner({
-    ...(prefix ? { prefix } : {}),
-    ...(detachKey ? { detachKey } : {}),
-    ...(claimed && alias ? { heldAlias: alias } : {}),
-    ...(oneKey ? { oneKey: ONE_KEY_DETACH } : {}),
-    label,
-    tabs,
-  });
-  const options = await client.readSessionOptions(muxName, Object.keys(banner));
-  await client.applySessionOptions(muxName, banner);
+    existing === 'detach-client'
+      ? true
+      : existing === null
+        ? await client.bindDetachKey(ONE_KEY_DETACH, 'root')
+        : false;
+  // Alt+1..9 switch sessions from inside the pane, so the strip on the bar is
+  // usable rather than decorative. Only the first nine, only sessions that
+  // really have a pane, and only keys tmux reports as free — the same rule the
+  // way-out key follows, so a binding of the user's own is never shadowed.
+  const switchKeys: string[] = [];
+  for (const tab of tabs.slice(0, 9)) {
+    if (!tab.muxName) continue;
+    const key = `M-${tab.index}`;
+    const bound = await client.readPrefixBinding(key, 'root');
+    if (bound !== null && !bound.startsWith('switch-client')) continue;
+    if (await client.bindSwitchKey(key, tab.muxName)) switchKeys.push(key);
+  }
+  const bannerFor = (activeMux: string, ownLabel: string): Record<string, string> =>
+    buildAttachBanner({
+      ...(prefix ? { prefix } : {}),
+      ...(detachKey ? { detachKey } : {}),
+      ...(claimed && alias ? { heldAlias: alias } : {}),
+      ...(oneKey ? { oneKey: ONE_KEY_DETACH } : {}),
+      ...(cols ? { cols } : {}),
+      label: ownLabel,
+      tabs: tabs.map((tab) => ({ ...tab, active: tab.muxName === activeMux })),
+    });
+
+  // ⚠️ The bar goes on EVERY session the strip can switch to, not just the one
+  // being attached. `switch-client` moves this client to another session, and
+  // that session draws its OWN status line: with the bar only on the first one,
+  // pressing Alt+2 landed the user in a pane with no strip and, worse, no way
+  // out on screen. Each copy highlights its own tab, so the strip tracks where
+  // you actually are.
+  const banner = bannerFor(muxName, label);
+  const dressed: Array<{ muxName: string; options: TuiSessionOptions }> = [];
+  const targets = new Map<string, string>([[muxName, label]]);
+  for (const tab of tabs.slice(0, 9)) {
+    if (tab.muxName && !targets.has(tab.muxName)) targets.set(tab.muxName, tab.label);
+  }
+  for (const [target, targetLabel] of targets) {
+    const snapshot = await client.readSessionOptions(target, Object.keys(banner));
+    if (snapshot) dressed.push({ muxName: target, options: snapshot });
+    await client.applySessionOptions(target, bannerFor(target, targetLabel));
+  }
   return {
     chord: oneKey ? ONE_KEY_DETACH : detachChord(prefix, detachKey),
     async restore(): Promise<void> {
+      for (const key of switchKeys) await client.unbindSwitchKey(key);
       if (oneKey) await client.unbindDetachKey(ONE_KEY_DETACH, 'root');
       if (claimed && alias) await client.unbindDetachKey(alias);
       // Options first, then the size: dropping the status bar gives its row
       // back to the pane, and the resize is what re-pins the browser's
       // authority over the window.
-      if (options) await client.restoreSessionOptions(muxName, options);
+      for (const entry of dressed) await client.restoreSessionOptions(entry.muxName, entry.options);
       if (sizing) await client.restoreWindowSizing(muxName, sizing);
     },
   };
@@ -644,11 +711,11 @@ export function footerKeysFor(mode: TuiUiMode, glyphs: TuiGlyphSet, context: Tui
       return ['j/k scroll', 'esc close'];
     case 'list': {
       if (!context.server) {
-        return [`${glyphs.updown} select`, `${glyphs.enter} attach`, '1-9 jump', '? help', 'q quit'];
+        return [`${glyphs.updown} select`, `${glyphs.enter} attach`, '1-9 switch', '? help', 'q quit'];
       }
       const keys = [`${glyphs.updown} select`, `${glyphs.enter} attach`];
       if (context.approval === 'menu') keys.push('y approve', 'n deny', '1-9 option');
-      else keys.push('1-9 jump');
+      else keys.push('1-9 switch');
       keys.push(context.approval === 'idle' ? 'p reply' : 'p prompt');
       if (context.approval !== 'menu') keys.push('n new');
       keys.push('x kill', '/ search', 'g digest', '? help', 'q quit');
@@ -665,11 +732,10 @@ export function helpKeysFor(glyphs: TuiGlyphSet, context: TuiKeymapContext): Arr
   const keys: Array<[string, string]> = [
     [`${glyphs.updown} / j k`, 'select'],
     [glyphs.enter, 'attach — on a RECENT row, resume that conversation'],
-    ['1-9', 'jump and attach'],
+    ['1-9', 'switch to that session'],
     // The web UI's tab switching, as close as a terminal can carry it: Alt+N
     // matches exactly, while Alt+[ / Alt+] cannot be transmitted (ESC+[ IS the
     // CSI introducer) so the brackets do that job unmodified.
-    ['alt+1-9', 'switch to that session, without attaching'],
     ['[ / ]', 'previous / next session'],
     ['tab', 'next session'],
     // The one key that is not the TUI's: an attach hands the terminal to tmux,
@@ -1533,7 +1599,13 @@ class TuiApp {
     for (const row of this.model.rows()) {
       if (row.group === 'recent') continue;
       index += 1;
-      tabs.push({ index, label: rowLabel(row.session), active: row.session.sessionId === activeId });
+      const muxName = (row.session.muxName ?? '').trim();
+      tabs.push({
+        index,
+        label: rowLabel(row.session),
+        active: row.session.sessionId === activeId,
+        ...(muxName ? { muxName } : {}),
+      });
     }
     return tabs;
   }
@@ -1629,7 +1701,13 @@ class TuiApp {
     }
 
     if (value >= '1' && value <= '9') {
-      if (this.model.cursorToIndex(Number.parseInt(value, 10))) void this.attachSelected();
+      // SELECT, never attach. A digit used to jump AND hand the terminal to
+      // that pane, which made Alt+N unusable: a terminal sends Alt+N as ESC
+      // then N, and when those land in separate reads — routine over SSH — the
+      // chord decodes as Escape plus a bare digit, so "switch to tab 2" threw
+      // the user into tab 2's pane instead. Selecting matches what Alt+N means
+      // in the web UI, and Enter is how you go in.
+      this.model.cursorToIndex(Number.parseInt(value, 10));
       return;
     }
     switch (value) {
@@ -2172,7 +2250,8 @@ class TuiApp {
       this.client,
       muxName,
       rowLabel(row.session),
-      this.attachTabs(row.session.sessionId)
+      this.attachTabs(row.session.sessionId),
+      this.currentLayout().cols
     );
     this.detachChordLabel = handoff.chord;
     this.screen.leave();

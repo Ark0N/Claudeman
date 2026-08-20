@@ -659,6 +659,11 @@ describe('TuiClient.clearLeakedAttachBanners', () => {
     // leaves an EMPTY array, which renders as a blank bar.
     expect(sets.some((args) => args.includes('-u') && args.includes('status-format'))).toBe(true);
     expect(sets.some((args) => args.includes('-u') && args.includes('status-style'))).toBe(true);
+    // ⚠️ Every option the banner writes must be undone by the pass that
+    // recognises it. `status-position` was missing, so a sweep removed the
+    // marker and left the position behind — and with no marker the leftover
+    // stopped matching, making it permanently unsweepable.
+    expect(sets.some((args) => args.includes('-u') && args.includes('status-position'))).toBe(true);
     expect(sets.some((args) => args.join(' ').endsWith('status off'))).toBe(true);
     expect(sets.every((args) => !args.includes('status-format[0]'))).toBe(true);
   });

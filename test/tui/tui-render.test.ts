@@ -158,7 +158,7 @@ describe('renderFrame structure', () => {
       '                                    │',
       '                                    │',
       '                                    │',
-      ' ↑↓ select · ↵ attach · 1-9 jump · y/n answer · p prompt · n new · x kill · / search · g digest · ?',
+      ' ↑↓ select · ↵ attach · 1-9 switch · y/n answer · p prompt · n new · x kill · / search · g digest ·',
     ]);
   });
 
@@ -183,7 +183,7 @@ describe('renderFrame structure', () => {
       '',
       '',
       '',
-      ' ↑↓ select · ↵ attach · 1-9 jump · y/n answe',
+      ' ↑↓ select · ↵ attach · 1-9 switch · y/n ans',
     ]);
   });
 

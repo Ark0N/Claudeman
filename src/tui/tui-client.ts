@@ -952,6 +952,36 @@ export class TuiClient {
   }
 
   /**
+   * Bind a prefix-less key to switch this client to another session, so the tab
+   * strip on the attach bar is not just a picture: Alt+1..9 moves between
+   * sessions from INSIDE a pane, the way it does in the web UI.
+   *
+   * `switch-client` rather than detach-then-attach: it keeps the terminal, so
+   * the move is instant and the TUI stays blocked in its `spawnSync` exactly as
+   * before, still holding the restore it owes.
+   */
+  async bindSwitchKey(key: string, target: string): Promise<boolean> {
+    if (!MUX_NAME_PATTERN.test(target)) return false;
+    try {
+      await this.exec('tmux', ['-L', this.socket, 'bind-key', '-T', 'root', key, 'switch-client', '-t', target]);
+      return true;
+    } catch {
+      return false;
+    }
+  }
+
+  /** Give back a switch key, but only while it still points at a session. */
+  async unbindSwitchKey(key: string): Promise<void> {
+    const bound = await this.readPrefixBinding(key, 'root');
+    if (!bound || !bound.startsWith('switch-client')) return;
+    try {
+      await this.exec('tmux', ['-L', this.socket, 'unbind-key', '-T', 'root', key]);
+    } catch {
+      /* a stray switch binding is harmless next to failing an attach */
+    }
+  }
+
+  /**
    * Give a key back, but ONLY while it still means `detach-client`. Anything
    * else there is the user's, arrived after we bound ours, and must not be
    * removed.
@@ -1103,6 +1133,12 @@ export class TuiClient {
       // unsetting one index leaves an empty array, which renders as a blank bar.
       await this.setOption(['-u', '-t', name, 'status-format']);
       await this.setOption(['-u', '-t', name, 'status-style']);
+      // ⚠️ `status-position` MUST be swept with the rest. It was missing here,
+      // so a sweep cleaned the marker and left the position behind — and with
+      // the marker gone the leftover no longer matched, which made it
+      // permanently unsweepable. Every option the banner writes has to be
+      // undone by the same pass that recognises it.
+      await this.setOption(['-u', '-t', name, 'status-position']);
       await this.setOption(['-t', name, 'status', 'off']);
       cleared += 1;
     }

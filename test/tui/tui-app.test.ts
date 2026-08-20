@@ -161,7 +161,7 @@ describe('footerKeysFor', () => {
   it('advertises only the verbs this build implements', () => {
     const keys = footerKeysFor('list', GLYPHS, { server: true }).join(' ');
     expect(keys).toContain('attach');
-    expect(keys).toContain('1-9 jump');
+    expect(keys).toContain('1-9 switch');
     expect(keys).toContain('n new');
     expect(keys).toContain('p prompt');
     expect(keys).toContain('/ search');
@@ -179,7 +179,7 @@ describe('footerKeysFor', () => {
     expect(keys).toContain('1-9 option');
     // `n` cannot mean two things at once, and denying is what it does here.
     expect(keys).not.toContain('n new');
-    expect(keys).not.toContain('1-9 jump');
+    expect(keys).not.toContain('1-9 switch');
   });
 
   it('sends an idle prompt to the composer instead of offering approve/deny', () => {
@@ -671,6 +671,38 @@ describe('the way out of an attach', () => {
       })),
     });
     expect(crowded['status-format[0]']).toContain('#[bold]F1#[nobold] back to the codeman dashboard');
+  });
+
+  it('fits the strip to the terminal, measuring VISIBLE columns not format bytes', () => {
+    // The test above only checks the hint is in the format STRING, which it
+    // always was. tmux truncates what it cannot fit and drops the right-aligned
+    // segment, so on a real terminal the hint vanished at every width tested
+    // while that assertion stayed green.
+    const hint = ' F1 back to the codeman dashboard ';
+    for (const cols of [80, 100, 120, 176]) {
+      const bar = buildAttachBanner({
+        oneKey: 'F1',
+        cols,
+        tabs: Array.from({ length: 12 }, (_, i) => ({
+          index: i + 1,
+          label: `w${i + 1}-session-name`,
+          active: i === 1,
+        })),
+      })['status-format[0]'];
+      const visible = bar.replace(/#\[[^\]]*\]/g, '');
+      expect({ cols, fits: visible.length <= cols }).toEqual({ cols, fits: true });
+      expect(visible.length).toBeGreaterThanOrEqual(hint.length);
+    }
+  });
+
+  it('keeps at least one tab even when the hint eats almost the whole bar', () => {
+    const bar = buildAttachBanner({
+      oneKey: 'F1',
+      cols: 40,
+      tabs: [{ index: 1, label: 'w1-case', active: true }],
+    })['status-format[0]'];
+    expect(bar).toContain('1 w1-case');
+    expect(bar).toContain('back to the codeman dashboard');
   });
 
   it("tells the help overlay how to get back, in the socket's own prefix", () => {
