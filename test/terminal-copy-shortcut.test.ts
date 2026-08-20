@@ -12,7 +12,7 @@
  * emitted through onData (the bytes that would reach the PTY).
  *
  * Browser-driven, so it is excluded from `npm run test:ci` like the other
- * Playwright suites. Run locally: npm test -- test/terminal-copy-shortcut.test.ts
+ * Playwright suites. Run locally: npm run test:browser -- test/terminal-copy-shortcut.test.ts
  *
  * Port: 3174 (per MEMORY.md, ports 3150+ for tests)
  */
@@ -23,6 +23,7 @@ import { WebServer } from '../src/web/server.js';
 
 const PORT = 3174;
 const BASE_URL = `http://localhost:${PORT}`;
+const IME_PUNCTUATION = '，。！？；：“”、《》、（）';
 
 describe('terminal Ctrl+C smart copy', () => {
   let server: WebServer;
@@ -102,6 +103,59 @@ describe('terminal Ctrl+C smart copy', () => {
     }));
   }
 
+  async function captureImeInput(targetPage: Page) {
+    await targetPage.waitForFunction(() => (window as any).app?.terminal, null, { timeout: 30000 });
+    await targetPage.evaluate(() => {
+      const term = (window as any).app.terminal;
+      (window as any).__data = [];
+      if (!(window as any).__dataHooked) {
+        term.onData((d: string) => (window as any).__data.push(d));
+        (window as any).__dataHooked = true;
+      }
+      (document.querySelector('.xterm-helper-textarea') as HTMLElement).focus();
+    });
+
+    const cdp = await targetPage.context().newCDPSession(targetPage);
+    await cdp.send('Input.imeSetComposition', { text: '中文', selectionStart: 2, selectionEnd: 2 });
+    await cdp.send('Input.insertText', { text: '中文' });
+    await targetPage.waitForFunction(() => (window as any).__data.join('') === '中文', null, { polling: 10 });
+
+    let expected = '中文';
+    for (const punctuation of Array.from(IME_PUNCTUATION)) {
+      // Keep keydown -> DOM mutation -> input in one browser task, as a
+      // native key default action does. Separate CDP calls can let xterm's
+      // zero-delay textarea diff run before Input.insertText reaches the page.
+      await targetPage.evaluate((text) => {
+        const textarea = document.querySelector('.xterm-helper-textarea') as HTMLTextAreaElement;
+        const down = new KeyboardEvent('keydown', {
+          key: 'Process',
+          code: 'Unidentified',
+          bubbles: true,
+          cancelable: true,
+          composed: true,
+        });
+        Object.defineProperties(down, { keyCode: { value: 229 }, which: { value: 229 } });
+        textarea.dispatchEvent(down);
+        if (!document.execCommand('insertText', false, text)) throw new Error('browser rejected insertText');
+        const up = new KeyboardEvent('keyup', {
+          key: 'Process',
+          code: 'Unidentified',
+          bubbles: true,
+          cancelable: true,
+          composed: true,
+        });
+        Object.defineProperties(up, { keyCode: { value: 229 }, which: { value: 229 } });
+        textarea.dispatchEvent(up);
+      }, punctuation);
+      expected += punctuation;
+      await targetPage.waitForFunction((text) => (window as any).__data.join('') === text, expected, {
+        polling: 10,
+      });
+    }
+
+    return targetPage.evaluate(() => (window as any).__data as string[]);
+  }
+
   it('copies the selection and sends nothing to the PTY', async () => {
     await setup('COPY-CASE-SELECTED', true);
     await page.keyboard.press('Control+c');
@@ -162,5 +216,21 @@ describe('terminal Ctrl+C smart copy', () => {
     const res = await outcome();
     expect(res.data.join('')).toContain('SENTINEL'); // pasted text, not ^V
     expect(res.data.join('')).not.toContain('\x16');
+  });
+
+  it('forwards full-width punctuation after a Chinese IME composition', async () => {
+    await setup('IME-PUNCTUATION', false);
+    const desktopChunks = await captureImeInput(page);
+    expect(desktopChunks.join('')).toBe('中文' + IME_PUNCTUATION);
+
+    const touchContext = await browser.newContext({ hasTouch: true });
+    try {
+      const touchPage = await touchContext.newPage();
+      await touchPage.goto(BASE_URL, { waitUntil: 'domcontentloaded' });
+      const touchChunks = await captureImeInput(touchPage);
+      expect(touchChunks.join('')).toBe('中文' + IME_PUNCTUATION);
+    } finally {
+      await touchContext.close();
+    }
   });
 });

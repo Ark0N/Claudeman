@@ -287,11 +287,12 @@ Object.assign(CodemanApp.prototype, {
     this._installMobileTapMouseGuard();
     this._installTouchSelectionFocusGuard();
 
-    // Suppress xterm key handling during CJK IME composition.
-    // Without this, xterm processes raw keyDown events (e.g., "Process" key)
-    // during composition, causing duplicate or garbled input.
+    // Let xterm's CompositionHelper own IME key events. In particular, a
+    // non-composing keyCode 229 is how an active IME commits numbers and
+    // punctuation; returning false here would stop xterm before it can diff
+    // the helper textarea and emit the committed Unicode text.
     this.terminal.attachCustomKeyEventHandler((ev) => {
-      if (ev.isComposing || ev.keyCode === 229) return false;
+      if (ev.isComposing || ev.key === 'Process' || ev.keyCode === 229) return true;
 
       // Let the app's Alt/Option session-nav and Command Palette shortcuts reach the document keydown handler
       // (app.js switches tabs by PHYSICAL e.code) instead of xterm injecting ESC<char> into
@@ -398,72 +399,6 @@ Object.assign(CodemanApp.prototype, {
 
       return true;
     });
-
-    // Android virtual keyboard fix: catch non-composition input events.
-    // On Android Chrome, typing symbols (e.g., "/" from Gboard's symbol keyboard)
-    // sends keyCode 229 + input event WITHOUT compositionstart/end wrapping.
-    // The custom key handler above returns false for keyCode 229, telling xterm
-    // to ignore the keydown. xterm.js expects the character to arrive via
-    // composition events, but since there's no composition, the character is lost.
-    // This listener catches those orphaned input events and forwards them to onData.
-    {
-      const xtermTextarea = container.querySelector('.xterm-helper-textarea');
-      if (xtermTextarea && MobileDetection.isTouchDevice()) {
-        let composing = false;
-        let lastKeydownHandled = 0;
-        xtermTextarea.addEventListener('compositionstart', () => { composing = true; });
-        xtermTextarea.addEventListener('compositionend', () => { composing = false; });
-        // Track when xterm handles a keydown normally (non-229 keyCode).
-        // If xterm processed the keydown, it will emit onData itself --
-        // the input event handler below must NOT re-send the character.
-        xtermTextarea.addEventListener('keydown', (e) => {
-          if (!e.isComposing && e.keyCode !== 229) {
-            lastKeydownHandled = Date.now();
-          }
-        });
-        xtermTextarea.addEventListener('input', (e) => {
-          // Only handle insertText events outside of composition -- these are
-          // the ones xterm.js misses on Android virtual keyboards.
-          if (composing || e.isComposing) return;
-          if (e.inputType !== 'insertText' || !e.data) return;
-          // If xterm just handled a keydown (within 50ms), it already sent the
-          // char via onData. Skip to avoid double-send (e.g., Shift+A => AA).
-          if (Date.now() - lastKeydownHandled < 50) return;
-          // xterm.js may have already processed this via its own input handler.
-          // Check if the textarea was cleared by xterm (value is empty or just
-          // whitespace) -- if so, xterm handled it and we should not double-send.
-          // Use a microtask to check after xterm's own handlers have run.
-          const data = e.data;
-          const pendingBefore = this._localEchoOverlay?.pendingText || '';
-          Promise.resolve().then(() => {
-            if (
-              this._lastTerminalData?.data === data &&
-              performance.now() - this._lastTerminalData.time < 100
-            ) {
-              xtermTextarea.value = '';
-              return;
-            }
-            const pendingAfter = this._localEchoOverlay?.pendingText || '';
-            if (
-              this._localEchoEnabled &&
-              pendingAfter.length > pendingBefore.length &&
-              pendingAfter.endsWith(data)
-            ) {
-              xtermTextarea.value = '';
-              return;
-            }
-            // If xterm cleared the textarea, it processed the input -- skip.
-            const val = xtermTextarea.value;
-            if (!val || (val.trim() === '' && data !== ' ')) return;
-            // xterm didn't process it -- forward to terminal as if typed.
-            // Emit via onData path by writing to terminal's input handler.
-            this.terminal._core.coreService.triggerDataEvent(data, true);
-            // Clear the textarea to prevent xterm from processing it later.
-            xtermTextarea.value = '';
-          });
-        });
-      }
-    }
 
     // WebGL renderer for GPU-accelerated terminal rendering.
     // Previously caused "page unresponsive" crashes from synchronous GPU stalls,
