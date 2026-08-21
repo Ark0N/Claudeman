@@ -1,5 +1,25 @@
 # aicodeman
 
+## 1.20.0
+
+### Minor Changes
+
+- Response viewer for OpenCode, Gemini, Antigravity and Pi sessions (#326). External CLIs render their own TUIs, so the viewer used to come up empty for them; a new transcript parser (`response-viewer-transcript.ts`) reconstructs the conversation from the pane text instead, and the `?context=full` view now tags every block with a role so prompts render as "You" and agent output as the assistant. The divider normalizer was rewritten as a linear scan after review found catastrophic backtracking on agent-controlled input (minutes of stall on a long dash run), with an equivalence corpus pinning the old accept set.
+
+  CLIs installed via nvm or Homebrew are now found when Codeman runs as a service (#329). A shared resolver falls back to a login-shell probe when the direct PATH lookup misses, so systemd and LaunchAgent installs no longer report every CLI as missing. Review hardening on top: a failed resolution is negative-cached with doubling backoff instead of re-spawning a login shell on every request, all probes pass `killSignal: 'SIGKILL'` (interactive bash shrugs off SIGTERM, and a blocking `.bash_profile` could have hung the server indefinitely), the resolvers are inert under vitest again so test suites cannot execute binaries found on the dev box, and the improved not-found guidance is wired into both the session-create errors and the per-CLI status endpoints.
+
+  `GET /api/system/repo-status` reports branch, upstream, ahead/behind and remote reachability for git-clone installs (#328). Review hardening: the git network calls moved off the synchronous path onto a single-flight 45s cache (one slow remote could previously freeze the whole server for up to a minute per request), remote URLs and git stderr are credential-redacted before they leave the server, the spawns use the same non-interactive git env as the clone path, and a local-branch upstream no longer parses into garbage.
+
+  Auto Copy for the terminal (#325, opt-in, per-device): a finished selection (mouse drag, double or triple click, or a phone long-press) lands on the clipboard by itself, so select-then-copy becomes select. Alongside it, hand-encoded tap reports are now gated on the server-observed `cliMouseTracking` state, so a pane that has fallen back to a plain shell no longer receives `[<0;88;20M` junk on tap.
+
+  The Ralph loop no longer stops polling after two ticks (#330): the reschedule guard read a stale timer handle that the timer callback never cleared, so the loop silently died while its status stayed `running`. The handle is now nulled as the callback's first statement, and a regression test pins the bug.
+
+  The red "needs you" tab alert clears when a dialog is answered in the terminal instead of surviving until the end of the turn: the post-hook re-capture could erase the parsed dialog options that the staleness sweep relies on (`applyCapture` is now add-only for options), and a delayed staleness pass now runs while a page is open. The unreachable `copyTerminal()` was removed, closing out #322.
+
+  ### Thanks
+  - @aakhter contributed the external-CLI response viewer (#326), the repo-status endpoint (#328), the login-shell CLI resolution (#329) and the Ralph reschedule fix (#330)
+  - @rounakdatta reported the mobile copy gap (#322) closed out in this release
+
 ## 1.19.7
 
 ### Patch Changes
