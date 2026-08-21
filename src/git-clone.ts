@@ -480,13 +480,22 @@ export function gitNonInteractiveEnv(base: NodeJS.ProcessEnv = process.env): Nod
 // ─── Pure: output handling ───────────────────────────────────────────────────
 
 /**
+ * Redact any `scheme://user:secret@host` credential pair embedded in text — a
+ * remote URL stored with an inline token, or git stderr echoing such a URL
+ * back. Shared by the clone error path (`sanitizeGitOutput`) and the
+ * repository-status card fields (`web/repo-status.ts`).
+ */
+export function redactGitCredentials(text: string): string {
+  return text.replace(/([a-zA-Z][a-zA-Z0-9+.-]*:\/\/)[^/@\s]*:[^/@\s]*@/g, '$1***:***@');
+}
+
+/**
  * Make git's stderr safe to show in the browser: strip ANSI/control bytes,
  * redact any `scheme://user:secret@host` that a credential helper echoed back,
  * and keep only the tail (the last lines are the ones that say why it failed).
  */
 export function sanitizeGitOutput(text: string, maxBytes = MAX_STDERR_BYTES): string {
-  const redacted = text
-    .replace(/([a-zA-Z][a-zA-Z0-9+.-]*:\/\/)[^/@\s]*:[^/@\s]*@/g, '$1***:***@')
+  const redacted = redactGitCredentials(text)
     // eslint-disable-next-line no-control-regex -- deliberate: strip C0/C1 and DEL.
     .replace(/[\u0000-\u0008\u000b\u000c\u000e-\u001f\u007f-\u009f]/g, '')
     .trim();

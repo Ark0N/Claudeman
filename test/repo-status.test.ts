@@ -1,6 +1,8 @@
 /**
  * @fileoverview Unit tests for the repository-status pure helpers: ahead/behind
- * + log + symref parsing, env parsing, and the remote-set / role decisions.
+ * + log + symref parsing, env parsing, the remote-set / role / tracking-remote
+ * decisions, credential redaction of the returned fields, and the single-flight
+ * TTL cache that keeps the async status computation off the git hot path.
  * No IO, no git, no port — safe to run individually.
  *
  * npm test -- test/repo-status.test.ts
@@ -12,10 +14,15 @@ import {
   parseLogLines,
   parseSymrefDefaultBranch,
   parseRemotesEnv,
+  parseTrackingRemote,
   resolveRemoteSet,
   roleForRemote,
   isSafeGitPositional,
+  redactRemoteStatus,
+  createSingleFlightCache,
 } from '../src/web/repo-status.js';
+import { redactGitCredentials } from '../src/git-clone.js';
+import type { RepoRemoteStatus } from '../src/types/update.js';
 
 describe('parseAheadBehind', () => {
   it('parses tab-separated left/right counts as ahead/behind', () => {
@@ -155,5 +162,120 @@ describe('roleForRemote', () => {
   });
   it('labels anything else as other', () => {
     expect(roleForRemote('fork', 'bitbucket')).toBe('other');
+  });
+});
+
+describe('parseTrackingRemote', () => {
+  it('extracts the remote name from a remote-tracking short ref', () => {
+    expect(parseTrackingRemote('origin/master')).toBe('origin');
+    expect(parseTrackingRemote('bitbucket/feature/nested')).toBe('bitbucket');
+  });
+  it('returns null for a LOCAL-branch upstream (ref with no slash)', () => {
+    // `git branch -u otherbranch` makes @{upstream} a bare branch name; the old
+    // slice(0, indexOf('/')) turned "master" into "maste" here.
+    expect(parseTrackingRemote('master')).toBeNull();
+    expect(parseTrackingRemote('main')).toBeNull();
+  });
+  it('returns null for null/empty/degenerate refs', () => {
+    expect(parseTrackingRemote(null)).toBeNull();
+    expect(parseTrackingRemote(undefined)).toBeNull();
+    expect(parseTrackingRemote('')).toBeNull();
+    expect(parseTrackingRemote('/leading-slash')).toBeNull();
+  });
+});
+
+describe('credential redaction', () => {
+  it('redactGitCredentials masks scheme://user:secret@host pairs', () => {
+    expect(redactGitCredentials('https://user:ghp_token123@github.com/o/r.git')).toBe(
+      'https://***:***@github.com/o/r.git'
+    );
+    expect(redactGitCredentials('plain text, no url')).toBe('plain text, no url');
+    expect(redactGitCredentials('https://github.com/o/r.git')).toBe('https://github.com/o/r.git');
+  });
+
+  it('redactRemoteStatus masks the url field', () => {
+    const status: RepoRemoteStatus = {
+      name: 'origin',
+      url: 'https://alice:s3cret@example.com/repo.git',
+      role: 'upstream',
+      compareRef: 'origin/master',
+      ahead: 1,
+      behind: 2,
+      incoming: [{ sha: 'abc', subject: 'hi' }],
+    };
+    const out = redactRemoteStatus(status);
+    expect(out.url).toBe('https://***:***@example.com/repo.git');
+    // Everything else passes through untouched.
+    expect(out.name).toBe('origin');
+    expect(out.compareRef).toBe('origin/master');
+    expect(out.ahead).toBe(1);
+    expect(out.behind).toBe(2);
+    expect(out.incoming).toEqual([{ sha: 'abc', subject: 'hi' }]);
+    expect(out.error).toBeUndefined();
+  });
+
+  it('redactRemoteStatus masks credentials echoed into the error string by git stderr', () => {
+    const status: RepoRemoteStatus = {
+      name: 'origin',
+      url: 'https://alice:s3cret@example.com/repo.git',
+      role: 'upstream',
+      compareRef: '',
+      ahead: 0,
+      behind: 0,
+      incoming: [],
+      error: "Could not reach origin: fatal: unable to access 'https://alice:s3cret@example.com/repo.git/'",
+    };
+    const out = redactRemoteStatus(status);
+    expect(out.error).toBe("Could not reach origin: fatal: unable to access 'https://***:***@example.com/repo.git/'");
+    expect(out.error).not.toContain('s3cret');
+    expect(out.url).not.toContain('s3cret');
+  });
+});
+
+describe('createSingleFlightCache', () => {
+  it('shares one in-flight computation across concurrent callers', async () => {
+    let calls = 0;
+    let release!: (v: string) => void;
+    const cache = createSingleFlightCache(60_000, () => {
+      calls++;
+      return new Promise<string>((resolve) => {
+        release = resolve;
+      });
+    });
+    const a = cache.get();
+    const b = cache.get();
+    release('result');
+    expect(await a).toBe('result');
+    expect(await b).toBe('result');
+    expect(calls).toBe(1);
+  });
+
+  it('serves a fresh-enough cached result without recomputing', async () => {
+    let calls = 0;
+    const cache = createSingleFlightCache(60_000, async () => ++calls);
+    expect(await cache.get()).toBe(1);
+    expect(await cache.get()).toBe(1);
+    expect(calls).toBe(1);
+  });
+
+  it('recomputes once the TTL has elapsed', async () => {
+    let calls = 0;
+    const cache = createSingleFlightCache(60_000, async () => ++calls);
+    expect(await cache.get()).toBe(1);
+    // Inject a "now" past the TTL instead of sleeping.
+    expect(await cache.get(Date.now() + 60_001)).toBe(2);
+    expect(calls).toBe(2);
+  });
+
+  it('does not cache a rejected computation — the next call retries', async () => {
+    let calls = 0;
+    const cache = createSingleFlightCache(60_000, async () => {
+      calls++;
+      if (calls === 1) throw new Error('boom');
+      return 'ok';
+    });
+    await expect(cache.get()).rejects.toThrow('boom');
+    expect(await cache.get()).toBe('ok');
+    expect(calls).toBe(2);
   });
 });

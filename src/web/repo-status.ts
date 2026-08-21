@@ -21,22 +21,39 @@
  * Split PURE helpers (parsing + remote-set/role/compare-ref decisions, unit
  * tested) from the IO wrapper `getRepositoryStatus()` (touches git).
  *
+ * PERFORMANCE: every git invocation is ASYNC (`execFile`), never `execFileSync`
+ * — the fetch path can spend `2 × FETCH_TIMEOUT_MS` per remote on the network,
+ * and a synchronous version froze the whole event loop (SSE, PTY streaming) for
+ * up to a minute per request. The computation is additionally single-flight
+ * with a short TTL cache: concurrent requests share one in-flight promise, and
+ * a fresh-enough result is served without spawning git at all.
+ *
+ * SECURITY: remote URLs (and git stderr echoing them) can embed
+ * `scheme://user:token@host` credentials, so every `url`/`error` field is
+ * passed through `redactGitCredentials()` (shared with `git-clone.ts`) before
+ * it reaches a client.
+ *
  * @module web/repo-status
  */
 
-import { execFileSync } from 'node:child_process';
+import { execFile } from 'node:child_process';
 import { createRequire } from 'node:module';
+import { promisify } from 'node:util';
 import { EXEC_TIMEOUT_MS } from '../config/exec-timeout.js';
+import { gitNonInteractiveEnv, redactGitCredentials } from '../git-clone.js';
 import { getInstallInfo } from './self-update.js';
 import type { RepoIncomingCommit, RepoRemoteRole, RepoRemoteStatus, RepositoryStatusResult } from '../types/update.js';
 
 const require = createRequire(import.meta.url);
 const { version: APP_VERSION } = require('../../package.json') as { version: string };
+const execFileAsync = promisify(execFile);
 
 /** Network/git timeout for the fetch path (longer than EXEC_TIMEOUT_MS — hits network). */
 const FETCH_TIMEOUT_MS = 15_000;
 /** Max incoming commit subjects to list per remote. */
 const MAX_INCOMING = 10;
+/** Fresh-enough window for a cached status — repeated UI polls reuse it instead of re-running git. */
+const STATUS_CACHE_TTL_MS = 45_000;
 
 // ─────────────────────────────────────────────────────────────────────────────
 // PURE helpers (unit tested, no IO)
@@ -144,6 +161,69 @@ function dedupe(names: string[]): string[] {
   return [...new Set(names)];
 }
 
+/**
+ * Extract the remote name from an `@{upstream}` short ref like `origin/master`.
+ *
+ * A ref with NO slash is a LOCAL-branch upstream (`git branch -u otherbranch`):
+ * `rev-parse --abbrev-ref @{upstream}` prints just the branch name, and there
+ * is no remote in it — the old `slice(0, indexOf('/'))` became `slice(0, -1)`
+ * there and yielded garbage like `maste`. Returns null for that case (treated
+ * as "no tracking remote"), and for empty/degenerate refs.
+ */
+export function parseTrackingRemote(trackingRef: string | null | undefined): string | null {
+  if (!trackingRef) return null;
+  const idx = trackingRef.indexOf('/');
+  if (idx <= 0) return null;
+  return trackingRef.slice(0, idx);
+}
+
+/**
+ * Redact embedded `scheme://user:secret@host` credentials from the fields of
+ * one remote's status that can carry them: the remote URL itself, and the
+ * error string (which may include git stderr echoing that URL back).
+ */
+export function redactRemoteStatus(status: RepoRemoteStatus): RepoRemoteStatus {
+  const out: RepoRemoteStatus = { ...status, url: redactGitCredentials(status.url) };
+  if (out.error !== undefined) out.error = redactGitCredentials(out.error);
+  return out;
+}
+
+/**
+ * Single-flight TTL cache around an async compute: concurrent callers await
+ * the SAME in-flight promise, and a result younger than `ttlMs` is returned
+ * without recomputing. A rejected compute is never cached, so the next call
+ * retries. `now` is injectable for deterministic TTL tests.
+ */
+export function createSingleFlightCache<T>(
+  ttlMs: number,
+  compute: () => Promise<T>
+): { get(now?: number): Promise<T> } {
+  let cachedAt = 0;
+  let cachedValue: T | undefined;
+  let hasValue = false;
+  let inFlight: Promise<T> | null = null;
+  return {
+    get(now = Date.now()): Promise<T> {
+      if (hasValue && now - cachedAt < ttlMs) return Promise.resolve(cachedValue as T);
+      if (inFlight) return inFlight;
+      inFlight = compute().then(
+        (value) => {
+          cachedValue = value;
+          hasValue = true;
+          cachedAt = Date.now();
+          inFlight = null;
+          return value;
+        },
+        (err: unknown) => {
+          inFlight = null;
+          throw err;
+        }
+      );
+      return inFlight;
+    },
+  };
+}
+
 // ─────────────────────────────────────────────────────────────────────────────
 // IO wrapper
 // ─────────────────────────────────────────────────────────────────────────────
@@ -156,20 +236,18 @@ interface GitResult {
 
 /**
  * Run git non-interactively (no credential or SSH prompts — a missing key/cred
- * fails fast instead of hanging). Returns captured stdout/stderr and ok flag.
+ * fails fast instead of hanging; env via the shared `gitNonInteractiveEnv()`,
+ * which also closes the askpass/GCM/DISPLAY prompt paths). ASYNC on purpose:
+ * the fetch path hits the network for up to `FETCH_TIMEOUT_MS`, and a sync
+ * spawn would block the event loop for the whole wait.
  */
-function runGit(args: string[], cwd: string, timeout = EXEC_TIMEOUT_MS): GitResult {
+async function runGit(args: string[], cwd: string, timeout = EXEC_TIMEOUT_MS): Promise<GitResult> {
   try {
-    const stdout = execFileSync('git', args, {
+    const { stdout } = await execFileAsync('git', args, {
       cwd,
       encoding: 'utf-8',
       timeout,
-      stdio: ['ignore', 'pipe', 'pipe'],
-      env: {
-        ...process.env,
-        GIT_TERMINAL_PROMPT: '0',
-        GIT_SSH_COMMAND: process.env.GIT_SSH_COMMAND ?? 'ssh -oBatchMode=yes',
-      },
+      env: gitNonInteractiveEnv(),
     });
     return { ok: true, stdout: stdout.trim(), stderr: '' };
   } catch (err: unknown) {
@@ -193,14 +271,14 @@ function firstLine(s: string): string {
 }
 
 /** Compute ahead/behind + incoming commits for one already-selected remote. */
-function statusForRemote(
+async function statusForRemote(
   dir: string,
   name: string,
   trackingRemote: string,
   trackingRef: string | null
-): RepoRemoteStatus {
+): Promise<RepoRemoteStatus> {
   const role = roleForRemote(name, trackingRemote);
-  const url = runGit(['remote', 'get-url', name], dir).stdout || '';
+  const url = (await runGit(['remote', 'get-url', name], dir)).stdout || '';
   const base: RepoRemoteStatus = { name, url, role, compareRef: '', ahead: 0, behind: 0, incoming: [] };
 
   // SECURITY: the remote name reaches git as a positional; reject a `-` prefix
@@ -215,7 +293,7 @@ function statusForRemote(
     // e.g. trackingRef = "bitbucket/local" → branch = "local"
     branch = trackingRef.slice(name.length + 1) || null;
   } else {
-    const symref = runGit(['ls-remote', '--symref', name, 'HEAD'], dir, FETCH_TIMEOUT_MS);
+    const symref = await runGit(['ls-remote', '--symref', name, 'HEAD'], dir, FETCH_TIMEOUT_MS);
     branch = symref.ok ? parseSymrefDefaultBranch(symref.stdout) : null;
     if (!branch && !symref.ok) {
       return { ...base, error: `Could not reach ${name}: ${firstLine(symref.stderr)}` };
@@ -232,30 +310,26 @@ function statusForRemote(
 
   // Read-only fetch of just that ref so the local rev-list/log can see it.
   // `--` ends option parsing so neither `name` nor `branch` can be read as a flag.
-  const fetched = runGit(['fetch', '--no-tags', name, '--', branch], dir, FETCH_TIMEOUT_MS);
+  const fetched = await runGit(['fetch', '--no-tags', name, '--', branch], dir, FETCH_TIMEOUT_MS);
   if (!fetched.ok) {
     return { ...base, compareRef, error: `Could not fetch ${compareRef}: ${firstLine(fetched.stderr)}` };
   }
 
-  const counts = runGit(['rev-list', '--left-right', '--count', `HEAD...${compareRef}`], dir);
+  const counts = await runGit(['rev-list', '--left-right', '--count', `HEAD...${compareRef}`], dir);
   if (!counts.ok) {
     return { ...base, compareRef, error: `Could not compare against ${compareRef}: ${firstLine(counts.stderr)}` };
   }
   const ab = parseAheadBehind(counts.stdout);
   if (!ab) return { ...base, compareRef, error: `Unexpected git output comparing ${compareRef}.` };
 
-  const log = runGit(['log', '--oneline', '-n', String(MAX_INCOMING), `HEAD..${compareRef}`], dir);
+  const log = await runGit(['log', '--oneline', '-n', String(MAX_INCOMING), `HEAD..${compareRef}`], dir);
   const incoming = log.ok ? parseLogLines(log.stdout) : [];
 
   return { ...base, compareRef, ahead: ab.ahead, behind: ab.behind, incoming };
 }
 
-/**
- * Inspect how the local checkout sits relative to the configured remotes.
- * Each remote is fetched + compared independently; a single unreachable remote
- * surfaces as that card's `error` and never fails the whole call.
- */
-export function getRepositoryStatus(): RepositoryStatusResult {
+/** The uncached computation behind `getRepositoryStatus()`. */
+async function computeRepositoryStatus(): Promise<RepositoryStatusResult> {
   const checkedAt = Date.now();
   const info = getInstallInfo();
   const base: RepositoryStatusResult = {
@@ -271,10 +345,14 @@ export function getRepositoryStatus(): RepositoryStatusResult {
   const dir = info.installDir;
 
   // Tracking ref of the current branch, e.g. "bitbucket/local" (empty if none).
-  const trackingRef = runGit(['rev-parse', '--abbrev-ref', '--symbolic-full-name', '@{upstream}'], dir).stdout || null;
-  const trackingRemote = trackingRef ? trackingRef.slice(0, trackingRef.indexOf('/')) || null : null;
+  const trackingRef =
+    (await runGit(['rev-parse', '--abbrev-ref', '--symbolic-full-name', '@{upstream}'], dir)).stdout || null;
+  const trackingRemote = parseTrackingRemote(trackingRef);
+  // A local-branch upstream (no slash) carries no remote — drop the ref too, so
+  // nothing downstream can mistake a bare branch name for a remote-tracking ref.
+  const remoteTrackingRef = trackingRemote ? trackingRef : null;
 
-  const remotesOut = runGit(['remote'], dir);
+  const remotesOut = await runGit(['remote'], dir);
   const existingRemotes = remotesOut.ok
     ? remotesOut.stdout
         .split('\n')
@@ -292,6 +370,28 @@ export function getRepositoryStatus(): RepositoryStatusResult {
     return { ...base, error: 'No comparable remotes found (set CODEMAN_UPDATE_REMOTES to choose).' };
   }
 
-  const remotes = selected.map((name) => statusForRemote(dir, name, trackingRemote ?? '', trackingRef));
+  // Sequential on purpose: concurrent `git fetch` in one repo can contend on
+  // ref locks, and the event loop no longer cares how long this takes.
+  const remotes: RepoRemoteStatus[] = [];
+  for (const name of selected) {
+    // SECURITY: redact `scheme://user:token@host` credentials from the URL and
+    // any error string (git stderr echoes the URL back) before they leave the server.
+    remotes.push(redactRemoteStatus(await statusForRemote(dir, name, trackingRemote ?? '', remoteTrackingRef)));
+  }
   return { ...base, remotes };
+}
+
+const statusCache = createSingleFlightCache(STATUS_CACHE_TTL_MS, computeRepositoryStatus);
+
+/**
+ * Inspect how the local checkout sits relative to the configured remotes.
+ * Each remote is fetched + compared independently; a single unreachable remote
+ * surfaces as that card's `error` and never fails the whole call.
+ *
+ * Single-flight + TTL-cached: concurrent requests share one in-flight
+ * computation, and a result younger than `STATUS_CACHE_TTL_MS` is served
+ * without spawning git.
+ */
+export function getRepositoryStatus(): Promise<RepositoryStatusResult> {
+  return statusCache.get();
 }
