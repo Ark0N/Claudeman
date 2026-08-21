@@ -3,20 +3,68 @@ export type ResponseViewerTranscriptKind = 'prompt' | 'response' | 'status' | 't
 export interface ResponseViewerTranscriptBlock {
   kind: ResponseViewerTranscriptKind;
   label: 'Prompt' | 'Response' | 'Status' | 'Tool';
+  /** What the frontend renders by: 'user' gets the "You" badge, everything else the agent badge. */
+  role: 'user' | 'assistant';
   text: string;
 }
 
-const EXTERNAL_CLI_MODES = new Set(['codex', 'gemini', 'opencode', 'antigravity']);
+// Keep in lockstep with isExternalCliMode() in src/session.ts. Importing it here
+// would drag node-pty and the whole session layer into this pure module, so the
+// list is duplicated and test/response-viewer-transcript.test.ts pins the parity.
+const EXTERNAL_CLI_MODES = new Set(['codex', 'gemini', 'opencode', 'antigravity', 'pi']);
 
 function isPromptLine(line: string): boolean {
   return /^\s*›\s*/.test(line);
 }
 
+function isDividerDashChar(ch: string): boolean {
+  return ch === '─' || ch === '-';
+}
+
+function isWhitespaceChar(ch: string): boolean {
+  return /\s/.test(ch);
+}
+
+// Linear-time equivalent of the old /^[─-]+\s*(.+?)\s*[─-]{3,}$/. The lazy
+// middle of that pattern backtracked catastrophically on a long dash run that
+// does NOT end in 3+ dashes (measured >2min at 8,000 chars) — and pane text is
+// agent-controlled with buffers up to 32MB, so this ran on hostile input. Same
+// accept set and same captured content, computed with counters; equivalence is
+// pinned char-for-char against the old regex by the brute-force corpus test in
+// test/response-viewer-transcript.test.ts.
 function normalizeDividerStatusLine(line: string): string | null {
-  const trimmed = line.trim();
-  const matched = trimmed.match(/^[─-]+\s*(.+?)\s*[─-]{3,}$/);
-  if (!matched) return null;
-  return matched[1]?.trim() || null;
+  const s = line.trim();
+  const n = s.length;
+  // Minimum match: 1 leading dash + 1 content char + 3 trailing dashes.
+  if (n < 5) return null;
+
+  let lead = 0;
+  while (lead < n && isDividerDashChar(s.charAt(lead))) lead += 1;
+  if (lead === 0) return null;
+
+  let trail = 0;
+  while (trail < n && isDividerDashChar(s.charAt(n - 1 - trail))) trail += 1;
+  if (trail < 3) return null;
+
+  // The regex was greedy on the leading run but gave dashes back until at least
+  // one content char plus the 3-dash tail fit (an all-dash line matched with a
+  // single leftover dash as its "content"), so the content window starts at the
+  // end of the leading run, clamped to leave 4 chars.
+  const contentStart = Math.min(lead, n - 4);
+  let ws = 0;
+  while (contentStart + ws < n - 4 && isWhitespaceChar(s.charAt(contentStart + ws))) ws += 1;
+  const from = contentStart + ws;
+
+  // The lazy middle stopped at the first position from which "optional
+  // whitespace, then dashes to end-of-line" matches: the start of the
+  // whitespace padding in front of the trailing dash run (never before the
+  // first content char).
+  const tailStart = n - trail;
+  let padded = tailStart;
+  while (padded > 0 && isWhitespaceChar(s.charAt(padded - 1))) padded -= 1;
+  const end = Math.max(from + 1, padded);
+
+  return s.slice(from, end).trim() || null;
 }
 
 function isDividerOnlyLine(line: string): boolean {
@@ -208,7 +256,9 @@ function pushBlock(
       : normalizeWrappedText(normalizedLines);
   if (!text) return;
   const label = (kind.charAt(0).toUpperCase() + kind.slice(1)) as ResponseViewerTranscriptBlock['label'];
-  blocks.push({ kind, label, text });
+  // The frontend's loadFullContext() renders via msg.role — a block without it
+  // lost the "You" badge on prompts and rendered every block as the agent.
+  blocks.push({ kind, label, role: kind === 'prompt' ? 'user' : 'assistant', text });
 }
 
 export function isExternalCliTranscriptMode(mode: string | null | undefined): boolean {

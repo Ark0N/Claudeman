@@ -1,5 +1,11 @@
 import { describe, expect, it } from 'vitest';
-import { getLastTranscriptResponse, parseExternalCliTranscript } from '../src/web/response-viewer-transcript.js';
+import {
+  getLastTranscriptResponse,
+  isExternalCliTranscriptMode,
+  parseExternalCliTranscript,
+} from '../src/web/response-viewer-transcript.js';
+import { isExternalCliMode } from '../src/session.js';
+import type { SessionMode } from '../src/types.js';
 
 describe('response viewer transcript parser', () => {
   it('extracts structured COD transcript blocks and keeps labeled status/tool entries', () => {
@@ -46,6 +52,15 @@ gpt-5.4 medium · kb · main · Ready · Context 92% left
     expect(blocks[3]?.label).toBe('Tool');
     expect(blocks[4]?.text).toContain('reduces the risk and effort involved');
     expect(blocks[4]?.text).not.toContain('reduces\nthe risk');
+
+    // The frontend's loadFullContext() renders via msg.role: 'user' gets the
+    // "You" badge, everything else the agent badge. A block without role
+    // rendered every prompt as the agent.
+    expect(blocks[1]?.role).toBe('user');
+    expect(blocks[5]?.role).toBe('user');
+    expect(blocks[0]?.role).toBe('assistant');
+    expect(blocks[3]?.role).toBe('assistant');
+    expect(blocks[4]?.role).toBe('assistant');
   });
 
   it('returns the most recent completed response when the last block is a new prompt', () => {
@@ -318,6 +333,130 @@ Here is the assistant answer at column zero.
 
       expect(blocks.some((b) => b.kind === 'tool' && b.text.includes('Explored'))).toBe(true);
       expect(getLastTranscriptResponse(blocks)).toBe('Here is the assistant answer at column zero.');
+    });
+  });
+
+  // The divider-status detector used to be /^[─-]+\s*(.+?)\s*[─-]{3,}$/, whose
+  // lazy middle backtracked catastrophically on a long dash run that does not
+  // end in 3+ dashes (measured >2min at 8,000 chars). Pane text is
+  // agent-controlled and buffers reach 32MB, so the pattern was replaced by a
+  // linear counter walk. Same approach as the glob-matcher ReDoS fix (68ae9a8):
+  // the hostile input below fails by timeout with the RegExp version.
+  describe('divider-status ReDoS hardening', () => {
+    it('classifies a hostile 10k dash run in linear time', () => {
+      const hostile = '-'.repeat(10_000) + '>';
+      const started = Date.now();
+      const blocks = parseExternalCliTranscript(`› q\n${hostile}`, 'opencode');
+      const elapsed = Date.now() - started;
+
+      expect(elapsed).toBeLessThan(2_000);
+      // No 3-dash tail, so the line is not a status divider — it stays prose.
+      expect(blocks.some((b) => b.kind === 'response' && b.text.includes('>'))).toBe(true);
+      expect(blocks.some((b) => b.kind === 'status')).toBe(false);
+    });
+
+    // The counter walk must keep the EXACT accept set and captured content of
+    // the old regex (including its backtracking quirks on all-dash lines), so
+    // brute-force both against a corpus. The old regex is safe here: probes are
+    // capped at 24 chars, far below the blowup threshold.
+    it('matches the old regex char-for-char on a brute-force corpus', () => {
+      const oldNormalize = (line: string): string | null => {
+        const trimmed = line.trim();
+        const matched = trimmed.match(/^[─-]+\s*(.+?)\s*[─-]{3,}$/);
+        if (!matched) return null;
+        return matched[1]?.trim() || null;
+      };
+
+      // Observe the private normalizeDividerStatusLine through the parser: after
+      // a prompt, a column-zero probe from this alphabet is a status block iff
+      // the divider detector matched, and the status text is its return value.
+      // (The alphabet triggers no other status arm; letters are limited to 'x'.)
+      const observedStatusText = (probe: string): string | null => {
+        const blocks = parseExternalCliTranscript(`› q\n${probe}`, 'opencode');
+        const status = blocks.find((b) => b.kind === 'status');
+        return status ? status.text : null;
+      };
+
+      const directed = [
+        '──── Status ────',
+        '─ Worked for 1m 51s ───────',
+        '---',
+        '----',
+        '-----',
+        '------',
+        '-------',
+        '---- ---',
+        '-    ---',
+        '--x',
+        'x---',
+        '----x',
+        '----x--',
+        '----x---',
+        '─x───',
+        '- x ---',
+        '--- x -',
+        '─── ──',
+        '-\tx\t---',
+        '--->----',
+        '─-─- x x ─-─',
+        '- x x x ----',
+      ];
+
+      // Deterministic LCG so a failure reproduces byte-identically.
+      let seed = 0x2f6e2b1;
+      const rand = () => {
+        seed = (seed * 1103515245 + 12345) & 0x7fffffff;
+        return seed / 0x80000000;
+      };
+      const alphabet = ['-', '-', '─', '─', ' ', ' ', '\t', 'x', '>'];
+      const probes = [...directed];
+      for (let i = 0; i < 3000; i += 1) {
+        const len = Math.floor(rand() * 25);
+        let probe = '';
+        for (let j = 0; j < len; j += 1) {
+          probe += alphabet[Math.floor(rand() * alphabet.length)];
+        }
+        probes.push(probe);
+      }
+
+      for (const raw of probes) {
+        const probe = raw.trim();
+        // Divider-only lines (8+ dash/whitespace chars) are consumed by
+        // isDividerOnlyLine before the status detector ever runs, in both the
+        // old and new worlds — the detector is unobservable there.
+        if (!probe || /^[\s─-]{8,}$/.test(probe)) continue;
+        expect(observedStatusText(probe), `probe: ${JSON.stringify(probe)}`).toBe(oldNormalize(probe));
+      }
+    });
+  });
+
+  // EXTERNAL_CLI_MODES is a local duplicate of isExternalCliMode() in
+  // src/session.ts (importing session.ts would drag node-pty and the whole
+  // session layer into the pure transcript module). This pin is what keeps the
+  // two from drifting — 'pi' was missing here while isExternalCliMode() had it,
+  // which left pi sessions with the exact empty-viewer symptom the transcript
+  // branch exists to fix.
+  describe('mode parity with isExternalCliMode()', () => {
+    // Exhaustive by construction: adding a SessionMode without deciding its
+    // transcript behavior fails to compile here.
+    const ALL_SESSION_MODES: Record<SessionMode, true> = {
+      claude: true,
+      shell: true,
+      opencode: true,
+      codex: true,
+      gemini: true,
+      antigravity: true,
+      pi: true,
+    };
+
+    it('agrees with isExternalCliMode() for every SessionMode', () => {
+      for (const mode of Object.keys(ALL_SESSION_MODES) as SessionMode[]) {
+        expect(isExternalCliTranscriptMode(mode), `mode: ${mode}`).toBe(isExternalCliMode(mode));
+      }
+    });
+
+    it('covers pi', () => {
+      expect(isExternalCliTranscriptMode('pi')).toBe(true);
     });
   });
 });

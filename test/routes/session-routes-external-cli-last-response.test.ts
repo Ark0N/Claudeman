@@ -4,12 +4,14 @@
  * Uses app.inject() — no real HTTP ports needed.
  * Port: N/A (app.inject doesn't open ports)
  *
- * OpenCode / Gemini / Antigravity render their own TUIs and never write a Claude
- * transcript under ~/.claude/projects, so before this branch existed the handler
- * fell through to the Claude scan, found nothing, and the response viewer was
- * permanently empty for those modes. These tests pin:
+ * OpenCode / Gemini / Antigravity / Pi render their own TUIs and never write a
+ * Claude transcript under ~/.claude/projects, so before this branch existed the
+ * handler fell through to the Claude scan, found nothing, and the response viewer
+ * was permanently empty for those modes. These tests pin:
  *   - the pane buffer is segmented and the LAST response is returned
  *   - ?context=full carries the parsed blocks, and the short form omits them
+ *   - ?context=full blocks carry role — the frontend renders via msg.role, so a
+ *     block without it lost the "You" badge on prompts
  *   - a pane that has produced no output reports hasContext: false rather than 404ing
  *   - Claude mode still takes the Claude path (regression guard)
  */
@@ -100,7 +102,7 @@ describe('GET /api/sessions/:id/last-response — external CLI panes', () => {
     return { res, body: JSON.parse(res.body) };
   }
 
-  for (const mode of ['opencode', 'gemini', 'antigravity'] as const) {
+  for (const mode of ['opencode', 'gemini', 'antigravity', 'pi'] as const) {
     it(`returns the last assistant response from the ${mode} pane buffer`, async () => {
       session.mode = mode;
       session.terminalBuffer = PANE;
@@ -131,6 +133,12 @@ describe('GET /api/sessions/:id/last-response — external CLI panes', () => {
     const prompts = body.data.messages.filter((b: { kind: string }) => b.kind === 'prompt');
     expect(prompts).toHaveLength(2);
     expect(prompts[1].text).toContain('now document it');
+
+    // loadFullContext() renders via msg.role — without it every block got the
+    // agent badge and the user's own prompts lost their "You" attribution.
+    for (const block of body.data.messages as Array<{ kind: string; role: string }>) {
+      expect(block.role).toBe(block.kind === 'prompt' ? 'user' : 'assistant');
+    }
   });
 
   it('reports hasContext false for a pane that has produced no output', async () => {
