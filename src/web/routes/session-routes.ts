@@ -12,6 +12,7 @@ import { existsSync, statSync, mkdirSync, writeFileSync } from 'node:fs';
 import { execFile } from 'node:child_process';
 import fs from 'node:fs/promises';
 import { randomBytes } from 'node:crypto';
+import { performance } from 'node:perf_hooks';
 import {
   ApiErrorCode,
   createErrorResponse,
@@ -2279,18 +2280,17 @@ export function registerSessionRoutes(
 
   // Query params:
   //   tail=<bytes> - Only return last N bytes (faster initial load)
-  //   full=1       - Full page reload: replay the entire tmux scrollback (COD-47)
-  app.get('/api/sessions/:id/terminal', async (req) => {
+  //   full=1       - Explicitly request the entire tmux scrollback (COD-47)
+  app.get('/api/sessions/:id/terminal', async (req, reply) => {
+    const routeStartedAt = performance.now();
     const { id } = req.params as { id: string };
     const query = req.query as { tail?: string; full?: string };
     const session = findSessionOrFail(ctx, id, req);
 
-    // `full=1` is the EXPLICIT full-reload signal (COD-47): the browser reloaded
-    // the page and wants the whole scroll history back, so we capture the ENTIRE
-    // tmux scrollback and the user gets back history that scrolled off Codeman's
-    // byte buffer. Requests WITHOUT it — tab switches (`tail=`) and the legacy
-    // no-param callers (response-viewer fallback, clearTerminal refresh) — keep
-    // the fast visible-frame capture.
+    // `full=1` is the EXPLICIT full-history signal (COD-47): capture the ENTIRE
+    // tmux scrollback so history beyond the server byte buffer can be recovered.
+    // Requests WITHOUT it — shell selection/tab switches (`tail=`) and legacy
+    // no-param callers — keep the fast visible-frame capture.
     const tailBytes = query.tail ? parseInt(query.tail, 10) : 0;
     const isFullReload = query.full === '1' || query.full === 'true';
     const { tmuxHistoryLimit, terminalBufferMaxBytes } = await ctx.getTerminalHistoryConfig();
@@ -2303,6 +2303,7 @@ export function registerSessionRoutes(
     // overlap. `captureActivePaneBuffer` is a no-op ('') under test mode and
     // returns null when unavailable, in which case we fall back to history.
     const muxName = session.muxName;
+    const captureStartedAt = performance.now();
     const liveMuxBuffer =
       muxName && typeof ctx.mux.captureActivePaneBuffer === 'function'
         ? ctx.mux.captureActivePaneBuffer(
@@ -2312,6 +2313,7 @@ export function registerSessionRoutes(
               : undefined
           )
         : null;
+    const captureFinishedAt = performance.now();
     const hasLiveMuxBuffer = liveMuxBuffer !== null && liveMuxBuffer.length > 0;
     const source: 'history' | 'mux-visible' | 'mux-full-history' = hasLiveMuxBuffer
       ? isFullReload
@@ -2414,6 +2416,14 @@ export function registerSessionRoutes(
 
     // Remove Ctrl+L and leading whitespace (cheap on tailed subset)
     cleanBuffer = cleanBuffer.replace(CTRL_L_PATTERN, '').replace(LEADING_WHITESPACE_PATTERN, '');
+
+    const finishedAt = performance.now();
+    reply.header(
+      'Server-Timing',
+      `capture;dur=${(captureFinishedAt - captureStartedAt).toFixed(1)}, ` +
+        `prepare;dur=${(finishedAt - captureFinishedAt).toFixed(1)}, ` +
+        `total;dur=${(finishedAt - routeStartedAt).toFixed(1)}`
+    );
 
     return {
       terminalBuffer: cleanBuffer,

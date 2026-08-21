@@ -89,7 +89,7 @@ describe('terminal flush budget', () => {
     expect(app.pendingWrites.join('')).toHaveLength(32 * 1024);
   });
 
-  it('waits for xterm to process small buffer replays before completing buffer load', async () => {
+  it('releases the live-output gate but waits for xterm to parse a small replay', async () => {
     const { app, writes } = loadTerminalUiHarness('codex');
     let writeDone: (() => void) | undefined;
     let resolved = false;
@@ -109,13 +109,90 @@ describe('terminal flush budget', () => {
     expect(writes).toEqual(['fresh tmux pane frame']);
     expect(writeDone).toBeTypeOf('function');
     expect(resolved).toBe(false);
-    expect(finishBufferLoad).not.toHaveBeenCalled();
+    expect(finishBufferLoad).toHaveBeenCalledOnce();
 
     writeDone?.();
     await promise;
 
     expect(resolved).toBe(true);
-    expect(finishBufferLoad).toHaveBeenCalledOnce();
+  });
+
+  it('paces a large enqueue and releases live output before the parse marker completes', async () => {
+    const { app, writes } = loadTerminalUiHarness('shell');
+    const scheduled: Array<() => void> = [];
+    let parseDone: (() => void) | undefined;
+    let resolved = false;
+    let result: { parsedAt: number; bufferLength: number; completed: boolean } | undefined;
+    app._safeYield = (callback: () => void) => scheduled.push(callback);
+    app.isTerminalAtBottom = () => true;
+    app.terminal.buffer = { active: { length: 37 } };
+    app.terminal.write = (data: string, callback?: () => void) => {
+      writes.push(data);
+      if (callback) parseDone = callback;
+    };
+
+    const promise = app.chunkedTerminalWrite('x'.repeat(3 * 32 * 1024)).then((value: typeof result) => {
+      result = value;
+      resolved = true;
+    });
+    expect(writes).toEqual([]);
+    expect(scheduled).toHaveLength(1);
+
+    scheduled.shift()?.();
+    expect(writes.map((write) => write.length)).toEqual([32 * 1024]);
+    expect(scheduled).toHaveLength(1);
+
+    scheduled.shift()?.();
+    expect(writes.map((write) => write.length)).toEqual([32 * 1024, 32 * 1024]);
+    expect(resolved).toBe(false);
+
+    scheduled.shift()?.();
+    expect(writes.map((write) => write.length)).toEqual([32 * 1024, 32 * 1024, 32 * 1024, 0]);
+    expect(app._isLoadingBuffer).toBe(false);
+    expect(resolved).toBe(false);
+
+    app.batchTerminalWrite('new output after snapshot');
+    expect(app._loadBufferQueue).toBe(null);
+    expect(app.pendingWrites).toEqual(['new output after snapshot']);
+
+    parseDone?.();
+    app.terminal.buffer.active.length = 42;
+    await promise;
+    expect(resolved).toBe(true);
+    expect(result?.bufferLength).toBe(37);
+    expect(result?.completed).toBe(true);
+  });
+
+  it('marks a parse callback stale when a newer replay supersedes it', async () => {
+    const { app } = loadTerminalUiHarness('shell');
+    let parseDone: (() => void) | undefined;
+    app.terminal.write = (_data: string, callback?: () => void) => {
+      parseDone = callback;
+    };
+
+    const firstReplay = app.chunkedTerminalWrite('old snapshot');
+    app._chunkedWriteGen += 1;
+    parseDone?.();
+
+    await expect(firstReplay).resolves.toMatchObject({ completed: false });
+  });
+
+  it('scans xterm rows from buffer.length instead of double-counting baseY', () => {
+    const { app } = loadTerminalUiHarness('shell');
+    const getLine = vi.fn((index: number) =>
+      index === 99 || index === 77 ? { translateToString: () => 'content' } : undefined
+    );
+    app.terminal = {
+      rows: 24,
+      buffer: { active: { baseY: 76, length: 100, getLine } },
+      scrollToBottom: vi.fn(),
+      scrollToLine: vi.fn(),
+    };
+
+    app.scrollToLastNonEmptyLine();
+
+    expect(getLine.mock.calls[0]?.[0]).toBe(99);
+    expect(app.terminal.scrollToLine).toHaveBeenCalledWith(77);
   });
 
   it('keeps stale buffer load owners from finishing a newer load', () => {
