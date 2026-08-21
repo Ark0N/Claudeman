@@ -562,6 +562,55 @@ function resolveTerminalFontFamily(custom) {
   return `${families.join(', ')}, ${TERMINAL_FONT_DEFAULT_STACK}`;
 }
 
+// ---------------------------------------------------------------------------
+// Auto Copy (copy-on-select). Pure decision, so every guard below is testable
+// without a terminal, a clipboard, or a browser.
+// ---------------------------------------------------------------------------
+
+/**
+ * Upper bound on an AUTO-copied selection.
+ *
+ * A drag that runs off the top of the viewport autoscrolls, so one gesture can
+ * sweep the entire 50k-line scrollback (millions of characters), and writing
+ * that to the clipboard on every mouseup is a real hazard on a phone. Past the
+ * cap the copy is REFUSED rather than truncated (half a selection on the
+ * clipboard is worse than none) and the user is told to press Ctrl+C, which
+ * still copies the whole thing through the explicit path.
+ */
+const AUTO_COPY_MAX_CHARS = 1_000_000;
+
+/**
+ * What an auto-copy attempt should do at the end of a selection gesture.
+ *
+ * `pending` is set by xterm's onSelectionChange and cleared on every flush;
+ * `lastCopied` is the text this surface auto-copied last. Either one alone is
+ * wrong, which is why both are here:
+ *
+ *  - onSelectionChange does not reliably fire BEFORE the mouseup that ends the
+ *    drag (xterm fires it from its own document-level mouseup handler, and
+ *    listener order between the two is registration order, not something this
+ *    code controls). Gating on `pending` alone would silently drop the first
+ *    copy of a drag-selection.
+ *  - Gating on `text !== lastCopied` alone drops a deliberate re-selection of
+ *    the same text after the user copied something else in between, and it
+ *    would let any unrelated mouseup on the page re-copy a stale selection.
+ *
+ * So: a genuine selection change (`pending`) always copies, and otherwise only
+ * text that differs from the last auto-copy does.
+ *
+ * @param {{enabled?: boolean, text?: string, lastCopied?: string, pending?: boolean}} params
+ * @returns {'copy'|'skip'|'too-large'}
+ */
+function decideAutoCopy({ enabled, text, lastCopied, pending } = {}) {
+  if (!enabled) return 'skip';
+  // Whitespace-only is what a drag across blank cells produces; putting a wall
+  // of spaces on the clipboard is never what the gesture meant.
+  if (typeof text !== 'string' || !text.trim()) return 'skip';
+  if (!pending && text === lastCopied) return 'skip';
+  if (text.length > AUTO_COPY_MAX_CHARS) return 'too-large';
+  return 'copy';
+}
+
 if (typeof window !== 'undefined') {
   window.WEBGL_FALLBACK = WEBGL_FALLBACK;
   window.evaluateWebGLLongTaskTrip = evaluateWebGLLongTaskTrip;
@@ -594,6 +643,10 @@ if (typeof window !== 'undefined') {
     anchor: sessionActivityAnchor,
     compare: compareSessionActivity,
     sort: sortSessionsByActivity,
+  };
+  window.CodemanAutoCopy = {
+    decide: decideAutoCopy,
+    MAX_CHARS: AUTO_COPY_MAX_CHARS,
   };
   window.CodemanTerminalFont = {
     DEFAULT_STACK: TERMINAL_FONT_DEFAULT_STACK,

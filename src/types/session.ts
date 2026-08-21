@@ -500,6 +500,14 @@ export interface SessionState {
   color?: SessionColor;
   /** Flicker filter enabled (buffers output after screen clears) */
   flickerFilterEnabled?: boolean;
+  /**
+   * True while the CLI in the pane has a mouse-tracking DECSET on, as observed
+   * by the server on its way out of the stream (those sequences are stripped for
+   * claude/codex/gemini, so the browser can never see them itself). The browser
+   * hand-encodes a click report ONLY when this is true; without it, every click
+   * sent mouse reports to a CLI that never asked for them.
+   */
+  cliMouseTracking?: boolean;
   /** Claude Code CLI version (parsed from terminal, e.g., "2.1.27") */
   cliVersion?: string;
   /** Claude model in use (parsed from terminal, e.g., "Opus 4.5") */
