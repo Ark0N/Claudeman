@@ -1,5 +1,16 @@
 # aicodeman
 
+## 1.20.1
+
+### Patch Changes
+
+- Terminal input and scrollback fixes (PRs #327, #331):
+  - IME punctuation preserved (#327): keyCode 229 / `Process` key events are now delegated to xterm's CompositionHelper instead of being suppressed, so an active Chinese IME committing numbers and full-width punctuation (，。！？ and friends) reaches the terminal correctly. The CJK input field sends the browser's committed text instead of guessing from `KeyboardEvent.key`, and the redundant Android orphan-input fallback is removed so xterm is the single input owner.
+  - Shell history replay bounded (#331): selecting a Shell session loads a bounded 1 MiB tail instead of replaying the entire multi-megabyte tmux scrollback on xterm's main thread; full history stays available via the explicit "Load full history" action. tmux history limits now apply correctly on both legacy tmux (global default set in the same command queue before pane creation) and tmux 3.7+ (per-pane targeting that never resizes or trims unrelated live panes). Also adds `Server-Timing` and `[TERMINAL-PERF]` timing stages for terminal loads, fixes `scrollToLastNonEmptyLine` double-counting scrollback rows, and keeps live output ordered behind snapshot replays.
+
+  ### Thanks
+  - @dignfei for both fixes: the IME punctuation root-cause fix (#327) and the bounded shell history replay with the tmux history-limit correctness work (#331).
+
 ## 1.20.0
 
 ### Minor Changes
