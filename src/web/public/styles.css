@@ -4734,6 +4734,16 @@ body.touch-device .terminal-container .xterm .xterm-helper-textarea {
   flex-direction: column;
   gap: 2px;
 }
+/* Plain grouping wrappers around the dynamically-rendered agent/shell run-mode
+   options (see index.html + _renderRunModeOptions() in session-ui.js) — without
+   their own flex+gap, buttons inside them would lose the 2px gap .run-mode-menu.active
+   gives its DIRECT children, since these divs sit one level in between. */
+#runModeAgentOptions,
+#runModeShellOption {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+}
 .run-mode-option {
   display: flex;
   align-items: center;

@@ -568,6 +568,13 @@ Object.assign(CodemanApp.prototype, {
       const data = await res.json();
       if (!data.success) throw new Error(data.error || 'Failed to load CLIs');
       clis = data.data;
+      // Keep the page's live registry snapshot in sync with whatever this panel just
+      // fetched, so the Run-mode menu (_renderRunModeOptions in session-ui.js) reflects
+      // an enable/disable/add/remove made here immediately — without this, toggling a
+      // CLI on in Settings and opening Run without a page reload would still show the
+      // pre-toggle state, since window.__codemanClis is otherwise only ever set once,
+      // at page load.
+      window.__codemanClis = clis;
     } catch (err) {
       container.textContent = `Failed to load CLI list: ${err.message}`;
       return;

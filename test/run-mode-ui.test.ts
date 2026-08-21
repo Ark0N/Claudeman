@@ -361,15 +361,20 @@ describe('Codex quick start settings', () => {
       ]) {
         welcomeBtns[id] = { style: { display: 'PRISTINE' } };
       }
-      const modeBtns: Record<string, { style: { display: string } }> = {};
-      for (const mode of ['claude', 'opencode', 'codex', 'gemini', 'antigravity', 'pi', 'shell']) {
-        modeBtns[mode] = { style: { display: 'PRISTINE' } };
+      const modeBtns: Record<string, { dataset: { mode: string }; style: { display: string } }> = {};
+      // "copilot" is deliberately included even though it's not in ALL_OFF/the legacy
+      // flags map below: _refreshRunModeAvailability must gate ANY button actually
+      // present, not a fixed list, which is exactly the bug that shipped GitHub Copilot
+      // CLI enabled with no way to see it in the Run menu.
+      for (const mode of ['claude', 'opencode', 'codex', 'gemini', 'antigravity', 'pi', 'shell', 'copilot']) {
+        modeBtns[mode] = { dataset: { mode }, style: { display: 'PRISTINE' } };
       }
       const menu = {
         querySelector: (sel: string) => {
           const m = sel.match(/data-mode="([^"]+)"/);
           return m ? (modeBtns[m[1]] ?? null) : null;
         },
+        querySelectorAll: () => Object.values(modeBtns),
       };
       const context: any = vm.createContext({
         CodemanApp,
@@ -437,24 +442,38 @@ describe('Codex quick start settings', () => {
       // Shell needs no external CLI, and leaving it alone is what guarantees the
       // menu is never empty on a box with nothing installed.
       expect(modeBtns.shell.style.display).toBe('PRISTINE');
+      // "copilot" is absent from the legacy flags map entirely (it postdates that
+      // fixed six-key shape) and window.__codemanClis was never injected in this
+      // harness either, so this falls through isCliAvailable()'s "unknown reads as
+      // available" rule rather than being silently skipped.
+      expect(modeBtns.copilot.style.display).toBe('flex');
     });
 
-    it('gates every mode the run-mode menu actually offers', () => {
-      // Catches a sixth run mode being added to index.html without being gated,
-      // which is exactly how antigravity slipped past #201.
+    it('gates every mode the run-mode menu actually offers, generically rather than by a fixed list', () => {
+      // Catches a run mode being added to index.html without being gated, which is
+      // exactly how antigravity slipped past #201 -- and, differently, exactly how
+      // GitHub Copilot CLI shipped enabled with no way to see it in the Run menu
+      // (that bug was in the MENU MARKUP never being rebuilt from the registry at
+      // all, but this guards the gating half of the same surface).
       const html = readFileSync(resolve(import.meta.dirname, '../src/web/public/index.html'), 'utf8');
       const menuHtml = html.slice(html.indexOf('id="runModeMenu"'));
-      const offered = [...menuHtml.slice(0, menuHtml.indexOf('</div>')).matchAll(/data-mode="([^"]+)"/g)].map(
+      const offered = [...menuHtml.slice(0, menuHtml.indexOf('<!-- Web tabs:')).matchAll(/data-mode="([^"]+)"/g)].map(
         (m) => m[1]
       );
       expect(offered).toContain('antigravity');
       expect(offered).toContain('pi');
-      const src = readFileSync(resolve(import.meta.dirname, '../src/web/public/session-ui.js'), 'utf8');
-      // Anchor on the DEFINITION, not the earlier call site in toggleRunModeMenu.
-      const fn = src.slice(src.indexOf('_refreshRunModeAvailability(menu) {'));
-      const gated = fn.slice(0, fn.indexOf('\n  },'));
+
+      // _refreshRunModeAvailability must be generic over whatever .run-mode-option
+      // buttons are actually present (built by _renderRunModeOptions, or this static
+      // fallback markup), not a hardcoded mode list -- so drive it with a menu whose
+      // querySelectorAll returns EXACTLY the buttons index.html currently offers, and
+      // confirm every one of them was actually visited (nothing left PRISTINE).
+      const { app, modeBtns } = loadUi(ALL_OFF);
+      const offeredMenu = { querySelectorAll: () => offered.map((mode) => modeBtns[mode]).filter(Boolean) };
+      app._refreshRunModeAvailability(offeredMenu);
       for (const mode of offered.filter((m) => m !== 'shell')) {
-        expect(gated).toContain(`'${mode}'`);
+        expect(modeBtns[mode].style.display).not.toBe('PRISTINE');
+        expect(modeBtns[mode].style.display).toBe('none'); // ALL_OFF -> every gated mode hidden
       }
     });
 
@@ -996,5 +1015,117 @@ describe('Pi quick start', () => {
 
     expect(requests).toEqual(['/api/cli/pi/status']);
     expect(errors[0]).toContain('@earendil-works/pi-coding-agent');
+  });
+});
+
+describe('_renderRunModeOptions (rebuilding the Run menu from the live registry)', () => {
+  // Regression coverage for: enabling a CLI (e.g. GitHub Copilot) from Settings did not
+  // make it appear in the Run menu, because #runModeAgentOptions/#runModeShellOption were
+  // never rebuilt from window.__codemanClis at all -- the menu was static markup for the
+  // original six CLIs plus shell.
+  function loadHarness() {
+    const elements: Record<string, any> = {};
+    const CodemanApp = function CodemanApp(this: any) {};
+    const context: any = vm.createContext({
+      CodemanApp,
+      document: {
+        getElementById: (id: string) => elements[id] ?? null,
+        createElement: (tag: string) => {
+          const el: any = {
+            tagName: tag,
+            className: '',
+            dataset: {},
+            style: {},
+            onclick: null,
+            children: [] as any[],
+            append(...nodes: any[]) {
+              this.children.push(...nodes);
+            },
+          };
+          return el;
+        },
+        createTextNode: (text: string) => ({ nodeType: 3, text }),
+      },
+      console,
+    });
+    context.window = context;
+
+    const agentGroup = { replaceChildren: (...c: any[]) => (agentGroup.children = c), children: [] as any[] };
+    const shellGroup = { replaceChildren: (...c: any[]) => (shellGroup.children = c), children: [] as any[] };
+    elements.runModeAgentOptions = agentGroup;
+    elements.runModeShellOption = shellGroup;
+
+    const sessionUi = readFileSync(resolve(import.meta.dirname, '../src/web/public/session-ui.js'), 'utf8');
+    vm.runInContext(sessionUi, context, { filename: 'session-ui.js' });
+
+    return { app: new (CodemanApp as any)(), agentGroup, shellGroup, context };
+  }
+
+  const CLI = (overrides: Record<string, unknown> = {}) => ({
+    id: 'claude',
+    label: 'Claude',
+    accent: '#d97757',
+    enabled: true,
+    kind: 'agent',
+    order: 0,
+    ...overrides,
+  });
+
+  it('includes an enabled CLI (e.g. copilot) that the static markup never had', () => {
+    const { app, agentGroup, context } = loadHarness();
+    context.__codemanClis = [CLI(), CLI({ id: 'copilot', label: 'GitHub Copilot', accent: '#8957e5', order: 60 })];
+
+    app._renderRunModeOptions();
+
+    const ids = agentGroup.children.map((btn: any) => btn.dataset.mode);
+    expect(ids).toEqual(['claude', 'copilot']);
+    const copilotBtn = agentGroup.children.find((btn: any) => btn.dataset.mode === 'copilot');
+    expect(copilotBtn.children[0].style.background).toBe('#8957e5'); // the dot, appended first
+  });
+
+  it('excludes a disabled CLI', () => {
+    const { app, agentGroup, context } = loadHarness();
+    context.__codemanClis = [CLI(), CLI({ id: 'copilot', enabled: false })];
+
+    app._renderRunModeOptions();
+
+    expect(agentGroup.children.map((btn: any) => btn.dataset.mode)).toEqual(['claude']);
+  });
+
+  it('sorts agent entries by order and puts kind:"shell" in the shell slot, not the agent group', () => {
+    const { app, agentGroup, shellGroup, context } = loadHarness();
+    context.__codemanClis = [
+      CLI({ id: 'pi', order: 50 }),
+      CLI({ id: 'claude', order: 0 }),
+      CLI({ id: 'shell', label: 'Shell', kind: 'shell', order: 1 }),
+    ];
+
+    app._renderRunModeOptions();
+
+    expect(agentGroup.children.map((btn: any) => btn.dataset.mode)).toEqual(['claude', 'pi']);
+    expect(shellGroup.children.map((btn: any) => btn.dataset.mode)).toEqual(['shell']);
+  });
+
+  it('leaves the static fallback markup alone when the registry blob is missing', () => {
+    const { app, agentGroup, shellGroup, context } = loadHarness();
+    context.__codemanClis = undefined;
+
+    app._renderRunModeOptions();
+
+    // replaceChildren was never called -- both groups keep whatever the harness seeded.
+    expect(agentGroup.children).toEqual([]);
+    expect(shellGroup.children).toEqual([]);
+  });
+
+  it("clicking a rendered option calls setRunMode with that CLI's id", () => {
+    const { app, agentGroup, context } = loadHarness();
+    context.__codemanClis = [CLI({ id: 'copilot', label: 'GitHub Copilot' })];
+    const calls: string[] = [];
+    app.setRunMode = (mode: string) => calls.push(mode);
+
+    app._renderRunModeOptions();
+    agentGroup.children[0].onclick();
+
+    expect(calls).toEqual(['copilot']);
   });
 });

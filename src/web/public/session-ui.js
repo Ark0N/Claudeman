@@ -422,6 +422,7 @@ Object.assign(CodemanApp.prototype, {
     e?.stopPropagation();
     const menu = document.getElementById('runModeMenu');
     if (!menu) return;
+    this._renderRunModeOptions();
     menu.classList.toggle('active');
     // Update selected state
     menu.querySelectorAll('.run-mode-option').forEach(btn => {
@@ -442,22 +443,81 @@ Object.assign(CodemanApp.prototype, {
   },
 
   /**
+   * Rebuilds #runModeAgentOptions / #runModeShellOption from window.__codemanClis (the
+   * live CLI registry, injected by renderIndexHtml — same data GET /api/clis serves) every
+   * time the menu opens, so a CLI enabled or added from Settings appears with no page
+   * reload and no markup change: this is what actually fixes "I enabled GitHub Copilot but
+   * it's not in the Run menu" — the registry was already correct, the menu markup just
+   * never read it.
+   *
+   * A missing/empty registry blob (a build predating the injection, or some other page
+   * that never got it) leaves the STATIC fallback buttons already in index.html alone —
+   * see isCliAvailable's own "missing flag reads as available" reasoning for why silence
+   * beats an empty menu.
+   */
+  _renderRunModeOptions() {
+    const clis = window.__codemanClis;
+    if (!Array.isArray(clis) || clis.length === 0) return;
+    const agentGroup = document.getElementById('runModeAgentOptions');
+    const shellGroup = document.getElementById('runModeShellOption');
+    if (!agentGroup || !shellGroup) return;
+
+    const enabled = clis.filter(c => c.enabled);
+    const agents = enabled.filter(c => c.kind !== 'shell').sort((a, b) => a.order - b.order);
+    const shells = enabled.filter(c => c.kind === 'shell').sort((a, b) => a.order - b.order);
+
+    agentGroup.replaceChildren(...agents.map(c => this._buildRunModeOptionButton(c)));
+    shellGroup.replaceChildren(...shells.map(c => this._buildRunModeOptionButton(c)));
+  },
+
+  _buildRunModeOptionButton(cli) {
+    const btn = document.createElement('button');
+    btn.className = 'run-mode-option';
+    btn.dataset.mode = cli.id;
+    btn.onclick = () => this.setRunMode(cli.id);
+    const dot = document.createElement('span');
+    dot.className = 'run-mode-dot';
+    // Inline colour rather than a per-mode CSS class (styles.css only defines
+    // .run-mode-dot.claude/.opencode/etc for the original six) — accent is exactly the
+    // field the registry carries for this purpose, so a custom or newly-added stock CLI
+    // (like copilot) gets a correctly-coloured dot with no CSS change either.
+    if (cli.accent) dot.style.background = cli.accent;
+    btn.append(dot, document.createTextNode(cli.label));
+    return btn;
+  },
+
+  /**
    * #201: hides run-mode dropdown entries for CLIs that aren't installed, so
-   * picking one doesn't spawn a session that immediately errors out.
+   * picking one doesn't spawn a session that immediately errors out. Generic over
+   * WHATEVER buttons are actually present (built by _renderRunModeOptions above, or the
+   * static fallback markup if that bailed) rather than a fixed mode list, so a CLI added
+   * after this file was written is gated the same way as the original six.
    *
    * Shell has no external CLI dependency and is never gated, which is also what
    * guarantees the menu is never empty. Scoped to `menu` rather than the document:
    * `.run-mode-option` is also the class the saved-dashboard rows and the history
    * rows use, and a bare querySelector would find whichever came first in the DOM.
-   *
-   * Antigravity and Pi are in this list even though #201 predates them — they are
-   * run modes like the rest, and neither `agy` nor `pi` is likely to be installed.
    */
   _refreshRunModeAvailability(menu) {
-    for (const mode of ['claude', 'opencode', 'codex', 'gemini', 'antigravity', 'pi']) {
-      const btn = menu.querySelector(`.run-mode-option[data-mode="${mode}"]`);
-      if (btn) btn.style.display = this.isCliAvailable(mode) ? 'flex' : 'none';
+    menu.querySelectorAll('.run-mode-option[data-mode]').forEach(btn => {
+      const mode = btn.dataset.mode;
+      if (mode === 'shell') return;
+      btn.style.display = this._isRunModeAvailable(mode) ? 'flex' : 'none';
+    });
+  },
+
+  /**
+   * Prefers the live registry's own `available` flag (covers any CLI, including one
+   * `window.__codemanCliAvailable` — the older, fixed six-key map — has never heard of,
+   * like copilot); falls back to isCliAvailable() when the registry blob is missing.
+   */
+  _isRunModeAvailable(mode) {
+    const clis = window.__codemanClis;
+    if (Array.isArray(clis)) {
+      const entry = clis.find(c => c.id === mode);
+      if (entry) return entry.available !== false;
     }
+    return this.isCliAvailable(mode);
   },
 
   async _loadRunModeHistory() {

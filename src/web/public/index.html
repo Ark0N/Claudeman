@@ -589,28 +589,38 @@
               <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M6 9l6 6 6-6"/></svg>
             </button>
             <div class="run-mode-menu" id="runModeMenu">
-              <button class="run-mode-option" data-mode="claude" onclick="app.setRunMode('claude')">
-                <span class="run-mode-dot claude"></span>Claude Code
-              </button>
-              <button class="run-mode-option" data-mode="opencode" onclick="app.setRunMode('opencode')">
-                <span class="run-mode-dot opencode"></span>OpenCode
-              </button>
-              <button class="run-mode-option" data-mode="codex" onclick="app.setRunMode('codex')">
-                <span class="run-mode-dot codex"></span>Codex
-              </button>
-              <button class="run-mode-option" data-mode="gemini" onclick="app.setRunMode('gemini')">
-                <span class="run-mode-dot gemini"></span>Gemini
-              </button>
-              <button class="run-mode-option" data-mode="antigravity" onclick="app.setRunMode('antigravity')">
-                <span class="run-mode-dot antigravity"></span>Antigravity
-              </button>
-              <button class="run-mode-option" data-mode="pi" onclick="app.setRunMode('pi')">
-                <span class="run-mode-dot pi"></span>Pi
-              </button>
+              <!-- Rebuilt from window.__codemanClis (the live CLI registry) every time the
+                   menu opens, via _renderRunModeOptions() in session-ui.js — so an enabled
+                   custom CLI (or a stock one, like GitHub Copilot, flipped on from
+                   Settings) appears with no markup change. This static markup is the
+                   fallback for the rare case the registry blob is missing (see that
+                   function's own doc comment). -->
+              <div id="runModeAgentOptions">
+                <button class="run-mode-option" data-mode="claude" onclick="app.setRunMode('claude')">
+                  <span class="run-mode-dot claude"></span>Claude Code
+                </button>
+                <button class="run-mode-option" data-mode="opencode" onclick="app.setRunMode('opencode')">
+                  <span class="run-mode-dot opencode"></span>OpenCode
+                </button>
+                <button class="run-mode-option" data-mode="codex" onclick="app.setRunMode('codex')">
+                  <span class="run-mode-dot codex"></span>Codex
+                </button>
+                <button class="run-mode-option" data-mode="gemini" onclick="app.setRunMode('gemini')">
+                  <span class="run-mode-dot gemini"></span>Gemini
+                </button>
+                <button class="run-mode-option" data-mode="antigravity" onclick="app.setRunMode('antigravity')">
+                  <span class="run-mode-dot antigravity"></span>Antigravity
+                </button>
+                <button class="run-mode-option" data-mode="pi" onclick="app.setRunMode('pi')">
+                  <span class="run-mode-dot pi"></span>Pi
+                </button>
+              </div>
               <div class="run-mode-sep"></div>
-              <button class="run-mode-option" data-mode="shell" onclick="app.setRunMode('shell')">
-                <span class="run-mode-dot shell"></span>Terminal / Shell
-              </button>
+              <div id="runModeShellOption">
+                <button class="run-mode-option" data-mode="shell" onclick="app.setRunMode('shell')">
+                  <span class="run-mode-dot shell"></span>Terminal / Shell
+                </button>
+              </div>
               <div class="run-mode-sep"></div>
               <!-- Web tabs: dashboards open as tabs beside agent sessions. These do NOT
                    set runMode: the Run button always means "start an agent". -->
