@@ -1,14 +1,24 @@
-import { chmodSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
+import { chmodSync, mkdirSync, mkdtempSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { afterEach, describe, expect, it, vi } from 'vitest';
 import { EXEC_TIMEOUT_MS } from '../src/config/exec-timeout.js';
 import {
+  cliResolveRetryDelayMs,
   createCliExecutableResolver,
   createProductionCliResolverHost,
   formatCliNotFoundMessage,
   type CliResolverHost,
 } from '../src/utils/cli-executable-resolver.js';
+
+// Pass-through spy on execFileSync so the vitest-hermeticity test below can
+// PROVE the un-injected production host never spawns anything.
+const { execFileSyncSpy } = vi.hoisted(() => ({ execFileSyncSpy: vi.fn() }));
+vi.mock('node:child_process', async (importOriginal) => {
+  const actual = await importOriginal<typeof import('node:child_process')>();
+  execFileSyncSpy.mockImplementation(actual.execFileSync as (...args: unknown[]) => unknown);
+  return { ...actual, execFileSync: execFileSyncSpy };
+});
 
 const BEGIN_MARKER = '__CODEMAN_CLI_RESOLVE_BEGIN__';
 const END_MARKER = '__CODEMAN_CLI_RESOLVE_END__';
@@ -97,15 +107,54 @@ describe('createCliExecutableResolver', () => {
     });
   });
 
-  it('caches success but retries failure', () => {
+  it('caches success, and retries a miss only after the backoff elapses', () => {
+    let now = 0;
     const findInLoginShell = vi.fn<() => string | null>().mockReturnValueOnce(null).mockReturnValue('/new/bin/codex');
     const h = host({ findInLoginShell, exists: vi.fn((path) => path === '/new/bin/codex') });
-    const resolver = createCliExecutableResolver({ binary: 'codex', searchDirs: [] }, h);
+    const resolver = createCliExecutableResolver({ binary: 'codex', searchDirs: [], now: () => now }, h);
 
     expect(resolver.resolve()).toBeNull();
+    // Within the backoff window the miss is answered from the negative cache:
+    // the chain — whose login-shell tail is a synchronous 5s-bounded spawn —
+    // must NOT re-run per call, or a missing CLI stalls every status request.
+    now = cliResolveRetryDelayMs(1) - 1;
+    expect(resolver.resolve()).toBeNull();
+    expect(findInLoginShell).toHaveBeenCalledTimes(1);
+
+    // Once the backoff elapses the retry runs, so installing a CLI while the
+    // server is up is still picked up without a restart.
+    now = cliResolveRetryDelayMs(1);
     expect(resolver.resolve()?.binaryPath).toBe('/new/bin/codex');
     expect(resolver.resolve()?.binaryPath).toBe('/new/bin/codex');
     expect(findInLoginShell).toHaveBeenCalledTimes(2);
+  });
+
+  it('doubles the retry delay per consecutive miss and caps it at five minutes', () => {
+    let now = 0;
+    const findInLoginShell = vi.fn(() => null);
+    const resolver = createCliExecutableResolver(
+      { binary: 'codex', searchDirs: [], now: () => now },
+      host({ findInLoginShell })
+    );
+
+    expect(cliResolveRetryDelayMs(0)).toBe(0);
+    expect(cliResolveRetryDelayMs(1)).toBe(60_000);
+    expect(cliResolveRetryDelayMs(2)).toBe(120_000);
+    expect(cliResolveRetryDelayMs(3)).toBe(240_000);
+    expect(cliResolveRetryDelayMs(4)).toBe(300_000);
+    expect(cliResolveRetryDelayMs(60)).toBe(300_000);
+
+    // Consecutive misses stack: after the second miss the SECOND delay applies.
+    expect(resolver.resolve()).toBeNull();
+    now += cliResolveRetryDelayMs(1);
+    expect(resolver.resolve()).toBeNull();
+    expect(findInLoginShell).toHaveBeenCalledTimes(2);
+    now += cliResolveRetryDelayMs(2) - 1;
+    expect(resolver.resolve()).toBeNull();
+    expect(findInLoginShell).toHaveBeenCalledTimes(2);
+    now += 1;
+    expect(resolver.resolve()).toBeNull();
+    expect(findInLoginShell).toHaveBeenCalledTimes(3);
   });
 
   it('rejects unsafe binary names', () => {
@@ -120,14 +169,16 @@ describe('createCliExecutableResolver', () => {
   });
 
   it('rejects relative and nonexistent candidates', () => {
+    let now = 0;
     const findInLoginShell = vi
       .fn<() => string | null>()
       .mockReturnValueOnce('relative/codex')
       .mockReturnValue('/missing/codex');
     const h = host({ findInLoginShell, exists: vi.fn(() => false) });
-    const resolver = createCliExecutableResolver({ binary: 'codex', searchDirs: [] }, h);
+    const resolver = createCliExecutableResolver({ binary: 'codex', searchDirs: [], now: () => now }, h);
 
     expect(resolver.resolve()).toBeNull();
+    now = cliResolveRetryDelayMs(1);
     expect(resolver.resolve()).toBeNull();
     expect(h.exists).toHaveBeenCalledTimes(1);
     expect(h.exists).toHaveBeenCalledWith('/missing/codex');
@@ -189,36 +240,58 @@ describe('formatCliNotFoundMessage', () => {
 });
 
 describe('createProductionCliResolverHost', () => {
-  it('contains no ambient VITEST branch in the production resolver source', () => {
-    const source = readFileSync(new URL('../src/utils/cli-executable-resolver.ts', import.meta.url), 'utf8');
+  // Hermeticity gate (the guards PR #329 deleted, restored shared): under
+  // vitest an un-injected host must neither scan the machine nor spawn a login
+  // shell — route tests hitting the per-CLI status endpoints would otherwise
+  // walk the real PATH and execute real binaries on whatever box runs the suite.
+  it('never scans the machine or spawns a login shell under vitest without injected IO', () => {
+    const root = mkdtempSync(join(tmpdir(), 'codeman-cli-vitest-gate-'));
+    temporaryDirectories.push(root);
+    writeFileSync(join(root, 'codex'), '#!/bin/sh\n');
+    chmodSync(join(root, 'codex'), 0o755);
+    execFileSyncSpy.mockClear();
 
-    expect(source).not.toContain('process.env.VITEST');
+    const gatedHost = createProductionCliResolverHost({
+      processPath: root,
+      shellPath: '/bin/bash',
+      shellArgs: ['-i', '-l'],
+    });
+
+    // The real, executable candidate is invisible: the filesystem predicate is inert.
+    expect(gatedHost.findOnProcessPath('codex')).toBeNull();
+    expect(gatedHost.exists(join(root, 'codex'))).toBe(false);
+    // The login-shell step yields nothing and never reaches execFileSync.
+    expect(gatedHost.findInLoginShell('codex')).toBeNull();
+    expect(execFileSyncSpy).not.toHaveBeenCalled();
+
+    // The same fixture through the test-only real-IO opt-in IS found, proving
+    // the nulls above come from the vitest gate rather than from the fixture.
+    const optedInHost = createProductionCliResolverHost({
+      processPath: root,
+      shellPath: '/bin/bash',
+      shellArgs: ['-i', '-l'],
+      runCommand: () => '',
+      allowRealIoUnderVitest: true,
+    });
+    expect(optedInHost.findOnProcessPath('codex')).toBe(join(root, 'codex'));
   });
 
-  it("resolves through the injected login-shell runner when VITEST is 'false'", () => {
-    const hadVitest = Object.hasOwn(process.env, 'VITEST');
-    const previousVitest = process.env.VITEST;
-    process.env.VITEST = 'false';
-    try {
-      const runCommand = vi.fn(() => `${BEGIN_MARKER}\n/home/u/.nvm/bin/codex\n${END_MARKER}`);
-      const productionHost = createProductionCliResolverHost({
-        processPath: '',
-        shellPath: '/bin/bash',
-        shellArgs: ['-i', '-l'],
-        runCommand,
-        isExecutableFile: () => true,
-      });
-      const resolver = createCliExecutableResolver({ binary: 'codex', searchDirs: [] }, productionHost);
+  it('resolves through injected IO hooks under vitest (injection is the opt-in)', () => {
+    const runCommand = vi.fn(() => `${BEGIN_MARKER}\n/home/u/.nvm/bin/codex\n${END_MARKER}`);
+    const productionHost = createProductionCliResolverHost({
+      processPath: '',
+      shellPath: '/bin/bash',
+      shellArgs: ['-i', '-l'],
+      runCommand,
+      isExecutableFile: () => true,
+    });
+    const resolver = createCliExecutableResolver({ binary: 'codex', searchDirs: [] }, productionHost);
 
-      expect(resolver.resolve()).toMatchObject({
-        binaryPath: '/home/u/.nvm/bin/codex',
-        source: 'login-shell',
-      });
-      expect(runCommand).toHaveBeenCalledTimes(1);
-    } finally {
-      if (hadVitest) process.env.VITEST = previousVitest;
-      else delete process.env.VITEST;
-    }
+    expect(resolver.resolve()).toMatchObject({
+      binaryPath: '/home/u/.nvm/bin/codex',
+      source: 'login-shell',
+    });
+    expect(runCommand).toHaveBeenCalledTimes(1);
   });
 
   it('searches the captured process PATH directly in directory order without running a command', () => {
@@ -255,6 +328,11 @@ describe('createProductionCliResolverHost', () => {
       processPath: [directoryCandidate, plainDirectory, executableDirectory].join(':'),
       shellPath: '/bin/bash',
       shellArgs: ['-i', '-l'],
+      // This test exists to exercise the REAL executable-regular-file predicate
+      // against its own temp fixtures, so it opts out of the vitest inert-IO
+      // gate; the stubbed runCommand keeps the login-shell path inert anyway.
+      runCommand: () => '',
+      allowRealIoUnderVitest: true,
     });
 
     expect(productionHost.findOnProcessPath('codex')).toBe(join(executableDirectory, 'codex'));
@@ -282,6 +360,9 @@ describe('createProductionCliResolverHost', () => {
         encoding: 'utf8',
         timeout: EXEC_TIMEOUT_MS,
         stdio: ['ignore', 'pipe', 'ignore'],
+        // SIGKILL is load-bearing: interactive bash ignores SIGTERM, and
+        // execFileSync's timeout only sends the signal, then keeps waiting.
+        killSignal: 'SIGKILL',
       }
     );
   });

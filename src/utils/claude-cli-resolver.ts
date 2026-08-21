@@ -177,6 +177,9 @@ function probeClaudeCliVersion(): string | null {
     encoding: 'utf-8',
     timeout: EXEC_TIMEOUT_MS,
     env: { ...process.env, PATH: getAugmentedPath() },
+    // execFileSync's timeout only SENDS the signal and then keeps waiting; a
+    // child that ignores SIGTERM would block the server thread permanently.
+    killSignal: 'SIGKILL',
   });
   const match = out.match(/(\d+\.\d+\.\d+)/);
   return match ? match[1] : null;

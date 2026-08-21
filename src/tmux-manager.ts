@@ -75,11 +75,17 @@ import {
   SAFE_PATH_PATTERN,
   findClaudeDir,
   getClaudeCliVersion,
+  getClaudeNotFoundMessage,
   resolveOpenCodeDir,
+  getOpenCodeNotFoundMessage,
   resolveCodexDir,
+  getCodexNotFoundMessage,
   resolveGeminiDir,
+  getGeminiNotFoundMessage,
   resolveAntigravityDir,
+  getAntigravityNotFoundMessage,
   resolvePiDir,
+  getPiNotFoundMessage,
   resolveLocalShell,
   loginShellArgs,
 } from './utils/index.js';
@@ -1853,29 +1859,28 @@ export class TmuxManager extends EventEmitter implements TerminalMultiplexer {
       return session;
     }
 
-    // Resolve CLI binary directory based on mode
+    // Resolve CLI binary directory based on mode. The not-found messages come
+    // from the resolvers (formatCliNotFoundMessage) so the error names WHERE it
+    // looked — server PATH, login shell, checked directories — instead of just
+    // asserting the CLI is missing (the classic systemd/launchd PATH trap).
     const { pathExport, dir: cliDir } = this.buildPathExport(mode);
     if (mode === 'claude' && !cliDir) {
-      throw new Error('Claude CLI not found. Install it with: curl -fsSL https://claude.ai/install.sh | bash');
+      throw new Error(getClaudeNotFoundMessage());
     }
     if (mode === 'opencode' && !cliDir) {
-      throw new Error('OpenCode CLI not found. Install with: curl -fsSL https://opencode.ai/install | bash');
+      throw new Error(getOpenCodeNotFoundMessage());
     }
     if (mode === 'codex' && !cliDir) {
-      throw new Error('Codex CLI not found. Install with: npm install -g @openai/codex');
+      throw new Error(getCodexNotFoundMessage());
     }
     if (mode === 'gemini' && !cliDir) {
-      throw new Error('Gemini CLI not found. Install with: npm install -g @google/gemini-cli');
+      throw new Error(getGeminiNotFoundMessage());
     }
     if (mode === 'antigravity' && !cliDir) {
-      throw new Error(
-        'Antigravity CLI not found. Install with: curl -fsSL https://antigravity.google/cli/install.sh | bash'
-      );
+      throw new Error(getAntigravityNotFoundMessage());
     }
     if (mode === 'pi' && !cliDir) {
-      throw new Error(
-        'Pi CLI not found. Install with: npm install -g --ignore-scripts @earendil-works/pi-coding-agent'
-      );
+      throw new Error(getPiNotFoundMessage());
     }
 
     const envExportsStr = this.buildEnvExports(sessionId, muxName, mode).join(' && ');

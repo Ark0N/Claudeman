@@ -56,13 +56,25 @@ const PI_NOT_FOUND = 'Pi CLI not found. Install with: npm install -g --ignore-sc
  * looks like the coding agent. Returns null for anything else — a missing
  * binary, a non-zero exit, a hang (timeout), or output that is not semver-shaped
  * (which is how an unrelated `pi` on PATH gets rejected).
+ *
+ * Never runs under vitest: the suites must stay hermetic and must not depend on
+ * whether the dev box happens to have pi installed — and since `pi` is a short
+ * GENERIC name, this probe would EXECUTE whatever binary of that name the
+ * machine carries. The shared resolver host is already inert under vitest, so
+ * this gate is defense in depth for any opted-in host that still carries the
+ * default probe; tests drive resolution via `createPiResolverForTest`, whose
+ * injected probe bypasses it. Pinned by test/pi-cli-resolver.test.ts.
  */
 function probePiVersion(binPath: string): string | null {
+  if (process.env.VITEST) return null;
   try {
     const out = execFileSync(binPath, ['--version'], {
       encoding: 'utf-8',
       timeout: EXEC_TIMEOUT_MS,
       stdio: ['ignore', 'pipe', 'ignore'],
+      // A stuck or hostile `pi` that ignores SIGTERM would survive the timeout
+      // and block the server (execFileSync keeps waiting after the signal).
+      killSignal: 'SIGKILL',
     }).trim();
     // Upstream prints a bare version today; tolerate a `pi 0.84.1` style prefix too.
     const candidate = PI_VERSION_REGEX.exec(out)?.[1];
@@ -76,7 +88,7 @@ function probePiVersion(binPath: string): string | null {
 
 type PiVersionProbe = (binPath: string) => string | null;
 
-function createPiResolver(host?: CliResolverHost, versionProbe: PiVersionProbe = probePiVersion) {
+function createPiResolver(host?: CliResolverHost, versionProbe: PiVersionProbe = probePiVersion, now?: () => number) {
   return createCliExecutableResolver<string>(
     {
       binary: 'pi',
@@ -85,14 +97,19 @@ function createPiResolver(host?: CliResolverHost, versionProbe: PiVersionProbe =
         const version = versionProbe(binPath);
         return version ? { accepted: true, metadata: version } : { accepted: false };
       },
+      now,
     },
     host
   );
 }
 
-/** Creates an isolated Pi wrapper around an injected host and version probe. */
-export function createPiResolverForTest(host: CliResolverHost, versionProbe: PiVersionProbe) {
-  return createPiResolver(host, versionProbe);
+/**
+ * Creates an isolated Pi wrapper around an injected host, version probe and
+ * clock. Omitting `versionProbe` keeps the ambient (VITEST-gated) probe, which
+ * is exactly what the hermeticity test exercises.
+ */
+export function createPiResolverForTest(host: CliResolverHost, versionProbe?: PiVersionProbe, now?: () => number) {
+  return createPiResolver(host, versionProbe ?? probePiVersion, now);
 }
 
 const piResolver = createPiResolver();

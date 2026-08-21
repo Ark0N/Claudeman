@@ -28,13 +28,13 @@ const ANTIGRAVITY_SEARCH_DIRS = [
 const ANTIGRAVITY_NOT_FOUND =
   'Antigravity CLI not found. Install with: curl -fsSL https://antigravity.google/cli/install.sh | bash';
 
-function createAntigravityResolver(host?: CliResolverHost) {
-  return createCliExecutableResolver({ binary: 'agy', searchDirs: ANTIGRAVITY_SEARCH_DIRS }, host);
+function createAntigravityResolver(host?: CliResolverHost, now?: () => number) {
+  return createCliExecutableResolver({ binary: 'agy', searchDirs: ANTIGRAVITY_SEARCH_DIRS, now }, host);
 }
 
-/** Creates an isolated Antigravity wrapper around an injected resolver host. */
-export function createAntigravityResolverForTest(host: CliResolverHost) {
-  return createAntigravityResolver(host);
+/** Creates an isolated Antigravity wrapper around an injected resolver host and clock. */
+export function createAntigravityResolverForTest(host: CliResolverHost, now?: () => number) {
+  return createAntigravityResolver(host, now);
 }
 
 const antigravityResolver = createAntigravityResolver();

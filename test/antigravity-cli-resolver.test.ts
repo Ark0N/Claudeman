@@ -5,7 +5,11 @@ import { homedir } from 'node:os';
 import { join } from 'node:path';
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 import { createAntigravityResolverForTest, isAntigravityAvailable } from '../src/utils/antigravity-cli-resolver.js';
-import type { CliResolution, CliResolverHost } from '../src/utils/cli-executable-resolver.js';
+import {
+  cliResolveRetryDelayMs,
+  type CliResolution,
+  type CliResolverHost,
+} from '../src/utils/cli-executable-resolver.js';
 
 const availabilityResolution = vi.hoisted(() => ({ current: null as CliResolution | null }));
 
@@ -84,13 +88,19 @@ describe('Antigravity CLI resolver', () => {
     expect(resolver.resolve()).toBeNull();
   });
 
-  it('retries a failed lookup and caches the first successful login-shell discovery', () => {
+  it('retries a failed lookup after the backoff and caches the first successful login-shell discovery', () => {
     const binaryPath = '/late-login-shell/bin/agy';
+    let now = 0;
     const resolver = createAntigravityResolverForTest(
-      createHost({ loginShellResults: [null, binaryPath], existingPaths: [binaryPath] })
+      createHost({ loginShellResults: [null, binaryPath], existingPaths: [binaryPath] }),
+      () => now
     );
 
     expect(resolver.resolve()).toBeNull();
+    // A miss is negative-cached: within the backoff window nothing re-runs the
+    // chain (its login-shell tail is a synchronous bounded spawn in production).
+    expect(resolver.resolve()).toBeNull();
+    now = cliResolveRetryDelayMs(1);
     expect(resolver.resolve()?.binaryPath).toBe(binaryPath);
     expect(resolver.resolve()?.binaryPath).toBe(binaryPath);
   });

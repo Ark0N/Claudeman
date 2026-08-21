@@ -28,12 +28,22 @@ export { stringSimilarity, fuzzyPhraseMatch, todoContentHash } from './string-si
 export { assertNever } from './type-safety.js';
 export { wrapWithNice } from './nice-wrapper.js';
 export { resolveLocalShell, loginShellArgs } from './shell-resolver.js';
-export { findClaudeDir, getAugmentedPath, getClaudeCliVersion, getClaudeBinaryPath } from './claude-cli-resolver.js';
+export {
+  findClaudeDir,
+  getAugmentedPath,
+  getClaudeCliVersion,
+  getClaudeBinaryPath,
+  getClaudeNotFoundMessage,
+} from './claude-cli-resolver.js';
 export { spawnPtyWithHelperRepair } from './node-pty-repair.js';
-export { resolveOpenCodeDir } from './opencode-cli-resolver.js';
-export { resolveCodexDir, isCodexAvailable } from './codex-cli-resolver.js';
-export { resolveGeminiDir, isGeminiAvailable } from './gemini-cli-resolver.js';
-export { resolveAntigravityDir, isAntigravityAvailable } from './antigravity-cli-resolver.js';
-export { resolvePiDir, isPiAvailable, getPiCliVersion } from './pi-cli-resolver.js';
+export { resolveOpenCodeDir, getOpenCodeNotFoundMessage } from './opencode-cli-resolver.js';
+export { resolveCodexDir, isCodexAvailable, getCodexNotFoundMessage } from './codex-cli-resolver.js';
+export { resolveGeminiDir, isGeminiAvailable, getGeminiNotFoundMessage } from './gemini-cli-resolver.js';
+export {
+  resolveAntigravityDir,
+  isAntigravityAvailable,
+  getAntigravityNotFoundMessage,
+} from './antigravity-cli-resolver.js';
+export { resolvePiDir, isPiAvailable, getPiCliVersion, getPiNotFoundMessage } from './pi-cli-resolver.js';
 export { compileFileQuery, matchFileQuery } from './file-query.js';
 export type { FileQueryMatcher } from './file-query.js';

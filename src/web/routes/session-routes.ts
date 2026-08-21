@@ -802,54 +802,42 @@ export function registerSessionRoutes(
       }
     }
 
-    // Check OpenCode availability if requested
+    // Check OpenCode availability if requested. The error text comes from the
+    // resolver (formatCliNotFoundMessage) so it names where resolution looked —
+    // server PATH, login shell, common directories — same for the modes below.
     if (body.mode === 'opencode') {
-      const { isOpenCodeAvailable } = await import('../../utils/opencode-cli-resolver.js');
+      const { isOpenCodeAvailable, getOpenCodeNotFoundMessage } = await import('../../utils/opencode-cli-resolver.js');
       if (!isOpenCodeAvailable()) {
-        return createErrorResponse(
-          ApiErrorCode.OPERATION_FAILED,
-          'OpenCode CLI not found. Install with: curl -fsSL https://opencode.ai/install | bash'
-        );
+        return createErrorResponse(ApiErrorCode.OPERATION_FAILED, getOpenCodeNotFoundMessage());
       }
     }
 
     // Check Codex availability if requested
     if (body.mode === 'codex') {
-      const { isCodexAvailable } = await import('../../utils/codex-cli-resolver.js');
+      const { isCodexAvailable, getCodexNotFoundMessage } = await import('../../utils/codex-cli-resolver.js');
       if (!isCodexAvailable()) {
-        return createErrorResponse(
-          ApiErrorCode.OPERATION_FAILED,
-          'Codex CLI not found. Install with: npm install -g @openai/codex'
-        );
+        return createErrorResponse(ApiErrorCode.OPERATION_FAILED, getCodexNotFoundMessage());
       }
     }
 
     // Check Gemini availability if requested
     if (body.mode === 'gemini') {
-      const { isGeminiAvailable } = await import('../../utils/gemini-cli-resolver.js');
+      const { isGeminiAvailable, getGeminiNotFoundMessage } = await import('../../utils/gemini-cli-resolver.js');
       if (!isGeminiAvailable()) {
-        return createErrorResponse(
-          ApiErrorCode.OPERATION_FAILED,
-          'Gemini CLI not found. Install with: npm install -g @google/gemini-cli'
-        );
+        return createErrorResponse(ApiErrorCode.OPERATION_FAILED, getGeminiNotFoundMessage());
       }
     }
     if (body.mode === 'antigravity') {
-      const { isAntigravityAvailable } = await import('../../utils/antigravity-cli-resolver.js');
+      const { isAntigravityAvailable, getAntigravityNotFoundMessage } =
+        await import('../../utils/antigravity-cli-resolver.js');
       if (!isAntigravityAvailable()) {
-        return createErrorResponse(
-          ApiErrorCode.OPERATION_FAILED,
-          'Antigravity CLI not found. Install with: curl -fsSL https://antigravity.google/cli/install.sh | bash'
-        );
+        return createErrorResponse(ApiErrorCode.OPERATION_FAILED, getAntigravityNotFoundMessage());
       }
     }
     if (body.mode === 'pi') {
-      const { isPiAvailable } = await import('../../utils/pi-cli-resolver.js');
+      const { isPiAvailable, getPiNotFoundMessage } = await import('../../utils/pi-cli-resolver.js');
       if (!isPiAvailable()) {
-        return createErrorResponse(
-          ApiErrorCode.OPERATION_FAILED,
-          'Pi CLI not found. Install with: npm install -g --ignore-scripts @earendil-works/pi-coding-agent'
-        );
+        return createErrorResponse(ApiErrorCode.OPERATION_FAILED, getPiNotFoundMessage());
       }
     }
 
@@ -2827,58 +2815,46 @@ export function registerSessionRoutes(
         dockerResumeId = dockerCase.lastClaudeSessionId;
       }
     } else {
-      // Check OpenCode availability if requested
+      // Check OpenCode availability if requested. Error text comes from the
+      // resolver so it carries the resolution diagnostics; same for the modes below.
       if (mode === 'opencode') {
-        const { isOpenCodeAvailable } = await import('../../utils/opencode-cli-resolver.js');
+        const { isOpenCodeAvailable, getOpenCodeNotFoundMessage } =
+          await import('../../utils/opencode-cli-resolver.js');
         if (!isOpenCodeAvailable()) {
-          return createErrorResponse(
-            ApiErrorCode.OPERATION_FAILED,
-            'OpenCode CLI not found. Install with: curl -fsSL https://opencode.ai/install | bash'
-          );
+          return createErrorResponse(ApiErrorCode.OPERATION_FAILED, getOpenCodeNotFoundMessage());
         }
       }
 
       // Check Codex availability if requested
       if (mode === 'codex') {
-        const { isCodexAvailable } = await import('../../utils/codex-cli-resolver.js');
+        const { isCodexAvailable, getCodexNotFoundMessage } = await import('../../utils/codex-cli-resolver.js');
         if (!isCodexAvailable()) {
-          return createErrorResponse(
-            ApiErrorCode.OPERATION_FAILED,
-            'Codex CLI not found. Install with: npm install -g @openai/codex'
-          );
+          return createErrorResponse(ApiErrorCode.OPERATION_FAILED, getCodexNotFoundMessage());
         }
       }
 
       // Check Gemini availability if requested
       if (mode === 'gemini') {
-        const { isGeminiAvailable } = await import('../../utils/gemini-cli-resolver.js');
+        const { isGeminiAvailable, getGeminiNotFoundMessage } = await import('../../utils/gemini-cli-resolver.js');
         if (!isGeminiAvailable()) {
-          return createErrorResponse(
-            ApiErrorCode.OPERATION_FAILED,
-            'Gemini CLI not found. Install with: npm install -g @google/gemini-cli'
-          );
+          return createErrorResponse(ApiErrorCode.OPERATION_FAILED, getGeminiNotFoundMessage());
         }
       }
 
       // Check Antigravity availability if requested
       if (mode === 'antigravity') {
-        const { isAntigravityAvailable } = await import('../../utils/antigravity-cli-resolver.js');
+        const { isAntigravityAvailable, getAntigravityNotFoundMessage } =
+          await import('../../utils/antigravity-cli-resolver.js');
         if (!isAntigravityAvailable()) {
-          return createErrorResponse(
-            ApiErrorCode.OPERATION_FAILED,
-            'Antigravity CLI not found. Install with: curl -fsSL https://antigravity.google/cli/install.sh | bash'
-          );
+          return createErrorResponse(ApiErrorCode.OPERATION_FAILED, getAntigravityNotFoundMessage());
         }
       }
 
       // Check Pi availability if requested
       if (mode === 'pi') {
-        const { isPiAvailable } = await import('../../utils/pi-cli-resolver.js');
+        const { isPiAvailable, getPiNotFoundMessage } = await import('../../utils/pi-cli-resolver.js');
         if (!isPiAvailable()) {
-          return createErrorResponse(
-            ApiErrorCode.OPERATION_FAILED,
-            'Pi CLI not found. Install with: npm install -g --ignore-scripts @earendil-works/pi-coding-agent'
-          );
+          return createErrorResponse(ApiErrorCode.OPERATION_FAILED, getPiNotFoundMessage());
         }
       }
 
