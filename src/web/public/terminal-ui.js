@@ -3012,12 +3012,12 @@ Object.assign(CodemanApp.prototype, {
 
   /**
    * Post-scroll companion to _noteTerminalUserScroll: hitting the TOP of the
-   * buffer while scrolling up is the user reaching for history the browser does
-   * not have, so pull the rest of tmux's scrollback (issue #205, see
-   * _maybeRefetchFullHistory). Must be called AFTER scrollLines(), since the
-   * check is on the resulting position, and it is deliberately not folded into
-   * _noteTerminalUserScroll for exactly that reason. Cheap: one integer compare
-   * per scroll event, and the pull itself is cooldown-guarded.
+   * buffer while scrolling up gives the app a chance to pull the rest of tmux's
+   * scrollback (issue #205, see _maybeRefetchFullHistory). Shell sessions decline
+   * automatic pulls because their captures can be large; their banner button is
+   * the explicit path. Must be called AFTER scrollLines(), since the check is on
+   * the resulting position, and it is deliberately not folded into
+   * _noteTerminalUserScroll for exactly that reason.
    */
   _maybeLoadMoreHistoryOnScroll(lines) {
     if (lines >= 0) return;

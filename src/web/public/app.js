@@ -5312,6 +5312,11 @@ class CodemanApp {
     const sessionId = this.activeSessionId;
     if (!sessionId || this._fullHistoryRepullInFlight || this._isLoadingBuffer) return;
     if (this.detachedSessions?.has(sessionId)) return;
+    const session = this.sessions.get(sessionId);
+    // A shell's full capture can be many megabytes. Replaying it from an
+    // ordinary scroll gesture blocks xterm's main thread, so keep that cost
+    // behind the explicit "Load full history" button.
+    if (!force && session?.mode === 'shell') return;
     const now = Date.now();
     // Momentum scrolling fires this dozens of times per flick, and a burst of new
     // output is the normal reason to want a re-pull, so cooldown rather than latch.
@@ -5331,7 +5336,7 @@ class CodemanApp {
       const buffer = payload.terminalBuffer;
       const timing = {
         trigger: force ? 'full-history-button' : 'full-history-scroll',
-        mode: this.sessions.get(sessionId)?.mode || 'unknown',
+        mode: session?.mode || 'unknown',
         full: true,
         source: payload.source || 'unknown',
         chars: buffer?.length || 0,
@@ -5787,7 +5792,7 @@ class CodemanApp {
       // A shell can retain hundreds of thousands of plain scrollback lines, so
       // automatically replaying all of them makes tab selection scale with the
       // entire session. Load its bounded 1MB tail first; the existing truncation
-      // banner / scroll-to-top action fetches ?full=1 when the user asks for it.
+      // banner action fetches ?full=1 when the user explicitly asks for it.
       const useFullHistory = session?.mode !== 'shell' && !this._fullHistoryLoaded.has(sessionId);
       if (useFullHistory) this._fullHistoryLoaded.add(sessionId);
       const fetchStartedAt = performance.now();

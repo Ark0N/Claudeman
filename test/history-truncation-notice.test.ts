@@ -130,6 +130,7 @@ describe('the in-terminal truncation line is gone (static guard)', () => {
     expect(app).toContain('fetch(`/api/sessions/${sessionId}/terminal?full=1`)');
     expect(app).toContain("if (this.sessions.get(sessionId)?.mode !== 'shell')");
     expect(app).toContain("if (session?.mode === 'shell')");
+    expect(app).toContain("if (!force && session?.mode === 'shell') return;");
     expect(app).toContain("trigger: force ? 'full-history-button' : 'full-history-scroll'");
   });
 
