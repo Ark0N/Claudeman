@@ -7,11 +7,9 @@
  * @module utils/opencode-cli-resolver
  */
 
-import { execSync } from 'node:child_process';
-import { existsSync } from 'node:fs';
-import { dirname, join } from 'node:path';
+import { join } from 'node:path';
 import { homedir } from 'node:os';
-import { EXEC_TIMEOUT_MS } from '../config/exec-timeout.js';
+import { createCliExecutableResolver, formatCliNotFoundMessage } from './cli-executable-resolver.js';
 
 /** Common directories where the OpenCode CLI binary may be installed */
 const OPENCODE_SEARCH_DIRS = [
@@ -24,8 +22,8 @@ const OPENCODE_SEARCH_DIRS = [
   join(homedir(), 'bin'), // User bin
 ];
 
-/** Cached directory containing the opencode binary (empty string = searched but not found) */
-let _openCodeDir: string | null = null;
+const openCodeResolver = createCliExecutableResolver({ binary: 'opencode', searchDirs: OPENCODE_SEARCH_DIRS });
+const OPENCODE_NOT_FOUND = 'OpenCode CLI not found. Install with: curl -fsSL https://opencode.ai/install | bash';
 
 /**
  * Finds the directory containing the `opencode` binary.
@@ -35,32 +33,7 @@ let _openCodeDir: string | null = null;
  * @returns Directory path, or null if not found
  */
 export function resolveOpenCodeDir(): string | null {
-  if (_openCodeDir !== null) return _openCodeDir || null;
-
-  // Try `which` first (respects current PATH)
-  try {
-    const result = execSync('which opencode', {
-      encoding: 'utf-8',
-      timeout: EXEC_TIMEOUT_MS,
-    }).trim();
-    if (result && existsSync(result)) {
-      _openCodeDir = dirname(result);
-      return _openCodeDir;
-    }
-  } catch {
-    // OpenCode not in PATH, will check common locations
-  }
-
-  // Fallback: check common installation directories
-  for (const dir of OPENCODE_SEARCH_DIRS) {
-    if (existsSync(join(dir, 'opencode'))) {
-      _openCodeDir = dir;
-      return _openCodeDir;
-    }
-  }
-
-  _openCodeDir = ''; // mark as searched, not found
-  return null;
+  return openCodeResolver.resolve()?.directory ?? null;
 }
 
 /**
@@ -68,4 +41,8 @@ export function resolveOpenCodeDir(): string | null {
  */
 export function isOpenCodeAvailable(): boolean {
   return resolveOpenCodeDir() !== null;
+}
+
+export function getOpenCodeNotFoundMessage(): string {
+  return formatCliNotFoundMessage(OPENCODE_NOT_FOUND, openCodeResolver.diagnostics());
 }
