@@ -188,10 +188,12 @@ curl -u admin:$PASS -X POST http://127.0.0.1:3000/api/v1/sessions/$ID/input \
 
 `mode` above is not a fixed enum — it is one of the ids in the CLI registry
 (`GET /api/clis` lists every registered CLI, enabled or not, plus live
-`available`/`path`/`version`/`installHint` per entry). The stock catalog ships
-`claude`, `shell`, `opencode`, `codex`, `gemini`, `antigravity`, and `pi`, but an
-install can add or remove entries through App Settings → Agents & CLIs, so an
-integration that hardcodes that list will miss a custom CLI. See
+`available`/`path`/`version`/`installHint`/`installStatus` per entry, and `mode`
+validation itself is built from the currently-ENABLED subset). The stock catalog ships
+`claude`, `shell`, `opencode`, `codex`, `gemini`, `antigravity`, and `pi` enabled by
+default, plus `copilot` (GitHub Copilot CLI) disabled by default, but an install can add,
+remove, or toggle any entry through App Settings → Agents & CLIs, so an integration that
+hardcodes that list will miss a custom CLI or a disabled one. See
 [CLI Registry](cli-registry.md).
 
 `POST .../input` also accepts `clientId` (stable per client, max 128 chars) and

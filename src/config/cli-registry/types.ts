@@ -143,7 +143,13 @@ export interface CliDiscovery {
   searchDirs: string[];
   version?: CliVersionProbe;
   install: {
-    /** Shown verbatim in "CLI not found. Install with: ...". NEVER executed by the server. */
+    /**
+     * Shown verbatim in "CLI not found. Install with: ...". Executed by the server in
+     * exactly ONE place — `cli-installer.ts`'s `ensureCliInstalled`, and only as the direct
+     * result of an explicit `PUT /api/clis/:id/enabled {enabled:true}` call (never on boot,
+     * never implicitly). Read that module's file header before changing how or when this
+     * runs; it documents the trust boundary this exception relies on.
+     */
     command: Partial<Record<'linux' | 'darwin' | 'wsl' | 'win32', string>>;
     /** Feeds generation of docker/agent.Dockerfile. */
     npmPackage?: string;

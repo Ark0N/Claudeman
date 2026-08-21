@@ -587,7 +587,13 @@ Object.assign(CodemanApp.prototype, {
       label.textContent = `${cli.label}${cli.stock ? '' : ' (custom)'}`;
       const desc = document.createElement('span');
       desc.className = 'set-row-desc';
-      desc.textContent = cli.available ? 'Installed' : cli.installHint || 'Not found on this host';
+      if (cli.installStatus?.state === 'installing') {
+        desc.textContent = `Installing… (${cli.installStatus.command})`;
+      } else if (cli.installStatus?.state === 'error') {
+        desc.textContent = `Install failed: ${cli.installStatus.message || 'unknown error'}`;
+      } else {
+        desc.textContent = cli.available ? 'Installed' : cli.installHint || 'Not found on this host';
+      }
       text.append(label, desc);
 
       const actions = document.createElement('div');
@@ -614,6 +620,7 @@ Object.assign(CodemanApp.prototype, {
       const toggleInput = document.createElement('input');
       toggleInput.type = 'checkbox';
       toggleInput.checked = cli.enabled;
+      toggleInput.disabled = cli.installStatus?.state === 'installing';
       toggleInput.onchange = () => this._setCliEnabled(cli.id, toggleInput.checked);
       const slider = document.createElement('span');
       slider.className = 'slider';
@@ -636,6 +643,7 @@ Object.assign(CodemanApp.prototype, {
   },
 
   async _setCliEnabled(id, enabled) {
+    let installing = false;
     try {
       const res = await fetch(`/api/clis/${encodeURIComponent(id)}/enabled`, {
         method: 'PUT',
@@ -644,10 +652,39 @@ Object.assign(CodemanApp.prototype, {
       });
       const data = await res.json();
       if (!data.success) throw new Error(data.error || 'Failed to update');
+      installing = data.data?.installStatus?.state === 'installing';
     } catch (err) {
       this.showToast?.(err.message, 'error');
     }
     this.renderCliManagementList();
+    if (installing) this._pollCliInstallStatus(id);
+  },
+
+  /**
+   * Enabling a not-yet-installed CLI kicks off its install command server-side
+   * (cli-installer.ts) and returns immediately — this polls GET /api/clis until that
+   * specific entry's installStatus leaves the 'installing' state (or a bounded number of
+   * attempts is exhausted, since a slow install must not poll forever), re-rendering the
+   * list on every tick so the row's "Installing…"/"Install failed: …" text stays live.
+   */
+  async _pollCliInstallStatus(id, attempt = 0) {
+    const MAX_ATTEMPTS = 40; // ~2 minutes at 3s apart; a still-installing entry just stops updating live
+    if (attempt >= MAX_ATTEMPTS) return;
+    await new Promise((resolve) => setTimeout(resolve, 3000));
+    let stillInstalling = false;
+    try {
+      const res = await fetch('/api/clis');
+      const data = await res.json();
+      if (data.success) {
+        const cli = data.data.find((c) => c.id === id);
+        stillInstalling = cli?.installStatus?.state === 'installing';
+      }
+    } catch {
+      // Transient fetch failure — keep polling rather than giving up on one hiccup.
+      stillInstalling = true;
+    }
+    this.renderCliManagementList();
+    if (stillInstalling) this._pollCliInstallStatus(id, attempt + 1);
   },
 
   async _moveCliOrder(currentList, index, delta) {

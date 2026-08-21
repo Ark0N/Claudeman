@@ -115,6 +115,62 @@ describe('renderCliManagementList', () => {
     expect(desc.textContent).toContain('npm install -g @openai/codex');
   });
 
+  it('shows an "Installing…" row and disables its toggle while an install is in flight', async () => {
+    const fetchMock = vi.fn(async () => ({
+      json: async () => ({
+        success: true,
+        data: [
+          STOCK_ROW({
+            id: 'copilot',
+            label: 'GitHub Copilot',
+            available: false,
+            installStatus: { state: 'installing', command: 'npm install -g @github/copilot' },
+          }),
+        ],
+      }),
+    }));
+    const { app, list } = loadHarness(fetchMock);
+
+    await app.renderCliManagementList();
+
+    const row = list.appendChild.mock.calls[0][0];
+    const desc = row.children
+      .find((c: any) => c.className === 'set-row-text')
+      .children.find((c: any) => c.className === 'set-row-desc');
+    expect(desc.textContent).toContain('Installing…');
+    expect(desc.textContent).toContain('npm install -g @github/copilot');
+    const toggle = row.children
+      .find((c: any) => c.className === 'set-row-actions')
+      .children.find((c: any) => c.className === 'switch switch-sm')
+      ?.children.find((c: any) => c.type === 'checkbox');
+    expect(toggle?.disabled).toBe(true);
+  });
+
+  it('shows the install failure message when installStatus is an error', async () => {
+    const fetchMock = vi.fn(async () => ({
+      json: async () => ({
+        success: true,
+        data: [
+          STOCK_ROW({
+            id: 'copilot',
+            available: false,
+            installStatus: { state: 'error', message: 'Install command exited 1.' },
+          }),
+        ],
+      }),
+    }));
+    const { app, list } = loadHarness(fetchMock);
+
+    await app.renderCliManagementList();
+
+    const row = list.appendChild.mock.calls[0][0];
+    const desc = row.children
+      .find((c: any) => c.className === 'set-row-text')
+      .children.find((c: any) => c.className === 'set-row-desc');
+    expect(desc.textContent).toContain('Install failed');
+    expect(desc.textContent).toContain('Install command exited 1.');
+  });
+
   it('reports a fetch failure inline instead of throwing', async () => {
     const fetchMock = vi.fn(async () => {
       throw new Error('network down');
@@ -152,6 +208,41 @@ describe('CLI row actions', () => {
     expect(JSON.parse(putCall!.init.body)).toEqual({ enabled: false });
     // Re-render fetched the list again afterward.
     expect(calls.some((c) => c.url === '/api/clis')).toBe(true);
+  });
+
+  it('_setCliEnabled starts polling when the PUT response reports an install in flight', async () => {
+    const fetchMock = vi.fn(async (url: string) => {
+      if (url.endsWith('/enabled')) {
+        return {
+          json: async () => ({
+            success: true,
+            data: { entries: [], warnings: [], installStatus: { state: 'installing', command: 'npm install -g x' } },
+          }),
+        };
+      }
+      return { json: async () => ({ success: true, data: [] }) };
+    });
+    const { app } = loadHarness(fetchMock);
+    app._pollCliInstallStatus = vi.fn();
+
+    await app._setCliEnabled('copilot', true);
+
+    expect(app._pollCliInstallStatus).toHaveBeenCalledWith('copilot');
+  });
+
+  it('_setCliEnabled does not poll when the CLI was already installed', async () => {
+    const fetchMock = vi.fn(async (url: string) => {
+      if (url.endsWith('/enabled')) {
+        return { json: async () => ({ success: true, data: { entries: [], warnings: [], installStatus: null } }) };
+      }
+      return { json: async () => ({ success: true, data: [] }) };
+    });
+    const { app } = loadHarness(fetchMock);
+    app._pollCliInstallStatus = vi.fn();
+
+    await app._setCliEnabled('gemini', true);
+
+    expect(app._pollCliInstallStatus).not.toHaveBeenCalled();
   });
 
   it('_setCliEnabled surfaces a failure via showToast without throwing', async () => {

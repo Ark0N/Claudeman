@@ -146,5 +146,26 @@
         "docsUrl": "https://pi.dev"
       }
     }
+  },
+  {
+    "id": "copilot",
+    "label": "GitHub Copilot",
+    "stock": true,
+    "discovery": {
+      "binaries": ["copilot"],
+      "searchDirs": ["~/.local/bin", "/usr/local/bin", "~/.npm-global/bin", "~/bin"],
+      "version": {
+        "arg": "--version",
+        "regex": "(\\d+\\.\\d+\\.\\d+)"
+      },
+      "install": {
+        "command": {
+          "linux": "npm install -g @github/copilot",
+          "darwin": "npm install -g @github/copilot"
+        },
+        "npmPackage": "@github/copilot",
+        "docsUrl": "https://docs.github.com/en/copilot/how-tos/copilot-cli/set-up-copilot-cli/install-copilot-cli"
+      }
+    }
   }
 ]

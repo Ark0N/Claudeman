@@ -5,9 +5,9 @@ agent CLIs. That set is **data, not code**: it lives in a central CLI registry
 (`~/.codeman/clis.json`, layered over a shipped stock catalog), not in a hardcoded list
 anywhere in the app. Enabling, disabling, reordering, or adding a CLI is a settings
 change, never a code change. See [CLI Registry](CLI-Registry) for the schema and how to
-add one (e.g. GitHub Copilot CLI, or any future agent CLI).
+add a CLI of your own.
 
-Out of the box the stock catalog ships seven entries:
+Out of the box the stock catalog ships eight entries. Six are enabled by default:
 
 | Mode                 | CLI                          | Get it                                                                 |
 | -------------------- | ----------------------------- | ------------------------------------------------------------------------ |
@@ -19,11 +19,25 @@ Out of the box the stock catalog ships seven entries:
 | **Pi**               | `pi`                          | [pi.dev](https://pi.dev)                                                 |
 | **Terminal / Shell** | your `$SHELL`                 | Already installed.                                                       |
 
+Two ship **disabled** by default and need an explicit opt-in from Settings before they
+appear anywhere:
+
+| Mode                 | CLI                          | Get it                                                                 |
+| -------------------- | ----------------------------- | ------------------------------------------------------------------------ |
+| **GitHub Copilot**   | `copilot`                     | [docs.github.com](https://docs.github.com/en/copilot/how-tos/copilot-cli/set-up-copilot-cli/install-copilot-cli) |
+
 Any combination works, including all of them, plus anything you add yourself. The run
 mode is chosen per session from the arrow beside the **Run** button (built from
 whichever CLIs are currently enabled), so one case can have a Claude session and a Codex
 session open side by side. App Settings → Agents & CLIs → **Installed CLIs** is where you
 enable, disable, reorder, or add a custom entry without touching a config file by hand.
+
+**Enabling a CLI whose binary isn't installed yet installs it for you.** A disabled entry
+is never checked or cared about — its binary can be missing entirely, same as GitHub
+Copilot CLI out of the box. The moment you flip it on, Codeman runs that CLI's install
+command in the background (the same one shown as its "not found" hint) and the row reads
+"Installing…" until it resolves. See [CLI Registry](CLI-Registry) for exactly when this
+runs and why that is safe.
 
 ## Codeman does not manage your logins
 

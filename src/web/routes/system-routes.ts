@@ -388,6 +388,7 @@ export function registerSystemRoutes(
   app.get('/api/clis', async () => {
     const { listClis, missingCliMessage } = await import('../../config/cli-registry/registry.js');
     const { resolveCliBinDir, resolveCliVersion } = await import('../../utils/cli-resolver.js');
+    const { getCliInstallStatus } = await import('../../config/cli-registry/cli-installer.js');
     const clis = listClis().map((entry) => {
       const available = entry.kind === 'shell' ? true : resolveCliBinDir(entry.id) !== null;
       return {
@@ -398,6 +399,10 @@ export function registerSystemRoutes(
         // Populated only when actually needed (not installed), so the frontend never has
         // to reconstruct the per-platform install-command message itself.
         installHint: available ? null : missingCliMessage(entry.id),
+        // Set only while an auto-install triggered by enabling this CLI is in flight, or
+        // just finished — see cli-installer.ts. Absent under normal (already-resolved)
+        // circumstances, so this adds nothing to the payload for the common case.
+        installStatus: getCliInstallStatus(entry.id) ?? null,
       };
     });
     return { success: true, data: clis };
@@ -412,6 +417,7 @@ export function registerSystemRoutes(
   app.get<{ Params: { id: string } }>('/api/cli/:id/status', async (req, reply) => {
     const { getCli, missingCliMessage } = await import('../../config/cli-registry/registry.js');
     const { resolveCliBinDir, resolveCliVersion } = await import('../../utils/cli-resolver.js');
+    const { getCliInstallStatus } = await import('../../config/cli-registry/cli-installer.js');
     const entry = getCli(req.params.id);
     if (!entry) {
       return reply.code(404).send(createErrorResponse(ApiErrorCode.NOT_FOUND, `Unknown CLI: ${req.params.id}`));
@@ -424,6 +430,7 @@ export function registerSystemRoutes(
         path: entry.kind === 'shell' ? null : resolveCliBinDir(entry.id),
         version: entry.kind === 'shell' ? null : resolveCliVersion(entry.id),
         installHint: available ? null : missingCliMessage(entry.id),
+        installStatus: getCliInstallStatus(entry.id) ?? null,
       },
     };
   });
@@ -441,7 +448,19 @@ export function registerSystemRoutes(
     if (!result.success) {
       return reply.code(400).send(createErrorResponse(ApiErrorCode.INVALID_INPUT, result.warnings.join('; ')));
     }
-    return { success: true, data: { entries: result.entries, warnings: result.warnings } };
+    // Enabling a CLI whose binary isn't installed yet kicks off its install command in the
+    // background — see cli-installer.ts's file header for the trust model. Fire-and-forget:
+    // this call returns synchronously with whatever status ensureCliInstalled set (usually
+    // 'installing' immediately, or nothing at all if it was already available), the actual
+    // install keeps running after this response is sent, and the frontend polls GET
+    // /api/clis for progress. Never triggered on disable.
+    let installStatus = null;
+    if (enabled) {
+      const { ensureCliInstalled, getCliInstallStatus } = await import('../../config/cli-registry/cli-installer.js');
+      ensureCliInstalled(req.params.id);
+      installStatus = getCliInstallStatus(req.params.id) ?? null;
+    }
+    return { success: true, data: { entries: result.entries, warnings: result.warnings, installStatus } };
   });
 
   app.put('/api/clis/order', async (req, reply) => {

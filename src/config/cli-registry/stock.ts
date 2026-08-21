@@ -632,5 +632,70 @@ const PI: CliEntry = {
   },
 };
 
+// GitHub Copilot CLI (`copilot`, npm `@github/copilot`, docs:
+// https://docs.github.com/en/copilot/how-tos/copilot-cli/set-up-copilot-cli/install-copilot-cli).
+// Shipped DISABLED by default — unlike every other stock entry — because it is new to this
+// catalog and its launch shape here is deliberately minimal (no --model/--resume flags: the
+// upstream `--resume`/`--continue` pair opens an interactive picker or jumps to the most
+// recent session rather than taking a session id directly, so there is no verified way to
+// resume a SPECIFIC transcript yet; `resumeAppend` is left unset rather than guessed at).
+// A user opts it in from Settings, same path as adding any other CLI.
+const COPILOT: CliEntry = {
+  id: 'copilot' as CliEntry['id'],
+  label: 'GitHub Copilot',
+  shortBadge: 'GH',
+  accent: '#8957e5',
+  enabled: false,
+  stock: true,
+  order: 60,
+  kind: 'agent',
+  discovery: {
+    binaries: ['copilot'],
+    searchDirs: [HOME_DIRS.local, HOME_DIRS.usrLocal, HOME_DIRS.npmGlobal, HOME_DIRS.homeBin],
+    version: { arg: '--version', regex: '(\\d+\\.\\d+\\.\\d+)' },
+    install: {
+      command: {
+        linux: 'npm install -g @github/copilot',
+        darwin: 'npm install -g @github/copilot',
+      },
+      npmPackage: '@github/copilot',
+      docsUrl: 'https://docs.github.com/en/copilot/how-tos/copilot-cli/set-up-copilot-cli/install-copilot-cli',
+    },
+  },
+  launch: {
+    params: {},
+    variants: [
+      {
+        id: 'default',
+        args: [{ lit: 'copilot' }],
+      },
+    ],
+  },
+  env: {
+    exports: [],
+    unset: [],
+    tmuxSetenvKeys: [],
+    dockerExecEnvNames: [],
+    // Auth also flows through GH_TOKEN/GITHUB_TOKEN (checked ahead of COPILOT_GITHUB_TOKEN
+    // by the CLI itself), which are deliberately NOT allowlisted here: both are generic
+    // enough names that other tools use them too, and the multi-CLI prefix discipline
+    // (see CLAUDE.md) is one global allowlist, so admitting them would widen it for every
+    // mode at once. Authenticate via `/login` inside the session instead, same as Pi.
+    allowedPrefixes: ['COPILOT_'],
+    allowedKeys: [],
+  },
+  capabilities: {
+    ...agentDefaults(),
+    altScreen: 'strip-mux-only',
+    echo: { policy: 'buffer', anchor: { kind: 'cursor' } },
+  },
+  overlays: {
+    // ~/.copilot holds config, session history, logs and the plaintext auth fallback
+    // (docs.github.com/.../cli-config-dir-reference) — same "seed the whole directory"
+    // treatment as opencode's ~/.config/opencode.
+    credStore: { rel: '.copilot', seedWhole: true },
+  },
+};
+
 /** The full stock catalog, in the order the run menu shows by default. */
-export const STOCK_CLIS: CliEntry[] = [CLAUDE, SHELL, OPENCODE, CODEX, GEMINI, ANTIGRAVITY, PI];
+export const STOCK_CLIS: CliEntry[] = [CLAUDE, SHELL, OPENCODE, CODEX, GEMINI, ANTIGRAVITY, PI, COPILOT];

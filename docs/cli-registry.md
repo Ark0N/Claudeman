@@ -35,12 +35,43 @@ touches it again). `shell` and `claude` can be disabled but never deleted.
   same profile as an unrecognized CLI: external agent, requires tmux, no hooks, no bypass
   flag, buffered echo.
 - **API**: `GET /api/clis` (full merged registry, plus live `available`/`path`/`version`/
-  `installHint` per entry), `PUT /api/clis/:id/enabled`, `PUT /api/clis/order`,
-  `POST /api/clis/:id` (add or replace a custom entry — refuses a stock id),
-  `DELETE /api/clis/:id` (refuses a stock id). All admin-gated in multi-user mode.
+  `installHint`/`installStatus` per entry), `PUT /api/clis/:id/enabled`,
+  `PUT /api/clis/order`, `POST /api/clis/:id` (add or replace a custom entry — refuses a
+  stock id), `DELETE /api/clis/:id` (refuses a stock id). All admin-gated in multi-user
+  mode.
 - **Hand-editing `~/.codeman/clis.json`**: the loader validates on every read, so a syntax
   or schema error degrades to a warning and the pristine/omitted entry, never a broken
   server.
+
+### Enabling a CLI auto-installs it
+
+`~/.codeman/clis.json` deliberately does not care whether a **disabled** entry's binary is
+even installed — that is the whole point of shipping GitHub Copilot CLI disabled by
+default rather than leaving it out of the catalog entirely. The moment a CLI is switched
+from disabled to enabled — via `PUT /api/clis/:id/enabled {"enabled":true}`, which is what
+the settings UI's toggle calls — `src/config/cli-registry/cli-installer.ts`'s
+`ensureCliInstalled` checks whether the binary is already resolvable and, if not, runs that
+entry's `discovery.install.command` for the current platform in the background. Progress is
+exposed as `installStatus` on both `GET /api/clis` and the `PUT .../enabled` response itself
+(`{state: 'installing' | 'success' | 'error', command, message?}`); the settings UI polls
+until it resolves and shows "Installing…" / "Install failed: …" inline.
+
+This is a deliberate, narrow exception to `discovery.install.command` otherwise being pure
+display text (its own doc comment in `types.ts` used to say "NEVER executed by the
+server" — now updated to point here). The trust model:
+
+- It only ever runs as the direct result of that one explicit API call — never on server
+  boot, a background registry reload, or any other implicit trigger.
+- The command that runs is **exactly** the string already shown as that entry's
+  `installHint` — nothing is invented, combined with other input, or transformed.
+- Enabling a CLI is already an admin-only action in multi-user mode, and in single-user
+  mode there is one trust level, the same one that can already add or edit any entry
+  (stock or custom) through this same settings surface. Running the install command that
+  same operator already saw and could have run by hand adds no new privilege.
+
+Under `VITEST` this is a silent no-op (same posture as `TmuxManager`'s `IS_TEST_MODE`) — the
+test suite must never spawn a real, possibly network-dependent, possibly minutes-long
+install command.
 
 ## The shape of an entry (`CliEntry`)
 

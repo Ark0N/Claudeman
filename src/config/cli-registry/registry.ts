@@ -329,12 +329,24 @@ export function removeCustomCli(id: string): CliUpdateResult {
 export function missingCliMessage(id: string): string | null {
   const entry = getCli(id);
   if (!entry) return null;
-  const platform = process.platform === 'win32' ? 'win32' : process.platform === 'darwin' ? 'darwin' : 'linux';
-  const command =
-    entry.discovery.install.command[platform] ??
-    entry.discovery.install.command.linux ??
-    Object.values(entry.discovery.install.command)[0];
+  const command = resolveInstallCommandForPlatform(entry);
   return command
     ? `${entry.label} CLI not found. Install with: ${command}`
     : `${entry.label} CLI not found. See its docs for install instructions.`;
+}
+
+/**
+ * Pick the install command for the CURRENT platform, falling back to `linux` (the most
+ * common shell-compatible default) and then to whatever platform IS declared, so an entry
+ * missing today's exact platform key (e.g. no `win32` command) still surfaces something
+ * rather than nothing. Shared by `missingCliMessage` (display only) and `cli-installer.ts`
+ * (actually runs it) — the same resolution logic, two different uses.
+ */
+export function resolveInstallCommandForPlatform(entry: CliEntry): string | undefined {
+  const platform = process.platform === 'win32' ? 'win32' : process.platform === 'darwin' ? 'darwin' : 'linux';
+  return (
+    entry.discovery.install.command[platform] ??
+    entry.discovery.install.command.linux ??
+    Object.values(entry.discovery.install.command)[0]
+  );
 }

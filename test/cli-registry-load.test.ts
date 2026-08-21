@@ -17,27 +17,32 @@ import { resolveRegistry } from '../src/config/cli-registry/registry.js';
 import { STOCK_CLIS } from '../src/config/cli-registry/stock.js';
 import type { CliRegistryFile } from '../src/config/cli-registry/types.js';
 
-/** A well-formed custom entry, reused across the merge and write tests below. */
-const COPILOT_ENTRY = {
-  id: 'copilot',
-  label: 'Copilot',
-  shortBadge: 'GH',
+/**
+ * A well-formed custom entry, reused across the merge and write tests below. Id
+ * deliberately avoids "copilot" — that became a real stock id once GitHub Copilot CLI
+ * shipped (disabled by default) in the stock catalog, and these tests exercise the
+ * CUSTOM-CLI add/remove path, which refuses to touch a stock id.
+ */
+const CUSTOM_ENTRY = {
+  id: 'testcli',
+  label: 'Test CLI',
+  shortBadge: 'TC',
   accent: '#24292f',
   enabled: true,
   order: 60,
   kind: 'agent' as const,
   discovery: {
-    binaries: ['copilot'],
+    binaries: ['testcli'],
     searchDirs: ['~/.local/bin'],
-    install: { command: { linux: 'npm install -g @githubnext/github-copilot-cli' } },
+    install: { command: { linux: 'npm install -g @example/testcli' } },
   },
-  launch: { params: {}, variants: [{ id: 'default', args: [{ lit: 'copilot' }] }] },
+  launch: { params: {}, variants: [{ id: 'default', args: [{ lit: 'testcli' }] }] },
   env: {
     exports: [],
     unset: [],
     tmuxSetenvKeys: [],
     dockerExecEnvNames: [],
-    allowedPrefixes: ['COPILOT_'],
+    allowedPrefixes: ['TESTCLI_'],
     allowedKeys: [],
   },
   capabilities: {
@@ -85,10 +90,10 @@ describe('resolveRegistry (pure merge)', () => {
   });
 
   it('adds a well-formed custom entry alongside the stock catalog', () => {
-    const file: CliRegistryFile = { schemaVersion: 1, seededStockIds: [], clis: { copilot: COPILOT_ENTRY } };
+    const file: CliRegistryFile = { schemaVersion: 1, seededStockIds: [], clis: { testcli: CUSTOM_ENTRY } };
     const { entries, warnings } = resolveRegistry(STOCK_CLIS, file, []);
     expect(warnings).toEqual([]);
-    const found = entries.find((e) => (e.id as unknown as string) === 'copilot');
+    const found = entries.find((e) => (e.id as unknown as string) === 'testcli');
     expect(found).toBeDefined();
     expect(found!.stock).toBe(false); // stock is forced by the loader, never trusted from the file
   });
@@ -239,17 +244,17 @@ describe('registry writes (setCliEnabled / setCliOrder / upsertCustomCli / remov
 
   it('upsertCustomCli adds a new CLI that shows up in the resolved list', async () => {
     const { upsertCustomCli, getCli } = await import('../src/config/cli-registry/registry.js');
-    const result = upsertCustomCli('copilot', COPILOT_ENTRY);
+    const result = upsertCustomCli('testcli', CUSTOM_ENTRY);
     expect(result.success).toBe(true);
     expect(result.warnings).toEqual([]);
-    const found = getCli('copilot');
-    expect(found?.label).toBe('Copilot');
+    const found = getCli('testcli');
+    expect(found?.label).toBe('Test CLI');
     expect(found?.stock).toBe(false);
   });
 
   it('upsertCustomCli rejects a malformed entry with a schema error, writing nothing', async () => {
     const { upsertCustomCli, getCli } = await import('../src/config/cli-registry/registry.js');
-    const result = upsertCustomCli('bad-cli', { ...COPILOT_ENTRY, accent: 'not-a-hex-colour' });
+    const result = upsertCustomCli('bad-cli', { ...CUSTOM_ENTRY, accent: 'not-a-hex-colour' });
     expect(result.success).toBe(false);
     expect(result.warnings.length).toBeGreaterThan(0);
     expect(getCli('bad-cli')).toBeUndefined();
@@ -257,19 +262,19 @@ describe('registry writes (setCliEnabled / setCliOrder / upsertCustomCli / remov
 
   it('upsertCustomCli refuses to shadow a stock id', async () => {
     const { upsertCustomCli } = await import('../src/config/cli-registry/registry.js');
-    const result = upsertCustomCli('codex', COPILOT_ENTRY);
+    const result = upsertCustomCli('codex', CUSTOM_ENTRY);
     expect(result.success).toBe(false);
     expect(result.warnings[0]).toContain('stock CLI');
   });
 
   it('removeCustomCli removes a previously added custom CLI', async () => {
     const { upsertCustomCli, removeCustomCli, getCli } = await import('../src/config/cli-registry/registry.js');
-    upsertCustomCli('copilot', COPILOT_ENTRY);
-    expect(getCli('copilot')).toBeDefined();
+    upsertCustomCli('testcli', CUSTOM_ENTRY);
+    expect(getCli('testcli')).toBeDefined();
 
-    const result = removeCustomCli('copilot');
+    const result = removeCustomCli('testcli');
     expect(result.success).toBe(true);
-    expect(getCli('copilot')).toBeUndefined();
+    expect(getCli('testcli')).toBeUndefined();
   });
 
   it('removeCustomCli refuses to remove a stock CLI', async () => {

@@ -298,6 +298,19 @@ export function augmentPath(dir: string | null, currentPath: string): string {
  */
 const _dirResolvers = new Map<string, DirResolver>();
 
+/**
+ * Drop the memoized resolver for `id`, so the next `resolveCliBinDir`/`resolveCliVersion`
+ * call re-probes PATH and the search dirs from scratch instead of replaying a cached `null`.
+ * Each resolver caches its OWN result forever once resolved once (`createDirResolver`'s
+ * closured `cached` var) — deliberately, since a CLI's install location does not normally
+ * change mid-process. The one case that DOES change it: `cli-installer.ts` just installed
+ * the binary, so a `false` cached at server boot would otherwise never self-correct without
+ * a restart.
+ */
+export function invalidateCliBinDirCache(id: string): void {
+  _dirResolvers.delete(id);
+}
+
 export function resolveCliBinDir(id: string): string | null {
   let resolver = _dirResolvers.get(id);
   if (!resolver) {

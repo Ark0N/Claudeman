@@ -903,7 +903,7 @@ describe('system-routes', () => {
       const body = JSON.parse(res.body);
       expect(body.success).toBe(true);
       const ids = body.data.map((c: { id: string }) => c.id).sort();
-      expect(ids).toEqual(['antigravity', 'claude', 'codex', 'gemini', 'opencode', 'pi', 'shell']);
+      expect(ids).toEqual(['antigravity', 'claude', 'codex', 'copilot', 'gemini', 'opencode', 'pi', 'shell']);
 
       const claude = body.data.find((c: { id: string }) => c.id === 'claude');
       expect(claude.available).toBe(true);
@@ -1028,25 +1028,28 @@ describe('system-routes', () => {
     });
 
     describe('POST /api/clis/:id and DELETE /api/clis/:id', () => {
+      // Id deliberately avoids "copilot" -- that's a real stock id now (GitHub Copilot
+      // CLI, shipped disabled by default), and this exercises the CUSTOM-CLI add/remove
+      // path, which refuses to touch a stock id.
       const CUSTOM_CLI = {
-        label: 'Copilot',
-        shortBadge: 'GH',
+        label: 'Test CLI',
+        shortBadge: 'TC',
         accent: '#24292f',
         enabled: true,
         order: 60,
         kind: 'agent',
         discovery: {
-          binaries: ['copilot'],
+          binaries: ['testcli'],
           searchDirs: ['~/.local/bin'],
-          install: { command: { linux: 'npm install -g @githubnext/github-copilot-cli' } },
+          install: { command: { linux: 'npm install -g @example/testcli' } },
         },
-        launch: { params: {}, variants: [{ id: 'default', args: [{ lit: 'copilot' }] }] },
+        launch: { params: {}, variants: [{ id: 'default', args: [{ lit: 'testcli' }] }] },
         env: {
           exports: [],
           unset: [],
           tmuxSetenvKeys: [],
           dockerExecEnvNames: [],
-          allowedPrefixes: ['COPILOT_'],
+          allowedPrefixes: ['TESTCLI_'],
           allowedKeys: [],
         },
         capabilities: {
@@ -1074,21 +1077,21 @@ describe('system-routes', () => {
       };
 
       it('adds a custom CLI, then removes it', async () => {
-        const addRes = await harness.app.inject({ method: 'POST', url: '/api/clis/copilot', payload: CUSTOM_CLI });
+        const addRes = await harness.app.inject({ method: 'POST', url: '/api/clis/testcli', payload: CUSTOM_CLI });
         expect(addRes.statusCode).toBe(200);
         const addBody = JSON.parse(addRes.body);
         expect(addBody.success).toBe(true);
-        const added = addBody.data.entries.find((c: { id: string }) => c.id === 'copilot');
-        expect(added.label).toBe('Copilot');
+        const added = addBody.data.entries.find((c: { id: string }) => c.id === 'testcli');
+        expect(added.label).toBe('Test CLI');
         expect(added.stock).toBe(false);
 
         const listRes = await harness.app.inject({ method: 'GET', url: '/api/clis' });
-        expect(JSON.parse(listRes.body).data.some((c: { id: string }) => c.id === 'copilot')).toBe(true);
+        expect(JSON.parse(listRes.body).data.some((c: { id: string }) => c.id === 'testcli')).toBe(true);
 
-        const delRes = await harness.app.inject({ method: 'DELETE', url: '/api/clis/copilot' });
+        const delRes = await harness.app.inject({ method: 'DELETE', url: '/api/clis/testcli' });
         expect(delRes.statusCode).toBe(200);
         const afterDelete = await harness.app.inject({ method: 'GET', url: '/api/clis' });
-        expect(JSON.parse(afterDelete.body).data.some((c: { id: string }) => c.id === 'copilot')).toBe(false);
+        expect(JSON.parse(afterDelete.body).data.some((c: { id: string }) => c.id === 'testcli')).toBe(false);
       });
 
       it('400s on a malformed custom CLI body', async () => {
