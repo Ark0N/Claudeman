@@ -5,7 +5,7 @@
  * composition/keydown/input event sequences against a stub textarea.
  * Focus: the intermittent "Chinese characters silently lost" failure modes —
  * stuck composition state, deferred flush racing the next composition, and
- * the keydown-echo suppression window swallowing a real IME commit.
+ * physical-key punctuation transformed into full-width IME output.
  */
 import { readFileSync } from 'node:fs';
 import { resolve } from 'node:path';
@@ -116,6 +116,36 @@ describe('CJK input module', () => {
     expect(textarea.value).toBe(PHANTOM);
   });
 
+  it('lets the IME transform printable keys before sending full-width punctuation', () => {
+    const { textarea, sent } = loadCjkHarness();
+    const committed = Array.from('，。！？；：“”、《》、（）');
+    const physicalKeys = [',', '.', '!', '?', ';', ':', '"', '"', '\\', '<', '>', '\\', '(', ')'];
+
+    textarea.fire('compositionstart');
+    textarea.value = PHANTOM + '中文';
+    textarea.fire('input', { isComposing: true, inputType: 'insertCompositionText' });
+    textarea.fire('compositionend');
+    vi.advanceTimersByTime(10);
+    vi.advanceTimersByTime(1000);
+
+    for (const [index, punctuation] of committed.entries()) {
+      const preventDefault = vi.fn();
+      textarea.fire('keydown', {
+        key: physicalKeys[index],
+        ctrlKey: false,
+        altKey: false,
+        metaKey: false,
+        preventDefault,
+      });
+      expect(preventDefault).not.toHaveBeenCalled();
+
+      textarea.value = PHANTOM + punctuation;
+      textarea.fire('input', { isComposing: false, inputType: 'insertText' });
+    }
+
+    expect(sent).toEqual(['中文', ...committed]);
+  });
+
   it('recovers committed text when compositionend never fires (stuck composition)', () => {
     const { textarea, sent } = loadCjkHarness();
 
@@ -124,6 +154,7 @@ describe('CJK input module', () => {
     textarea.value = PHANTOM + '你好';
     // The commit arrives as a plain input event outside composition.
     textarea.fire('input', { isComposing: false, inputType: 'insertText' });
+    expect(sent).toEqual([]);
     vi.advanceTimersByTime(200);
 
     expect(sent).toEqual(['你好']);
@@ -151,30 +182,28 @@ describe('CJK input module', () => {
     expect(sent).toEqual(['你好世界']);
   });
 
-  it('does not discard an IME commit landing inside the keydown echo window', () => {
+  it('sends the transformed IME commit that follows a printable keydown', () => {
     const { textarea, sent } = loadCjkHarness();
 
-    // English char goes out immediately via keydown.
+    vi.advanceTimersByTime(1000);
+    // The physical key is not committed text and must not be sent by itself.
     textarea.fire('keydown', { key: 'a', ctrlKey: false, altKey: false, metaKey: false });
-    expect(sent).toEqual(['a']);
+    expect(sent).toEqual([]);
 
-    // Within 100ms the IME commits Chinese via a bare input event.
+    // The browser/IME supplies the canonical text in the following input.
     vi.advanceTimersByTime(50);
     textarea.value = PHANTOM + '你好';
     textarea.fire('input', { isComposing: false, inputType: 'insertText' });
-    vi.advanceTimersByTime(200);
 
-    expect(sent).toEqual(['a', '你好']);
+    expect(sent).toEqual(['你好']);
   });
 
-  it('still suppresses the true textarea echo of a keydown-sent character', () => {
+  it('sends a printable physical key exactly once after its input event', () => {
     const { textarea, sent } = loadCjkHarness();
 
     textarea.fire('keydown', { key: 'a', ctrlKey: false, altKey: false, metaKey: false });
-    expect(sent).toEqual(['a']);
+    expect(sent).toEqual([]);
 
-    // Third-party IME ignored preventDefault — the same char echoes into
-    // the textarea. It must be dropped, not sent twice.
     vi.advanceTimersByTime(10);
     textarea.value = PHANTOM + 'a';
     textarea.fire('input', { isComposing: false, inputType: 'insertText' });
@@ -242,6 +271,8 @@ describe('CJK input module', () => {
     vi.advanceTimersByTime(10);
 
     textarea.fire('keydown', { key: '囍', ctrlKey: false, altKey: false, metaKey: false });
+    textarea.value = PHANTOM + '囍';
+    textarea.fire('input', { isComposing: false, inputType: 'insertText' });
     textarea.value = PHANTOM + '秘密';
     textarea.fire('blur');
     expect(sent).toEqual(['秘密口令', '囍']);
