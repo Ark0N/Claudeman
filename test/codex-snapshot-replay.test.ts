@@ -32,7 +32,7 @@ describe('xterm snapshot/replay (codex tab-switch)', () => {
     const declaration = source.indexOf('let restoredSnapshot = false;', selectStart);
     const snapshotBranch = source.indexOf("if (snapshot && !sessionIsBusy && session?.mode !== 'shell')", selectStart);
     const rewriteDecision = source.indexOf(
-      'restoredSnapshot || clearedForBusy || data.terminalBuffer !== cachedBuffer',
+      'restoredSnapshot || clearedBeforeFresh || data.terminalBuffer !== cachedBuffer',
       selectStart
     );
 
@@ -58,7 +58,9 @@ describe('xterm snapshot/replay (codex tab-switch)', () => {
     // Snapshot restore must NOT short-circuit the canonical fetch.
     expect(snapshotBlock).not.toContain('this._finishBufferLoad();');
     expect(postSnapshotRestore).toContain('restoredSnapshot');
-    expect(postSnapshotRestore).toContain('restoredSnapshot || clearedForBusy || data.terminalBuffer !== cachedBuffer');
+    expect(postSnapshotRestore).toContain(
+      'restoredSnapshot || clearedBeforeFresh || data.terminalBuffer !== cachedBuffer'
+    );
   });
 
   it('forces replay after clearing a busy tab even when the fetched frame matches cache', () => {
@@ -71,8 +73,8 @@ describe('xterm snapshot/replay (codex tab-switch)', () => {
     expect(cacheRestore).toBeGreaterThan(-1);
     expect(busyClear).toBeGreaterThan(cacheRestore);
     expect(needsRewrite).toBeGreaterThan(busyClear);
-    expect(replayBlock).toContain('clearedForBusy');
-    expect(replayBlock).toContain('restoredSnapshot || clearedForBusy || data.terminalBuffer !== cachedBuffer');
+    expect(replayBlock).toContain('clearedBeforeFresh');
+    expect(replayBlock).toContain('restoredSnapshot || clearedBeforeFresh || data.terminalBuffer !== cachedBuffer');
   });
 
   it('loads the SerializeAddon and keeps a per-session snapshot map', () => {

@@ -8,7 +8,8 @@
  * src/web/public/constants.js and deliberately stays at 50k — 100k xterm lines per tab
  * is a mobile-memory hazard — so DEFAULT_TERMINAL_SCROLLBACK_LINES stays 50,000 to match.
  * The terminalScrollbackLines/terminalBufferMaxBytes/terminalBufferTrimBytes settings keys
- * remain schema-validated but inert (a follow-up wires them); only tmuxHistoryLimit is live.
+ * remain schema-validated but inert (a follow-up wires them); only tmuxHistoryLimit is wired.
+ * tmux <3.7 applies it to new panes; tmux 3.7+ can also resize live panes.
  * All values remain env- and settings-overridable and bounds-clamped via
  * resolveTerminalHistoryConfig().
  */

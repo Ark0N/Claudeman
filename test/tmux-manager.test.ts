@@ -675,6 +675,7 @@ describe('TmuxManager (unit)', () => {
           sessionId: 'abc12345-1234-5678-90ab-cdef12345678',
           workingDir: '/mnt/gdrive/project with spaces',
           mode: 'shell',
+          historyLimit: 250_000,
         });
 
         expect(session.workingDir).toBe('/mnt/gdrive/project with spaces');
@@ -683,7 +684,9 @@ describe('TmuxManager (unit)', () => {
         const newSessionCall = mockedExecSync.mock.calls.find(
           ([cmd]) => typeof cmd === 'string' && cmd.includes(' new-session ')
         );
-        expect(newSessionCall?.[0]).toBe(`tmux -L 'codeman' new-session -ds "codeman-abc12345" -c /tmp`);
+        expect(newSessionCall?.[0]).toBe(
+          `tmux -L 'codeman' set-option -g history-limit 250000 \\; new-session -ds "codeman-abc12345" -c /tmp \\; set-option -t "codeman-abc12345" history-limit 250000`
+        );
         expect(newSessionCall?.[1]).toEqual(expect.objectContaining({ cwd: '/tmp' }));
 
         const respawnCall = mockedExecSync.mock.calls.find(
@@ -691,6 +694,59 @@ describe('TmuxManager (unit)', () => {
         );
         expect(respawnCall?.[0]).toContain(`tmux -L 'codeman' respawn-pane -k -c /tmp -t "codeman-abc12345"`);
         expect(respawnCall?.[0]).toContain('cd \\"/mnt/gdrive/project with spaces\\" &&');
+      } finally {
+        nonTestManager.destroy();
+      }
+    });
+
+    it('changes the global history default on tmux versions that cannot resize panes', async () => {
+      const NonTestTmuxManager = await importWithTmuxCommandsEnabled();
+      const nonTestManager = new NonTestTmuxManager();
+
+      try {
+        await nonTestManager.setHistoryLimit(200_000);
+        const historyCall = mockedExec.mock.calls.find(
+          ([cmd]) => typeof cmd === 'string' && cmd.includes(' history-limit ')
+        );
+        expect(historyCall?.[0]).toBe(`tmux -L 'codeman' set-option -g history-limit 200000`);
+        expect(historyCall?.[0]).not.toContain(' -t ');
+      } finally {
+        nonTestManager.destroy();
+      }
+    });
+
+    it('targets only the new and tracked sessions on tmux 3.7+', async () => {
+      mockedExecSync.mockImplementation((cmd: string) => {
+        if (typeof cmd === 'string' && cmd.endsWith(' -V')) return 'tmux 3.7b\n';
+        if (typeof cmd === 'string' && cmd.includes('which tmux')) return '/usr/bin/tmux\n';
+        if (typeof cmd === 'string' && cmd.includes('display-message') && cmd.includes('#{pane_pid}')) return '4242\n';
+        return '';
+      });
+      const NonTestTmuxManager = await importWithTmuxCommandsEnabled();
+      const nonTestManager = new NonTestTmuxManager();
+
+      try {
+        await nonTestManager.createSession({
+          sessionId: 'def67890-1234-5678-90ab-cdef12345678',
+          workingDir: '/project',
+          mode: 'shell',
+          historyLimit: 250_000,
+        });
+        const newSessionCall = mockedExecSync.mock.calls.find(
+          ([cmd]) => typeof cmd === 'string' && cmd.includes(' new-session ')
+        );
+        expect(newSessionCall?.[0]).toBe(
+          `tmux -L 'codeman' new-session -ds "codeman-def67890" -c /tmp \\; set-option -t "codeman-def67890" history-limit 250000`
+        );
+        expect(newSessionCall?.[0]).not.toContain('set-option -g');
+
+        mockedExec.mockClear();
+        await nonTestManager.setHistoryLimit(200_000);
+        const historyCall = mockedExec.mock.calls.find(
+          ([cmd]) => typeof cmd === 'string' && cmd.includes(' history-limit ')
+        );
+        expect(historyCall?.[0]).toBe(`tmux -L 'codeman' set-option -t 'codeman-def67890' history-limit 200000`);
+        expect(historyCall?.[0]).not.toContain('set-option -g');
       } finally {
         nonTestManager.destroy();
       }

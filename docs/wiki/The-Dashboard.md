@@ -133,8 +133,9 @@ TUIs render correctly.
 
 Worth knowing:
 
-- **Scrollback.** The first time you open a session, Codeman pulls the entire tmux
-  scrollback, not just the recent tail. Scrolling to the very top pulls again on demand.
+- **Scrollback.** Agent/TUI sessions pull their entire tmux scrollback on first open.
+  Shell sessions open from a bounded recent tail so a large transcript cannot stall tab
+  switching; scroll to the very top or press **Load full history** to pull the rest on demand.
 - **Wheel and touch scrolling** are forwarded into Claude's own transcript on recent Claude
   versions, so the wheel scrolls the conversation rather than the terminal. `Shift+Wheel` is
   always local scrollback. Other CLIs scroll locally.

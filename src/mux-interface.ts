@@ -84,7 +84,7 @@ export interface CreateSessionOptions {
   envOverrides?: Record<string, string>;
   /** Claude CLI effort level, injected as a `--settings` soft default (overridable via /effort in-session) */
   effort?: EffortLevel;
-  /** tmux history-limit (scrollback lines) to set for this session. */
+  /** tmux history-limit (scrollback lines) allocated when this session is created. */
   historyLimit?: number;
   /** Remote execution metadata for local tmux sessions wrapping SSH */
   remote?: SessionRemote;
@@ -116,7 +116,7 @@ export interface RespawnPaneOptions {
   envOverrides?: Record<string, string>;
   /** Claude CLI effort level (preserved across respawns, injected via `--settings`) */
   effort?: EffortLevel;
-  /** tmux history-limit (scrollback lines) to set for this session after respawn. */
+  /** Original tmux history-limit retained for config parity; respawn cannot resize the existing pane. */
   historyLimit?: number;
   /** Remote execution metadata for local tmux sessions wrapping SSH */
   remote?: SessionRemote;
@@ -216,7 +216,7 @@ export interface TerminalMultiplexer extends EventEmitter {
   /** Update Ralph enabled state for a session */
   updateRalphEnabled(sessionId: string, enabled: boolean): void;
 
-  /** Apply a tmux history-limit to all tracked sessions. */
+  /** Apply history-limit to live panes where tmux supports it, otherwise to future panes. */
   setHistoryLimit(limit: number): Promise<void>;
 
   // ========== Discovery ==========

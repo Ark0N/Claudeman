@@ -789,6 +789,7 @@ describe('session-routes', () => {
       expect(body.data.terminalBuffer).toContain(lastLine);
       expect(body.data.source).toBe('mux-full-history');
       expect(typeof body.data.fullSize).toBe('number');
+      expect(res.headers['server-timing']).toMatch(/^capture;dur=\d+\.\d, prepare;dur=\d+\.\d, total;dur=\d+\.\d$/);
     });
 
     it('full reload (?full=1) returns the tmux capture ALONE — byte history is not duplicated', async () => {

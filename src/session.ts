@@ -510,7 +510,7 @@ export class Session extends EventEmitter {
   // the CLAUDE_CODE_EFFORT_LEVEL env var, which would hard-lock the session.
   private _effort: EffortLevel | undefined;
 
-  // tmux history-limit (scrollback lines) applied to this session's pane.
+  // tmux history-limit (scrollback lines) allocated when this session's pane is created.
   private readonly _tmuxHistoryLimit: number;
 
   // Remote execution metadata, present when this session runs over SSH through local tmux.
@@ -600,7 +600,7 @@ export class Session extends EventEmitter {
       envOverrides?: Record<string, string>;
       /** Claude CLI effort level (soft default via --settings, switchable in-session via /effort) */
       effort?: EffortLevel;
-      /** tmux history-limit (scrollback lines) for this session's pane. */
+      /** tmux history-limit (scrollback lines) allocated when this session's pane is created. */
       tmuxHistoryLimit?: number;
       /** Restored per-session attachment history. May include server-private external paths. */
       attachmentHistory?: SessionAttachmentHistoryItem[];

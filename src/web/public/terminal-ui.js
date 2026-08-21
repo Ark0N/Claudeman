@@ -3571,7 +3571,9 @@ Object.assign(CodemanApp.prototype, {
     }
 
     const buffer = this.terminal.buffer.active;
-    const totalLines = buffer.baseY + buffer.length;
+    // `length` already includes scrollback + viewport rows. Adding baseY scans
+    // every scrollback row twice, starting with thousands of out-of-range calls.
+    const totalLines = buffer.length;
     let lastNonEmptyLine = -1;
 
     for (let lineIndex = totalLines - 1; lineIndex >= 0; lineIndex--) {
@@ -3601,8 +3603,8 @@ Object.assign(CodemanApp.prototype, {
    * Uses _safeYield to spread work across frames; falls back to setTimeout
    * and a tick-Worker so progress continues on occluded / idle-throttled tabs.
    * @param {string} buffer - The full terminal buffer to write
-   * @param {number} chunkSize - Size of each chunk (default 128KB for smooth 60fps)
-   * @returns {Promise<void>} - Resolves when all chunks written
+   * @param {number} chunkSize - Size of each chunk (default 32KB)
+   * @returns {Promise<{parsedAt: number, bufferLength: number, completed: boolean}>} Parse marker snapshot
    */
   chunkedTerminalWrite(buffer, chunkSize = TERMINAL_CHUNK_SIZE, loadOwner) {
     // Generation counter: if a newer chunkedTerminalWrite starts (tab switch),
@@ -3611,9 +3613,14 @@ Object.assign(CodemanApp.prototype, {
     const bufferLoadOwner = this._beginBufferLoad(loadOwner);
 
     return new Promise((resolve) => {
+      const parseSnapshot = (completed = this._chunkedWriteGen === writeGen) => ({
+        parsedAt: performance.now(),
+        bufferLength: this.terminal?.buffer?.active?.length ?? 0,
+        completed,
+      });
       if (!buffer || buffer.length === 0) {
         this._finishBufferLoad(bufferLoadOwner);
-        resolve();
+        resolve(parseSnapshot());
         return;
       }
 
@@ -3621,53 +3628,45 @@ Object.assign(CodemanApp.prototype, {
       // (from historical SSE data that was stored with markers)
       const cleanBuffer = buffer.replace(DEC_SYNC_STRIP_RE, '');
 
-      const finish = () => {
-        // Only finish if we're still the active write — a newer write owns buffer load state
-        if (this._chunkedWriteGen === writeGen) {
-          this._finishBufferLoad(bufferLoadOwner);
-        }
-        resolve();
-      };
-
       // For small buffers, write directly — single-frame render is fast enough
       if (cleanBuffer.length <= chunkSize) {
-        this.terminal.write(cleanBuffer, finish);
+        this.terminal.write(cleanBuffer, () => resolve(parseSnapshot()));
+        // The write is now ordered in xterm's queue. Release live output before
+        // parsing completes; subsequent writes stay behind it without being lost.
+        this._finishBufferLoad(bufferLoadOwner);
         return;
       }
 
-      // Large buffers: write in chunks across animation frames.
-      // Each 32KB chunk keeps per-frame WebGL render work under ~5ms,
-      // avoiding GPU stalls without needing to toggle the renderer.
+      // Large buffers: enqueue paced chunks, then append an empty marker whose
+      // callback fires after xterm parses every preceding chunk. The live-output
+      // gate is released as soon as that marker is ordered, not after parsing, so
+      // new output queues behind history instead of being held or dropped.
       let offset = 0;
       const _chunkStart = performance.now();
       let _chunkCount = 0;
       const writeChunk = () => {
         // Abort if a newer chunked write started (user switched tabs)
         if (this._chunkedWriteGen !== writeGen) {
-          resolve();
+          resolve(parseSnapshot(false));
           return;
         }
 
-        if (offset >= cleanBuffer.length) {
-          const _totalMs = performance.now() - _chunkStart;
-          console.log(
-            `[CRASH-DIAG] chunkedTerminalWrite complete: ${cleanBuffer.length} bytes in ${_chunkCount} chunks, ${_totalMs.toFixed(0)}ms total`
-          );
-          // Wait one more frame for xterm to finish rendering before resolving
-          this._safeYield(finish);
-          return;
-        }
-
-        const _ct0 = performance.now();
         const chunk = cleanBuffer.slice(offset, offset + chunkSize);
-        this.terminal.write(chunk);
-        const _cdt = performance.now() - _ct0;
+        offset += chunk.length;
         _chunkCount++;
-        if (_cdt > 50)
-          console.warn(
-            `[CRASH-DIAG] chunk #${_chunkCount} write took ${_cdt.toFixed(0)}ms (${chunk.length} bytes at offset ${offset})`
-          );
-        offset += chunkSize;
+        this.terminal.write(chunk);
+        if (offset >= cleanBuffer.length) {
+          this.terminal.write('', () => {
+            const result = parseSnapshot();
+            const _totalMs = result.parsedAt - _chunkStart;
+            console.log(
+              `[CRASH-DIAG] chunkedTerminalWrite complete: ${cleanBuffer.length} bytes in ${_chunkCount} chunks, ${_totalMs.toFixed(0)}ms parsed`
+            );
+            resolve(result);
+          });
+          this._finishBufferLoad(bufferLoadOwner);
+          return;
+        }
 
         // Schedule next chunk; rAF if possible, else setTimeout/Worker
         // fallback so progress doesn't stall on occluded/unfocused windows.

@@ -722,7 +722,8 @@ export function registerSystemRoutes(
       const merged = { ...existing, ...settingsToStore };
       await fs.writeFile(SETTINGS_PATH, JSON.stringify(merged, null, 2));
 
-      // Apply a changed tmux history-limit to all live sessions immediately.
+      // tmux 3.7+ resizes tracked panes; older versions apply this to new panes.
+      // Already-evicted history cannot be recovered on either version.
       if (settings.tmuxHistoryLimit !== undefined) {
         await ctx.mux.setHistoryLimit(resolveTerminalHistoryConfig(merged).tmuxHistoryLimit);
       }
