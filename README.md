@@ -684,7 +684,7 @@ sc 2            # Quick attach to session 2
 sc -l           # List sessions
 ```
 
-Single-digit selection (1-9), color-coded status, token counts, auto-refresh. Come back from an attached pane with `F1`.
+Single-digit selection (1-9), color-coded status, token counts, auto-refresh. `sc` hands you to a plain `tmux attach`, so you leave the pane with tmux's own detach chord: `Ctrl+B`, release, then `d`. (`codeman tui` is the one that gives you a single `F1` instead, because its attach claims that key for the duration.)
 
 ---
 
