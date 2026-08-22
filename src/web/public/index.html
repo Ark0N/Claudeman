@@ -406,29 +406,40 @@
           <h1 class="welcome-title">Codeman</h1>
           <p class="welcome-desc">Manage AI Coding tools in persistent tmux sessions.</p>
           <div class="welcome-actions">
-            <button class="welcome-btn welcome-btn-claude" id="welcomeClaudeBtn" style="display: none;" onclick="app.setRunMode('claude'); app.runClaude()">
-              <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><polygon points="5 3 19 12 5 21 5 3"/></svg>
-              Run Claude Code
-            </button>
+            <!-- Rebuilt from window.__codemanClis every time the welcome screen shows,
+                 via _renderWelcomeCliButtons() in session-ui.js — one button per ENABLED,
+                 non-shell CLI (sorted by `order`), so enabling/disabling a CLI in Settings
+                 (Agents & CLIs) adds/removes its welcome button with no markup change.
+                 These five are the static fallback for the rare case the registry blob is
+                 missing (mirrors #runModeAgentOptions in the Run menu). -->
+            <div id="welcomeCliButtons">
+              <button class="welcome-btn welcome-btn-claude" id="welcomeClaudeBtn" style="display: none;" onclick="app.setRunMode('claude'); app.runClaude()">
+                <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><polygon points="5 3 19 12 5 21 5 3"/></svg>
+                Run Claude Code
+              </button>
+              <button class="welcome-btn welcome-btn-opencode" id="welcomeOpencodeBtn" style="display: none;" onclick="app.setRunMode('opencode'); app.runCli('opencode')">
+                <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><polygon points="5 3 19 12 5 21 5 3"/></svg>
+                Run OpenCode
+              </button>
+              <button class="welcome-btn welcome-btn-antigravity" id="welcomeAntigravityBtn" style="display: none;" onclick="app.setRunMode('antigravity'); app.runCli('antigravity')">
+                <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><polygon points="5 3 19 12 5 21 5 3"/></svg>
+                Run Antigravity
+              </button>
+              <button class="welcome-btn welcome-btn-gemini" id="welcomeGeminiBtn" style="display: none;" onclick="app.setRunMode('gemini'); app.runCli('gemini')">
+                <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><polygon points="5 3 19 12 5 21 5 3"/></svg>
+                Run Gemini
+              </button>
+              <button class="welcome-btn welcome-btn-pi" id="welcomePiBtn" style="display: none;" onclick="app.setRunMode('pi'); app.runCli('pi')">
+                <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><polygon points="5 3 19 12 5 21 5 3"/></svg>
+                Run Pi
+              </button>
+            </div>
+            <!-- Not a CLI, so it stays OUTSIDE the dynamically-rebuilt group above and is
+                 never touched by _renderWelcomeCliButtons(). Note this moves it from its
+                 old 2nd position to last, since it's the one non-agent action in this list. -->
             <button class="welcome-btn welcome-btn-tunnel" id="welcomeTunnelBtn" style="display: none;" onclick="app.toggleTunnelFromWelcome()">
               <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M12 2L2 7l10 5 10-5-10-5z"/><path d="M2 17l10 5 10-5"/><path d="M2 12l10 5 10-5"/></svg>
               Cloudflare Tunnel
-            </button>
-            <button class="welcome-btn welcome-btn-opencode" id="welcomeOpencodeBtn" style="display: none;" onclick="app.setRunMode('opencode'); app.runCli('opencode')">
-              <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><polygon points="5 3 19 12 5 21 5 3"/></svg>
-              Run OpenCode
-            </button>
-            <button class="welcome-btn welcome-btn-antigravity" id="welcomeAntigravityBtn" style="display: none;" onclick="app.setRunMode('antigravity'); app.runCli('antigravity')">
-              <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><polygon points="5 3 19 12 5 21 5 3"/></svg>
-              Run Antigravity
-            </button>
-            <button class="welcome-btn welcome-btn-gemini" id="welcomeGeminiBtn" style="display: none;" onclick="app.setRunMode('gemini'); app.runCli('gemini')">
-              <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><polygon points="5 3 19 12 5 21 5 3"/></svg>
-              Run Gemini
-            </button>
-            <button class="welcome-btn welcome-btn-pi" id="welcomePiBtn" style="display: none;" onclick="app.setRunMode('pi'); app.runCli('pi')">
-              <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><polygon points="5 3 19 12 5 21 5 3"/></svg>
-              Run Pi
             </button>
           </div>
           <div class="welcome-qr" id="welcomeQr" onclick="app.toggleWelcomeQrSize()">

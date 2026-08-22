@@ -1556,6 +1556,14 @@ html.mobile-init .file-browser-panel {
     margin-top: 1rem;
   }
 
+  /* Same reasoning as styles.css's desktop rule: this group is one flex item
+     inside .welcome-actions now, so it needs its own matching column+gap. */
+  #welcomeCliButtons {
+    flex-direction: column;
+    gap: 0.5rem;
+    width: 100%;
+  }
+
   .welcome-btn {
     width: 100%;
     justify-content: center;

@@ -520,6 +520,89 @@ Object.assign(CodemanApp.prototype, {
     return this.isCliAvailable(mode);
   },
 
+  /**
+   * Rebuilds #welcomeCliButtons from window.__codemanClis, called from
+   * applyWelcomeCliVisibility() every time the welcome screen shows — so enabling or
+   * disabling a CLI in Settings (Agents & CLIs) adds or removes its welcome button, the
+   * same fix as _renderRunModeOptions() for the Run menu. Shows one button per CLI that
+   * is both ENABLED and AVAILABLE (installed) — shell is excluded, since these five (now:
+   * however many) buttons are specifically "jump straight into an agent", and shell is
+   * already reachable from the Run dropdown.
+   *
+   * A missing/empty registry blob (an old cached page, or a page that never got the
+   * injection) falls back to the original five-button, availability-only gating rather
+   * than leaving every button stuck at its markup-default `display:none` — these buttons
+   * start HIDDEN in the markup and rely on JS to reveal them, unlike the run-mode-menu's
+   * always-visible static fallback, so silently doing nothing here would be a regression.
+   */
+  _renderWelcomeCliButtons() {
+    const clis = window.__codemanClis;
+    if (!Array.isArray(clis) || clis.length === 0) {
+      const legacy = [
+        ['welcomeClaudeBtn', 'claude'],
+        ['welcomeOpencodeBtn', 'opencode'],
+        ['welcomeAntigravityBtn', 'antigravity'],
+        ['welcomeGeminiBtn', 'gemini'],
+        ['welcomePiBtn', 'pi'],
+      ];
+      for (const [id, tool] of legacy) {
+        const btn = document.getElementById(id);
+        if (btn) btn.style.display = this.isCliAvailable(tool) ? 'flex' : 'none';
+      }
+      return;
+    }
+
+    const container = document.getElementById('welcomeCliButtons');
+    if (!container) return;
+    const shown = clis
+      .filter(c => c.enabled && c.kind !== 'shell' && c.available !== false)
+      .sort((a, b) => a.order - b.order);
+    container.replaceChildren(...shown.map(c => this._buildWelcomeCliButton(c)));
+  },
+
+  /**
+   * The original five CLIs each have a hand-crafted gradient (`.welcome-btn-<id>` in
+   * styles.css); anything else (codex, copilot, a custom CLI) gets a flat inline
+   * background from the registry's own `accent` field instead of an invisible
+   * transparent button — the same "no per-mode CSS class needed" approach as the
+   * Run-menu's dot color.
+   */
+  _buildWelcomeCliButton(cli) {
+    const KNOWN_STYLES = new Set(['claude', 'opencode', 'antigravity', 'gemini', 'pi']);
+    const btn = document.createElement('button');
+    btn.className = KNOWN_STYLES.has(cli.id) ? `welcome-btn welcome-btn-${cli.id}` : 'welcome-btn';
+    btn.style.display = 'flex';
+    if (!KNOWN_STYLES.has(cli.id) && cli.accent) {
+      btn.style.background = cli.accent;
+      btn.style.borderColor = cli.accent;
+    }
+    btn.onclick = () => this._runWelcomeCli(cli.id);
+
+    const svgNs = 'http://www.w3.org/2000/svg';
+    const svg = document.createElementNS(svgNs, 'svg');
+    svg.setAttribute('width', '20');
+    svg.setAttribute('height', '20');
+    svg.setAttribute('viewBox', '0 0 24 24');
+    svg.setAttribute('fill', 'none');
+    svg.setAttribute('stroke', 'currentColor');
+    svg.setAttribute('stroke-width', '2');
+    const polygon = document.createElementNS(svgNs, 'polygon');
+    polygon.setAttribute('points', '5 3 19 12 5 21 5 3');
+    svg.appendChild(polygon);
+
+    btn.append(svg, document.createTextNode(` Run ${cli.label}`));
+    return btn;
+  },
+
+  /** Mirrors run()'s own per-mode dispatch, without its launch-lock/button-disable
+   *  behaviour -- matches the original hand-written welcome button onclick handlers. */
+  _runWelcomeCli(id) {
+    this.setRunMode(id);
+    if (id === 'claude') return this.runClaude();
+    if (id === 'shell') return this.runShell();
+    return this.runCli(id);
+  },
+
   async _loadRunModeHistory() {
     const container = document.getElementById('runModeHistory');
     if (!container) return;

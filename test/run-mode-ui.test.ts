@@ -1129,3 +1129,171 @@ describe('_renderRunModeOptions (rebuilding the Run menu from the live registry)
     expect(calls).toEqual(['copilot']);
   });
 });
+
+describe('_renderWelcomeCliButtons (welcome-screen buttons follow enabled/disabled)', () => {
+  // Regression coverage for: the center-of-page "Run Claude Code" / "Run OpenCode" /
+  // "Run Gemini" buttons were tied only to CLI AVAILABILITY (isCliAvailable), never to
+  // whether the CLI was enabled in Settings, and the button set itself was five hardcoded
+  // ids -- codex and any future CLI (e.g. GitHub Copilot) could never get one at all.
+  function makeElement() {
+    return {
+      tagName: '',
+      className: '',
+      style: {} as Record<string, string>,
+      onclick: null as (() => void) | null,
+      children: [] as any[],
+      append(...nodes: any[]) {
+        this.children.push(...nodes);
+      },
+      appendChild(node: any) {
+        this.children.push(node);
+        return node;
+      },
+      setAttribute() {},
+    };
+  }
+
+  function loadHarness() {
+    const elements: Record<string, any> = {};
+    const CodemanApp = function CodemanApp(this: any) {};
+    const context: any = vm.createContext({
+      CodemanApp,
+      document: {
+        getElementById: (id: string) => elements[id] ?? null,
+        createElement: (tag: string) => {
+          const el = makeElement();
+          el.tagName = tag;
+          return el;
+        },
+        createElementNS: (_ns: string, tag: string) => {
+          const el = makeElement();
+          el.tagName = tag;
+          return el;
+        },
+        createTextNode: (text: string) => ({ nodeType: 3, text }),
+      },
+      console,
+    });
+    context.window = context;
+
+    const welcomeCliButtons = {
+      replaceChildren: (...c: any[]) => (welcomeCliButtons.children = c),
+      children: [] as any[],
+    };
+    elements.welcomeCliButtons = welcomeCliButtons;
+    for (const id of [
+      'welcomeClaudeBtn',
+      'welcomeOpencodeBtn',
+      'welcomeAntigravityBtn',
+      'welcomeGeminiBtn',
+      'welcomePiBtn',
+    ]) {
+      elements[id] = { style: { display: 'PRISTINE' } };
+    }
+
+    const settingsUi = readFileSync(resolve(import.meta.dirname, '../src/web/public/settings-ui.js'), 'utf8');
+    const sessionUi = readFileSync(resolve(import.meta.dirname, '../src/web/public/session-ui.js'), 'utf8');
+    vm.runInContext(settingsUi, context, { filename: 'settings-ui.js' });
+    vm.runInContext(sessionUi, context, { filename: 'session-ui.js' });
+
+    return { app: new (CodemanApp as any)(), welcomeCliButtons, elements, context };
+  }
+
+  const CLI = (overrides: Record<string, unknown> = {}) => ({
+    id: 'claude',
+    label: 'Claude',
+    accent: '#d97757',
+    enabled: true,
+    kind: 'agent',
+    order: 0,
+    available: true,
+    ...overrides,
+  });
+
+  it('includes an enabled, available CLI the static markup never had (copilot)', () => {
+    const { app, welcomeCliButtons, context } = loadHarness();
+    context.__codemanClis = [CLI(), CLI({ id: 'copilot', label: 'GitHub Copilot', accent: '#8957e5', order: 60 })];
+
+    app._renderWelcomeCliButtons();
+
+    expect(welcomeCliButtons.children).toHaveLength(2);
+    const copilotBtn = welcomeCliButtons.children[1];
+    expect(copilotBtn.className).toBe('welcome-btn'); // no hand-crafted per-mode class
+    expect(copilotBtn.style.background).toBe('#8957e5'); // inline accent fallback
+  });
+
+  it('excludes a disabled CLI', () => {
+    const { app, welcomeCliButtons, context } = loadHarness();
+    context.__codemanClis = [CLI(), CLI({ id: 'copilot', enabled: false })];
+
+    app._renderWelcomeCliButtons();
+
+    expect(welcomeCliButtons.children).toHaveLength(1);
+  });
+
+  it('excludes an enabled CLI whose binary is not available', () => {
+    const { app, welcomeCliButtons, context } = loadHarness();
+    context.__codemanClis = [CLI(), CLI({ id: 'copilot', available: false })];
+
+    app._renderWelcomeCliButtons();
+
+    expect(welcomeCliButtons.children).toHaveLength(1);
+  });
+
+  it('excludes shell -- these buttons are "jump into an agent", shell has its own path', () => {
+    const { app, welcomeCliButtons, context } = loadHarness();
+    context.__codemanClis = [CLI(), CLI({ id: 'shell', kind: 'shell' })];
+
+    app._renderWelcomeCliButtons();
+
+    expect(welcomeCliButtons.children).toHaveLength(1);
+  });
+
+  it('uses the hand-crafted per-mode class for the original five, sorted by order', () => {
+    const { app, welcomeCliButtons, context } = loadHarness();
+    context.__codemanClis = [CLI({ id: 'pi', order: 50 }), CLI({ id: 'claude', order: 0 })];
+
+    app._renderWelcomeCliButtons();
+
+    expect(welcomeCliButtons.children.map((btn: any) => btn.className)).toEqual([
+      'welcome-btn welcome-btn-claude',
+      'welcome-btn welcome-btn-pi',
+    ]);
+  });
+
+  it('falls back to the original five-button availability gating when the registry blob is missing', () => {
+    const { app, elements, context } = loadHarness();
+    context.__codemanCliAvailable = { claude: true, opencode: false, antigravity: false, gemini: false, pi: false };
+    context.__codemanClis = undefined;
+
+    app._renderWelcomeCliButtons();
+
+    expect(elements.welcomeClaudeBtn.style.display).toBe('flex');
+    expect(elements.welcomeOpencodeBtn.style.display).toBe('none');
+  });
+
+  it("clicking a rendered button dispatches through _runWelcomeCli, mirroring run()'s per-mode routing", () => {
+    const { app, welcomeCliButtons, context } = loadHarness();
+    context.__codemanClis = [CLI({ id: 'copilot', label: 'GitHub Copilot' })];
+    const calls: string[] = [];
+    app.setRunMode = (mode: string) => calls.push(`setRunMode:${mode}`);
+    app.runCli = (mode: string) => calls.push(`runCli:${mode}`);
+
+    app._renderWelcomeCliButtons();
+    welcomeCliButtons.children[0].onclick();
+
+    expect(calls).toEqual(['setRunMode:copilot', 'runCli:copilot']);
+  });
+
+  it('applyWelcomeCliVisibility still gates the Tunnel button on cloudflared, separately from CLIs', () => {
+    const { app, elements, context } = loadHarness();
+    elements.welcomeTunnelBtn = { style: { display: 'PRISTINE' } };
+    context.__codemanCliAvailable = { cloudflared: true };
+    context.__codemanClis = [CLI()];
+    app.loadTunnelStatus = () => {};
+
+    app.applyWelcomeCliVisibility();
+
+    expect(elements.welcomeTunnelBtn.style.display).toBe('flex');
+  });
+});

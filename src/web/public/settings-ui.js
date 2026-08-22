@@ -1446,22 +1446,16 @@ Object.assign(CodemanApp.prototype, {
    * #200: show a welcome-screen button only where the thing it launches exists.
    * The markup ships them hidden, so an old cached page can never flash a button
    * for a tool this server does not have.
+   *
+   * The CLI buttons themselves are rebuilt from the registry by
+   * _renderWelcomeCliButtons() (session-ui.js) — this only handles the ONE
+   * button here that isn't a CLI at all: Cloudflare Tunnel, gated on
+   * `cloudflared` exactly as before.
    */
   applyWelcomeCliVisibility() {
-    const buttons = [
-      ['welcomeClaudeBtn', 'claude'],
-      ['welcomeOpencodeBtn', 'opencode'],
-      ['welcomeAntigravityBtn', 'antigravity'],
-      ['welcomeGeminiBtn', 'gemini'],
-      ['welcomePiBtn', 'pi'],
-      // Not a run mode, same reasoning: offering a Cloudflare Tunnel on a box
-      // without cloudflared can only ever produce "cloudflared not found".
-      ['welcomeTunnelBtn', 'cloudflared'],
-    ];
-    for (const [id, tool] of buttons) {
-      const btn = document.getElementById(id);
-      if (btn) btn.style.display = this.isCliAvailable(tool) ? 'flex' : 'none';
-    }
+    this._renderWelcomeCliButtons?.();
+    const tunnelBtn = document.getElementById('welcomeTunnelBtn');
+    if (tunnelBtn) tunnelBtn.style.display = this.isCliAvailable('cloudflared') ? 'flex' : 'none';
   },
 
   async loadTunnelStatus() {

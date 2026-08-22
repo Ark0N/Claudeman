@@ -3531,6 +3531,17 @@ body.touch-device .terminal-container .xterm .xterm-helper-textarea {
   margin-top: 2rem;
   margin-bottom: 1.5rem;
 }
+/* #welcomeCliButtons groups the dynamically-rendered agent buttons (see
+   _renderWelcomeCliButtons() in session-ui.js) as ONE flex item inside
+   .welcome-actions, alongside the separate Cloudflare Tunnel button — so it needs
+   its own flex+gap+wrap, matching the parent's, or the buttons inside it would
+   lose the gap and wrapping behaviour .welcome-actions gives its DIRECT children. */
+#welcomeCliButtons {
+  display: flex;
+  gap: 0.75rem;
+  justify-content: center;
+  flex-wrap: wrap;
+}
 
 .welcome-btn {
   display: flex;
