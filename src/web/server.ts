@@ -41,6 +41,7 @@ import fs from 'node:fs/promises';
 import { execSync } from 'node:child_process';
 import { hostname as getHostname } from 'node:os';
 import { dataPath, getDataDir, CODEMAN_INSTANCE } from '../config/instance.js';
+import { GLYPH, palette } from '../cli-style.js';
 import { getHookSecret } from '../config/hook-secret.js';
 import { EventEmitter } from 'node:events';
 import { Session, isExternalCliMode, type BackgroundTask } from '../session.js';
@@ -2395,7 +2396,9 @@ export class WebServer extends EventEmitter {
     await this.app.listen({ port: this.port, host: this.host });
     const protocol = this.https ? 'https' : 'http';
     const displayHost = this.host === '0.0.0.0' ? 'localhost' : this.host;
-    console.log(`Codeman web interface running at ${protocol}://${displayHost}:${this.port}`);
+    // The only startup banner: `codeman web` used to print its own copy of this
+    // line, but the daemon and service launch paths never go through the CLI.
+    console.log(palette.ok(`${GLYPH.ok} Codeman web interface running at ${protocol}://${displayHost}:${this.port}`));
 
     // Opt-in: also serve the HOOK endpoints on the docker bridge gateway so
     // in-container hooks (permission/idle/stop callbacks) can reach a loopback-bound
@@ -2425,20 +2428,30 @@ export class WebServer extends EventEmitter {
     // without CODEMAN_PASSWORD (every person has their own credential).
     const authActive = !!process.env.CODEMAN_PASSWORD || (isMultiUserMode() && (await hasUsers()));
     if (!isLoopbackBindHost(this.host) && !authActive) {
+      // Painted like the CLI's copy of the same warning. chalk degrades to plain
+      // text off a TTY, so journald and web.log stay free of escape codes.
       if (this.allowUnauthenticatedNetwork) {
         console.warn(
-          `\n⚠  Codeman is reachable WITHOUT a password on ${displayHost}:${this.port} ` +
-            '(explicitly allowed). Anyone who can reach it can control your Claude sessions.\n'
+          palette.warn(
+            `\n${GLYPH.warn}  Codeman is reachable WITHOUT a password on ${displayHost}:${this.port} ` +
+              '(explicitly allowed). Anyone who can reach it can control your Claude sessions.\n'
+          )
         );
       } else {
-        console.warn(`\n⚠  WARNING: Codeman is bound to a non-loopback host (${this.host}) with NO password.`);
-        console.warn(`   Anyone who can reach ${displayHost}:${this.port} can control your Claude sessions.`);
-        console.warn('   Secure it with ONE of:');
-        console.warn('     • set CODEMAN_PASSWORD=<password>   (HTTP Basic auth), or');
-        console.warn('     • bind loopback only: --host 127.0.0.1, then front it with an');
-        console.warn('       authenticated tunnel (cloudflared) or `tailscale serve`, or');
-        console.warn('     • keep this bind and accept the risk: --allow-unauthenticated-network');
-        console.warn('   See docs/security-architecture.md for details.\n');
+        console.warn(
+          palette.err(
+            `\n${GLYPH.warn}  WARNING: Codeman is bound to a non-loopback host (${this.host}) with NO password.`
+          )
+        );
+        console.warn(
+          palette.err(`   Anyone who can reach ${displayHost}:${this.port} can control your Claude sessions.`)
+        );
+        console.warn(palette.warn('   Secure it with ONE of:'));
+        console.warn(palette.warn('     • set CODEMAN_PASSWORD=<password>   (HTTP Basic auth), or'));
+        console.warn(palette.warn('     • bind loopback only: --host 127.0.0.1, then front it with an'));
+        console.warn(palette.warn('       authenticated tunnel (cloudflared) or `tailscale serve`, or'));
+        console.warn(palette.warn('     • keep this bind and accept the risk: --allow-unauthenticated-network'));
+        console.warn(palette.muted('   See docs/security-architecture.md for details.\n'));
       }
     }
 

@@ -658,6 +658,22 @@ These run for **every** request — before auth, even on the default no-password
 
 ---
 
+## Terminal UI (`codeman tui`)
+
+A full-screen dashboard for your sessions, in the terminal. Same states as the web UI, because it is a client of the same server:
+
+```bash
+codeman tui              # the dashboard
+codeman tui --list       # numbered session list, then exit (scriptable)
+codeman tui 2            # attach straight to session 2 of that list
+```
+
+Sessions are grouped **NEEDS YOU → WORKING → IDLE → RECENT**, longest-waiting first. `↑↓`/`j`/`k` select, `1`-`9` and `[`/`]` switch between sessions, `Enter` attaches into the tmux pane (**`F1`** to come back). Inside a pane the bar across the top keeps the session strip visible and `Alt+1`-`Alt+9` switch without leaving. `y`/`n`/digit answer a pending permission dialog right from the list, `p` sends a one-line prompt, `n` starts a session and opens straight into it, `x` kills one (`y` confirms), `/` searches, `g` shows the away digest, `?` is help, `q` quits. Below 72 columns it drops the preview pane and becomes a single-column list, so it stays usable in Termius on a phone. With no server running it still starts in attach-only degraded mode.
+
+The web UI remains the primary surface; see **[docs/tui.md](docs/tui.md)** for the full guide.
+
+---
+
 ## SSH Alternative (`sc`)
 
 If you prefer SSH (Termius, Blink, etc.), the `sc` command is a thumb-friendly session chooser:
@@ -668,7 +684,7 @@ sc 2            # Quick attach to session 2
 sc -l           # List sessions
 ```
 
-Single-digit selection (1-9), color-coded status, token counts, auto-refresh. Detach with `Ctrl+A D`.
+Single-digit selection (1-9), color-coded status, token counts, auto-refresh. `sc` hands you to a plain `tmux attach`, so you leave the pane with tmux's own detach chord: `Ctrl+B`, release, then `d`. (`codeman tui` is the one that gives you a single `F1` instead, because its attach claims that key for the duration.)
 
 ---
 
@@ -893,7 +909,9 @@ codeman session start -d /path/to/repo   # (s)  start a session
 codeman session list                     #      list sessions
 codeman session logs <id>                #      tail output
 codeman task add "fix the failing test"  # (t)  queue a task
-codeman attach <path>                     #      attach a Claude hook context
+codeman attach <path>                    #      show an attachment card for a local file
+codeman tui --list                       #      numbered session list (plain text when piped)
+codeman tui 3                            #      attach to session 3 of that list
 ```
 
 ### Hooks (events flowing _back_ to Codeman)

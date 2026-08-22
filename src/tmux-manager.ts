@@ -31,7 +31,13 @@ import { existsSync, readFileSync, mkdirSync } from 'node:fs';
 import { writeFile, rename } from 'node:fs/promises';
 import { dirname } from 'node:path';
 import { homedir } from 'node:os';
-import { dataPath, DEFAULT_TMUX_SOCKET, CODEMAN_INSTANCE } from './config/instance.js';
+import {
+  dataPath,
+  DEFAULT_TMUX_SOCKET,
+  CODEMAN_INSTANCE,
+  SAFE_TMUX_SOCKET_PATTERN,
+  resolveTmuxSocketName,
+} from './config/instance.js';
 import {
   ProcessStats,
   PersistedRespawnConfig,
@@ -199,9 +205,6 @@ const SAFE_PANE_TARGET_PATTERN = /^(%\d+|\d+)$/;
 /** Dedicated tmux socket for new Codeman-owned sessions (instance-scoped:
  *  `codeman` for prod, `codeman-beta` on the beta branch). */
 const DEFAULT_CODEMAN_TMUX_SOCKET = DEFAULT_TMUX_SOCKET;
-
-/** Regex to validate tmux socket names passed to `tmux -L`. */
-const SAFE_TMUX_SOCKET_PATTERN = /^[a-zA-Z0-9_.-]+$/;
 
 /**
  * Separator used in `tmux list-panes -F` output between session name and pid.
@@ -597,9 +600,8 @@ function resolveConfiguredTmuxSocket(): string {
   const raw = process.env.CODEMAN_TMUX_SOCKET ?? DEFAULT_CODEMAN_TMUX_SOCKET;
   if (!SAFE_TMUX_SOCKET_PATTERN.test(raw)) {
     console.warn(`[TmuxManager] Ignoring invalid CODEMAN_TMUX_SOCKET: ${JSON.stringify(raw)}`);
-    return DEFAULT_CODEMAN_TMUX_SOCKET;
   }
-  return raw;
+  return resolveTmuxSocketName();
 }
 
 /** Build the `tmux -L <socket>` command prefix. Socket name is shell-escaped. */
