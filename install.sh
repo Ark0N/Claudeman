@@ -2450,9 +2450,9 @@ main() {
 
     echo -e "  ${BOLD}Mobile Access (Termius/SSH):${NC}"
     echo ""
-    echo -e "    ${CYAN}sc${NC}              # Interactive tmux session chooser"
-    echo -e "    ${CYAN}sc 2${NC}            # Quick attach to session 2"
-    echo -e "    ${CYAN}sc -h${NC}           # Help"
+    echo -e "    ${CYAN}codeman tui${NC}     # Full-screen session dashboard"
+    echo -e "    ${CYAN}codeman tui 2${NC}   # Attach straight to session 2"
+    echo -e "    ${CYAN}codeman tui -l${NC}  # Numbered list, then exit"
     echo ""
 
     echo -e "  ${BOLD}Documentation:${NC}"

@@ -253,7 +253,7 @@ codeman web -H 0.0.0.0            # 绑定局域网 —— 必须设置 CODEMAN_
 
 - **手机/平板** —— UI 完全触控优化；扫描桌面上的**二维码**即可免密码登录。
 - **网络之外** —— `./scripts/tunnel.sh start` 打开一条 Cloudflare 隧道（先设置 `CODEMAN_PASSWORD`）。
-- **SSH** —— `sc` 选择器可从终端附着任意会话（`sc` 交互式，`sc 2` 快速附着，`sc -l` 列表）。
+- **SSH** —— `codeman tui` 是终端里的全屏会话面板（`codeman tui --list` 列出，`codeman tui 2` 直接附着到某个会话）。
 
 ### 7. 运维与维护
 
@@ -612,20 +612,6 @@ Codeman 默认用 `--dangerously-skip-permissions` 启动会话，因此 Web UI 
 - **多实例隔离** —— `CODEMAN_INSTANCE` 同时限定 tmux 套接字（`-L codeman-<name>`）与数据目录（`~/.codeman-<name>`），因此两个实例绝不会互相附着对方的活动会话
 
 > 移动端登录使用一次性、60 秒二维码令牌 —— 完整设计见上文[二维码认证](#二维码认证)（它应对了 USENIX Security 2025 二维码登录研究中的全部 6 个缺陷）。
-
----
-
-## SSH 替代方案（`sc`）
-
-如果你更喜欢 SSH（Termius、Blink 等），`sc` 命令是一个便于拇指操作的会话选择器：
-
-```bash
-sc              # 交互式选择器
-sc 2            # 快速附着到会话 2
-sc -l           # 列出会话
-```
-
-单数字选择（1–9）、颜色编码的状态、token 计数、自动刷新。用 `Ctrl+A D` 分离。
 
 ---
 

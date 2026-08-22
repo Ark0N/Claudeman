@@ -73,8 +73,10 @@ features are Claude-only; [Agent CLIs](Agent-CLIs) lists exactly which.
 
 ### Can I attach to a session from a terminal instead of the browser?
 
-Yes. `sc` is an interactive chooser (`sc 2` attaches directly, `sc -l` lists), or use tmux
-directly on the `codeman` socket. Detach with `Ctrl+A D`.
+Yes. `codeman tui` is a full-screen dashboard of your sessions, with the same
+NEEDS YOU / WORKING / IDLE grouping the web UI uses. `codeman tui --list` prints the
+numbered list and exits, and `codeman tui 2` attaches straight to session 2. `Enter`
+attaches, `F1` comes back. You can also use tmux directly on the `codeman` socket.
 
 ## Running unattended
 

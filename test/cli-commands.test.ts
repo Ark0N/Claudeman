@@ -138,7 +138,7 @@ describe('registered options', () => {
     expect(flagsOf(find(program, 'doctor')!)).toEqual(expect.arrayContaining(['--json', '--category']));
   });
 
-  it('keeps the two `tui` fast paths, which stand in for `sc -l` and `sc 2`', () => {
+  it('keeps the two `tui` fast paths that scripts call', () => {
     expect(flagsOf(find(program, 'tui')!)).toEqual(expect.arrayContaining(['-l', '--list']));
   });
 

@@ -213,8 +213,8 @@ export function glyphsFor(tier: TuiGlyphTier): TuiGlyphSet {
 /**
  * Glyph tier from the environment. IO-ish by nature (it reads env), so it takes
  * the env as an argument and the app layer calls it once at startup. The
- * known-capable list is the same gate `scripts/tmux-chooser.sh` uses, plus a
- * UTF-8 locale check and an explicit override.
+ * known-capable list is a TERM allowlist, plus a UTF-8 locale check and an
+ * explicit override.
  */
 export function detectGlyphTier(env: Record<string, string | undefined>): TuiGlyphTier {
   const override = env.CODEMAN_TUI_GLYPHS;

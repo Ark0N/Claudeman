@@ -20,7 +20,7 @@ codeman tui --list       # print the numbered session list and exit
 codeman tui 2            # attach straight to session 2 of that list
 ```
 
-The two fast paths are the scriptable ones (they are the `sc -l` / `sc 2` shapes).
+The two fast paths are the scriptable ones.
 Neither sets up a screen, so both are as quick as the one API call they make, and
 `--list` prints plain text when piped, so it composes with `grep`/`awk`.
 
@@ -228,8 +228,8 @@ The TUI is an ordinary terminal program with no local dependencies beyond tmux, 
 separate remote mode.
 
 Below 72 columns (Termius, an iPhone in portrait) the preview pane is dropped and
-rows take two lines each: the same constraint the `sc` chooser was built around,
-now with a cursor, live states and the answer/prompt/kill verbs. The switch is
+rows take two lines each, keeping the cursor, the live states and the
+answer/prompt/kill verbs. The switch is
 width-driven at draw time, so unfolding a foldable or resizing a window re-lays out
 immediately; there is no mode flag to set.
 

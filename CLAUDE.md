@@ -87,7 +87,7 @@ Codeman is a Claude Code session manager with web interface and autonomous Ralph
 
 **Requirements**: Node.js 22+, Claude CLI, tmux
 
-**Git**: Main branch is `master`. SSH session chooser: `sc` (interactive), `sc 2` (quick attach), `sc -l` (list).
+**Git**: Main branch is `master`. Terminal session dashboard: `codeman tui` (`--list` to list, `codeman tui <n>` to attach).
 
 ## Additional Commands
 

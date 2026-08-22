@@ -179,16 +179,19 @@ the same IP, which matters because all tunnel traffic arrives from one loopback 
 
 ## Terminal alternatives
 
-You do not have to use a browser. `sc` is a thumb-friendly session chooser for SSH clients
-like Termius or Blink:
+You do not have to use a browser. `codeman tui` is a full-screen session dashboard that
+works well in SSH clients like Termius or Blink:
 
 ```bash
-sc          # interactive chooser
-sc 2        # attach to session 2
-sc -l       # list
+codeman tui           # the dashboard
+codeman tui 2         # attach straight to session 2
+codeman tui --list    # numbered list, then exit
 ```
 
-Detach with `Ctrl+A D`. The sessions are the same ones the dashboard shows.
+`Enter` attaches into the pane and `F1` comes back. Under 72 columns it drops the preview
+and becomes a single-column list, so it stays usable on a phone. The sessions are the same
+ones the dashboard shows. See [docs/tui.md](https://github.com/Ark0N/Codeman/blob/master/docs/tui.md)
+for the full guide.
 
 ## Common problems
 

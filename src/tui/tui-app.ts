@@ -2600,8 +2600,9 @@ export async function runTui(options: TuiRunOptions = {}): Promise<number> {
 }
 
 /**
- * `codeman tui --list`: the `sc -l` replacement. Prints and exits, colored when
- * the output is a terminal and plain when it is piped (chalk's call, not ours).
+ * `codeman tui --list`: prints and exits, colored when the output is a terminal
+ * and plain when it is piped (chalk's call, not ours), so it composes with
+ * grep/awk.
  */
 export async function runTuiList(options: TuiRunOptions = {}): Promise<number> {
   const stdout = options.stdout ?? process.stdout;
@@ -2638,8 +2639,8 @@ export async function runTuiList(options: TuiRunOptions = {}): Promise<number> {
 }
 
 /**
- * `codeman tui <n>`: the `sc 2` replacement. No screen setup at all, so it is
- * as fast as the API call it makes.
+ * `codeman tui <n>`: attach straight to the nth row of `--list`. No screen setup
+ * at all, so it is as fast as the API call it makes.
  */
 export async function runTuiAttach(position: number, options: TuiRunOptions = {}): Promise<number> {
   const stdin = options.stdin ?? process.stdin;

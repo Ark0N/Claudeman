@@ -139,7 +139,7 @@ set -g extended-keys-format csi-u
 
 Codeman's browser input path sends `\r` for submit, so basic use works
 unconfigured — what degrades is newline-in-editor, mostly when you attach to the
-pane directly (`sc`).
+pane directly (`codeman tui`).
 
 ⚠️ Upstream notes the setting may need a full `tmux kill-server` to take effect.
 **Never run `tmux kill-server` on Codeman's socket** — it would kill every live
