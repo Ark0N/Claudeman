@@ -1240,13 +1240,13 @@ describe('_renderWelcomeCliButtons (welcome-screen buttons follow enabled/disabl
     expect(welcomeCliButtons.children).toHaveLength(1);
   });
 
-  it('excludes shell -- these buttons are "jump into an agent", shell has its own path', () => {
+  it('includes an enabled shell entry -- the original hardcoded markup never had a button for it at all', () => {
     const { app, welcomeCliButtons, context } = loadHarness();
-    context.__codemanClis = [CLI(), CLI({ id: 'shell', kind: 'shell' })];
+    context.__codemanClis = [CLI(), CLI({ id: 'shell', label: 'Shell', kind: 'shell', order: 1 })];
 
     app._renderWelcomeCliButtons();
 
-    expect(welcomeCliButtons.children).toHaveLength(1);
+    expect(welcomeCliButtons.children).toHaveLength(2);
   });
 
   it('uses the hand-crafted per-mode class for the original five, sorted by order', () => {

@@ -523,11 +523,11 @@ Object.assign(CodemanApp.prototype, {
   /**
    * Rebuilds #welcomeCliButtons from window.__codemanClis, called from
    * applyWelcomeCliVisibility() every time the welcome screen shows — so enabling or
-   * disabling a CLI in Settings (Agents & CLIs) adds or removes its welcome button, the
-   * same fix as _renderRunModeOptions() for the Run menu. Shows one button per CLI that
-   * is both ENABLED and AVAILABLE (installed) — shell is excluded, since these five (now:
-   * however many) buttons are specifically "jump straight into an agent", and shell is
-   * already reachable from the Run dropdown.
+   * disabling ANY CLI in Settings (Agents & CLIs), stock or custom, adds or removes its
+   * welcome button automatically, the same fix as _renderRunModeOptions() for the Run
+   * menu. Shows one button per registry entry that is both ENABLED and AVAILABLE
+   * (installed), sorted by `order` — including shell, which the ORIGINAL hardcoded markup
+   * never had a button for at all.
    *
    * A missing/empty registry blob (an old cached page, or a page that never got the
    * injection) falls back to the original five-button, availability-only gating rather
@@ -554,9 +554,7 @@ Object.assign(CodemanApp.prototype, {
 
     const container = document.getElementById('welcomeCliButtons');
     if (!container) return;
-    const shown = clis
-      .filter(c => c.enabled && c.kind !== 'shell' && c.available !== false)
-      .sort((a, b) => a.order - b.order);
+    const shown = clis.filter(c => c.enabled && c.available !== false).sort((a, b) => a.order - b.order);
     container.replaceChildren(...shown.map(c => this._buildWelcomeCliButton(c)));
   },
 
