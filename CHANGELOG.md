@@ -1,5 +1,40 @@
 # aicodeman
 
+## 1.21.0
+
+### Minor Changes
+
+- **`codeman tui`: a terminal dashboard for your sessions.** For the times you are in SSH or Termius instead of a browser. The web UI remains the primary surface and bare `codeman` still prints help, so the dashboard itself is strictly additive.
+
+  Sessions are grouped NEEDS YOU / WORKING / IDLE / RECENT in the same status language as the web tabs and the phone overview, and the states come from the server (hooks, idle confirmation, the approvals inbox) over the existing HTTP/SSE API rather than being screen-scraped. That is what lets the dashboard answer a permission dialog instead of only reporting one.
+  - `↑↓`/`j`/`k` select; `1`-`9`, `[`/`]` and `Tab` switch between sessions
+  - `Enter` attaches and hands the terminal to tmux; **`F1` comes back**, one key, no modifier. Inside the pane a bar across the top carries the session strip and `Alt+1`..`Alt+9` switch without returning to the dashboard first
+  - `Enter` on a RECENT row resumes that conversation; on a session whose pane has died it refuses and offers `r` to resume it in a fresh pane
+  - `y`/`n`/digits answer the selected session's pending permission or question card (the server re-captures the pane first, so a keystroke can never land in the composer)
+  - `p` sends a one-line prompt without attaching, `x` kills (`y` confirms), `n` starts a session and opens straight into it
+  - `/` cross-session search, `g` away digest, `?` help, live preview pane, plan-usage chip in the header, a terminal bell when a new approval arrives
+  - `codeman tui --list` and `codeman tui <n>` are scriptable fast paths; with no server running it lists panes straight from the instance's tmux socket, attach-only, and upgrades live when the server comes back
+
+  Narrow terminals (under 72 columns, a phone SSH client) drop the preview and get a single-column layout. `NO_COLOR`, non-UTF-8 glyph fallback and a non-TTY refusal are all handled. Zero new dependencies: hand-rolled ANSI over chalk and commander. User guide: `docs/tui.md`.
+
+  **Breaking: the `sc` tmux chooser is retired.** `scripts/tmux-chooser.sh` is deleted and `install.sh` no longer creates the `tmux-chooser` symlink or the `sc` alias; it sweeps both up instead, on update and on uninstall. `codeman tui` replaces it and does the job better: `sc` numbered its entries globally but only accepted a single `[1-9]` keypress, so sessions 10+ were listed and could not be selected, and it inferred nothing about what an agent was doing. The alias cleanup is marker-owned, matching the exact line the installer wrote, so a user's own `alias sc=` for another tool is untouched.
+
+  **CLI polish that came with it.**
+  - New shared style kit (`src/cli-style.ts`) used across the CLI: semantic palette, glyphs, width-aware table, spinner, confirm.
+  - `codeman doctor` is colorized and its table is measured, so the "Antigravity CLI" label no longer pushes its row out of column. `--json` output is unchanged.
+  - `codeman web` no longer prints its "running at" line twice, and the server's non-loopback security warning is painted like the CLI's (chalk degrades off a TTY, so journald and `web.log` stay free of escape codes).
+  - Spinners on the silent up-to-30s waits in `codeman web -d`, `codeman web --stop` and `codeman service install`.
+  - `codeman reset` asks a real y/N confirmation on a TTY; non-interactive callers keep the old `--force` refusal.
+  - `codeman list` and `codeman session list` share one renderer instead of drifting copies.
+  - `codeman attach` is described correctly in the README (it shows an attachment card for a local file).
+  - `test/cli-commands.test.ts` now derives its inventory from the real commander program instead of a hand-written fixture that had drifted.
+
+  **Internal.** New `tmux -L` callers resolve the socket through `resolveTmuxSocketName()`, now exported from `config/instance.ts`, so a second process can never point a beta instance at prod's panes. CLAUDE.md and `docs/architecture-invariants.md` both record the rule.
+
+  ### Thanks
+
+  The TUI went through seven rounds of beta testing over PuTTY/SSH by **@Ark0N**, which is where the way out of an attach, the session strip, the preview repaint handling and the glyph set all came from.
+
 ## 1.20.1
 
 ### Patch Changes
