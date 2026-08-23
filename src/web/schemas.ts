@@ -122,7 +122,17 @@ export const FileWriteSchema = z
 // ========== Env Var Allowlist ==========
 
 /** Allowlisted env var key prefixes */
-const ALLOWED_ENV_PREFIXES = ['CLAUDE_CODE_', 'OPENCODE_', 'CODEX_', 'GEMINI_', 'GOOGLE_', 'ANTIGRAVITY_', 'PI_'];
+const ALLOWED_ENV_PREFIXES = [
+  'CLAUDE_CODE_',
+  'OPENCODE_',
+  'CODEX_',
+  'GEMINI_',
+  'GOOGLE_',
+  'ANTIGRAVITY_',
+  'PI_',
+  'GROK_',
+  'XAI_',
+];
 
 /**
  * Allowlisted exact env var keys (checked alongside the prefixes).
@@ -161,7 +171,7 @@ const safeEnvOverridesSchema = z
     },
     {
       message:
-        'envOverrides contains blocked or disallowed env var keys. Only CLAUDE_CODE_*, OPENCODE_*, CODEX_*, GEMINI_*, GOOGLE_*, ANTIGRAVITY_*, PI_* keys and CLAUDE_CONFIG_DIR are allowed.',
+        'envOverrides contains blocked or disallowed env var keys. Only CLAUDE_CODE_*, OPENCODE_*, CODEX_*, GEMINI_*, GOOGLE_*, ANTIGRAVITY_*, PI_*, GROK_*, XAI_* keys and CLAUDE_CONFIG_DIR are allowed.',
     }
   );
 
@@ -301,6 +311,32 @@ const PiConfigSchema = z
   .optional();
 
 /**
+ * Schema for Grok Build CLI (xAI `grok`)-specific configuration.
+ *
+ * `alwaysApprove` maps to `--always-approve` (grok's bypassPermissions mode).
+ * An ABSENT config spawns bare `grok` = grok's own ask-mode default, so the
+ * multi-user clamp only needs the only-if-sent branch (like codex/antigravity).
+ */
+const GrokConfigSchema = z
+  .object({
+    model: z
+      .string()
+      .max(100)
+      .regex(/^[a-zA-Z0-9._\-/]+$/)
+      .optional(),
+    alwaysApprove: z.boolean().optional(),
+    continueSession: z.boolean().optional(),
+    // Ids only: grok's --resume also matches session TITLES (arbitrary user
+    // strings), which this regex deliberately cannot express.
+    resumeSessionId: z
+      .string()
+      .max(100)
+      .regex(/^[a-zA-Z0-9._-]+$/)
+      .optional(),
+  })
+  .optional();
+
+/**
  * The session that spawned the one being created — pure UI decoration, drawn as a
  * lineage line between the two tabs. Accepted here and, equivalently, as the
  * `X-Codeman-Parent-Session` header (the agent skill sets that once on its shared
@@ -313,7 +349,7 @@ const parentSessionIdSchema = z.string().max(100).optional();
 
 export const CreateSessionSchema = z.object({
   workingDir: safePathSchema.optional(),
-  mode: z.enum(['claude', 'shell', 'opencode', 'codex', 'gemini', 'antigravity', 'pi']).optional(),
+  mode: z.enum(['claude', 'shell', 'opencode', 'codex', 'gemini', 'antigravity', 'pi', 'grok']).optional(),
   name: z.string().max(100).optional(),
   /** Session that spawned this one — see parentSessionIdSchema. */
   parentSessionId: parentSessionIdSchema,
@@ -329,6 +365,7 @@ export const CreateSessionSchema = z.object({
   geminiConfig: GeminiConfigSchema,
   antigravityConfig: AntigravityConfigSchema,
   piConfig: PiConfigSchema,
+  grokConfig: GrokConfigSchema,
   /** Resume a previous Claude conversation by its session ID (used for reboot recovery) */
   resumeSessionId: z
     .string()
@@ -464,6 +501,7 @@ const RemoteCommandOverridesSchema = z
     gemini: z.string().min(1).max(300).optional(),
     antigravity: z.string().min(1).max(300).optional(),
     pi: z.string().min(1).max(300).optional(),
+    grok: z.string().min(1).max(300).optional(),
   })
   .strict()
   .optional();
@@ -738,12 +776,13 @@ export const QuickStartSchema = z.object({
    *  a real host dir, so the settings file crosses the bind mount); rejected for
    *  remote cases (the file would be written on the WRONG machine). */
   modelOverride: z.string().max(50).optional(),
-  mode: z.enum(['claude', 'shell', 'opencode', 'codex', 'gemini', 'antigravity', 'pi']).optional(),
+  mode: z.enum(['claude', 'shell', 'opencode', 'codex', 'gemini', 'antigravity', 'pi', 'grok']).optional(),
   openCodeConfig: OpenCodeConfigSchema,
   codexConfig: CodexConfigSchema,
   geminiConfig: GeminiConfigSchema,
   antigravityConfig: AntigravityConfigSchema,
   piConfig: PiConfigSchema,
+  grokConfig: GrokConfigSchema,
   envOverrides: safeEnvOverridesSchema,
   /** Claude CLI effort level (soft default via --settings, switchable in-session via /effort) */
   effort: effortLevelSchema,
@@ -1267,7 +1306,7 @@ const noNewlines = (v: string) => !/[\r\n]/.test(v);
 /** Shared field shape for creating/updating a scheduled job. */
 const CronJobBaseSchema = z.object({
   name: z.string().min(1).max(200),
-  agentType: z.enum(['claude', 'shell', 'opencode', 'codex', 'gemini', 'antigravity', 'pi']),
+  agentType: z.enum(['claude', 'shell', 'opencode', 'codex', 'gemini', 'antigravity', 'pi', 'grok']),
   workingDir: safePathSchema,
   launchCommand: z.string().max(2000).refine(noNewlines, 'launchCommand must be a single line').optional(),
   promptMode: z.enum(['inline_text', 'prompt_file_path']),

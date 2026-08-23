@@ -145,6 +145,7 @@ export function defaultDockerCommandForMode(mode: SessionMode): string {
     gemini: 'exec gemini',
     antigravity: 'exec agy',
     pi: 'exec pi',
+    grok: 'exec grok',
   };
   return commands[mode as DockerCommandMode] || commands.shell;
 }
@@ -613,6 +614,16 @@ const CRED_STORES: CredStorePolicy[] = [
   {
     rel: '.pi/agent',
     seedFiles: ['auth.json', 'settings.json', 'trust.json', 'models.json', 'models-store.json'],
+  },
+  // Grok (xAI) keeps auth + config in `~/.grok`, but that dir ALSO holds
+  // `sessions/`, `memory/`, `downloads/` (the ~100MB binary itself) and `bin/`,
+  // so seedWhole would copy all of it into every container start. Seed only what
+  // grok needs to authenticate and behave consistently. Same trade-off as pi:
+  // in-container grok sessions are invisible host-side, so `grok -c` inside a
+  // Docker case only sees that container's own history.
+  {
+    rel: '.grok',
+    seedFiles: ['auth.json', 'config.toml', 'pager.toml'],
   },
   { rel: '.config/gcloud', seedWhole: true },
   { rel: '.config/opencode', seedWhole: true },

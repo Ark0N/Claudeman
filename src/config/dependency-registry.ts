@@ -8,6 +8,7 @@
  */
 
 import { PI_VERSION_REGEX } from '../utils/pi-cli-resolver.js';
+import { GROK_VERSION_REGEX } from '../utils/grok-cli-resolver.js';
 
 export type ProbeEnvironment = 'linux' | 'darwin' | 'win32' | 'wsl';
 
@@ -134,6 +135,29 @@ export const DEPENDENCY_REGISTRY: ToolDependency[] = [
           bins: ['pi'],
           versionArg: '--version',
           versionRegex: PI_VERSION_REGEX,
+          requireVersionMatch: true,
+        },
+      },
+    ],
+  },
+  {
+    id: 'grok',
+    label: 'Grok CLI',
+    category: 'core',
+    required: false,
+    usedBy: ['Grok sessions'],
+    // Version match required for the same reason as pi: `grok` has known squatters
+    // (the unrelated @vibe-kit/grok-cli npm package also installs a `grok` bin), so a
+    // bare `which grok` hit is not the coding agent. Both sides share
+    // GROK_VERSION_REGEX, so the doctor and the run mode cannot drift.
+    resolvers: [
+      {
+        match: ALL,
+        resolver: {
+          kind: 'path',
+          bins: ['grok'],
+          versionArg: '--version',
+          versionRegex: GROK_VERSION_REGEX,
           requireVersionMatch: true,
         },
       },

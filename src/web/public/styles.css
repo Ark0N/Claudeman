@@ -347,7 +347,8 @@ html:is([data-skin="paper-gray"], [data-skin="solarized-light"], [data-skin="cat
   .history-view-all-btn,
   .session-tab .tab-mode.gemini,
   .session-tab .tab-mode.antigravity,
-  .session-tab .tab-mode.pi
+  .session-tab .tab-mode.pi,
+  .session-tab .tab-mode.grok
 ) {
   color: var(--accent-d);
 }
@@ -2246,6 +2247,11 @@ body.solo-mode .btn-lifecycle-log {
   color: #f472b6;
 }
 
+.session-tab .tab-mode.grok {
+  background: rgba(212, 212, 216, 0.18);
+  color: #d4d4d8;
+}
+
 /* Timer Banner - Compact */
 .timer-banner {
   display: flex;
@@ -3610,6 +3616,23 @@ body.touch-device .terminal-container .xterm .xterm-helper-textarea {
   transform: translateY(-1px);
 }
 
+/* Grok (xAI): monochrome charcoal identity, matching .btn-toolbar.btn-run.mode-grok
+   and .run-mode-dot.grok so the welcome action reads as the same backend. */
+.welcome-btn-grok {
+  background: linear-gradient(135deg, #131316 0%, #27272a 55%, #3f3f46 100%);
+  border-color: rgba(212, 212, 216, 0.4);
+  color: #f4f4f5;
+  box-shadow: 0 2px 8px rgba(212, 212, 216, 0.12), inset 0 1px 0 rgba(255, 255, 255, 0.06);
+}
+
+.welcome-btn-grok:hover {
+  background: linear-gradient(135deg, #1f1f23 0%, #3f3f46 55%, #52525b 100%);
+  box-shadow: 0 4px 20px rgba(212, 212, 216, 0.22), 0 0 40px rgba(161, 161, 170, 0.1), inset 0 1px 0 rgba(255, 255, 255, 0.08);
+  border-color: rgba(228, 228, 231, 0.5);
+  color: #fafafa;
+  transform: translateY(-1px);
+}
+
 .welcome-btn-gemini {
   background: linear-gradient(135deg, #10243f 0%, #174ea6 55%, #4f46e5 100%);
   border-color: rgba(96, 165, 250, 0.4);
@@ -4684,6 +4707,25 @@ body.touch-device .terminal-container .xterm .xterm-helper-textarea {
   color: #fff1f7;
 }
 
+/* Grok mode colors. Same cascade note as pi above: this base-sheet pair only
+   renders on the `og` skin — the nested `html:not([data-skin="og"])` block
+   re-declares `.btn-toolbar.btn-run` at a HIGHER specificity, so grok also
+   carries a rule inside that block (search `.btn-toolbar.btn-run.mode-grok`). */
+.btn-toolbar.btn-run.mode-grok,
+.btn-toolbar.btn-run-gear.mode-grok {
+  background: linear-gradient(135deg, #131316 0%, #27272a 55%, #3f3f46 100%);
+  border-color: rgba(212, 212, 216, 0.5);
+  color: #f4f4f5;
+  box-shadow: 0 1px 2px rgba(0, 0, 0, 0.2), inset 0 1px 0 rgba(255, 255, 255, 0.06);
+}
+.btn-toolbar.btn-run.mode-grok:hover,
+.btn-toolbar.btn-run-gear.mode-grok:hover {
+  background: linear-gradient(135deg, #1f1f23 0%, #3f3f46 55%, #52525b 100%);
+  box-shadow: 0 0 12px rgba(212, 212, 216, 0.28), 0 2px 8px rgba(63, 63, 70, 0.3), inset 0 1px 0 rgba(255, 255, 255, 0.08);
+  border-color: rgba(228, 228, 231, 0.6);
+  color: #fafafa;
+}
+
 /* Dropdown menu */
 .run-mode-menu {
   display: none;
@@ -4767,6 +4809,7 @@ body.touch-device .terminal-container .xterm .xterm-helper-textarea {
 .run-mode-dot.gemini { background: #8ab4f8; }
 .run-mode-dot.antigravity { background: #22d3ee; }
 .run-mode-dot.pi { background: #f472b6; }
+.run-mode-dot.grok { background: #a1a1aa; }
 .run-mode-dot.shell { background: #94a3b8; }
 
 /* Phone-only Enter button (see index.html). Hidden by default at every width;
@@ -14102,6 +14145,15 @@ html:not([data-skin="og"]) {
   color: #fff1f7;
 }
 .btn-toolbar.btn-run.mode-pi:hover { box-shadow: 0 0 14px -2px rgba(244, 114, 182, 0.45); }
+/* Grok keeps its charcoal identity on the non-og skins. Same specificity trap
+   as pi above: without this rule the generic `.btn-toolbar.btn-run` in this
+   nested block wins and grok renders as generic claude blue. */
+.btn-toolbar.btn-run.mode-grok {
+  background: linear-gradient(135deg, #27272a, #52525b);
+  border-color: #18181b;
+  color: #fafafa;
+}
+.btn-toolbar.btn-run.mode-grok:hover { box-shadow: 0 0 14px -2px rgba(161, 161, 170, 0.5); }
 .btn-toolbar.btn-run-gear {
   background: var(--accent-d);
   border-color: var(--accent);

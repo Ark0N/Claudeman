@@ -125,6 +125,14 @@ PI_SEARCH_PATHS=(
     "$HOME/bin/pi"
 )
 
+# Grok CLI search paths (from src/utils/grok-cli-resolver.ts)
+GROK_SEARCH_PATHS=(
+    "$HOME/.grok/bin/grok"
+    "$HOME/.local/bin/grok"
+    "/usr/local/bin/grok"
+    "$HOME/bin/grok"
+)
+
 # Antigravity CLI search paths (from src/utils/antigravity-cli-resolver.ts)
 ANTIGRAVITY_SEARCH_PATHS=(
     "$HOME/.local/bin/agy"
@@ -562,6 +570,37 @@ get_pi_path() {
     fi
 
     for path in "${PI_SEARCH_PATHS[@]}"; do
+        if [[ -x "$path" ]]; then
+            echo "$path"
+            return
+        fi
+    done
+}
+
+# `grok` has known squatters too (the unrelated @vibe-kit/grok-cli), so the
+# server-side resolver additionally probes `grok --version`. Detection here only
+# feeds the "you have no AI CLI" hint, so a plain executable test is enough.
+check_grok() {
+    if command -v grok &>/dev/null; then
+        return 0
+    fi
+
+    for path in "${GROK_SEARCH_PATHS[@]}"; do
+        if [[ -x "$path" ]]; then
+            return 0
+        fi
+    done
+
+    return 1
+}
+
+get_grok_path() {
+    if command -v grok &>/dev/null; then
+        command -v grok
+        return
+    fi
+
+    for path in "${GROK_SEARCH_PATHS[@]}"; do
         if [[ -x "$path" ]]; then
             echo "$path"
             return
@@ -2083,6 +2122,7 @@ main() {
     local has_gemini=false
     local has_antigravity=false
     local has_pi=false
+    local has_grok=false
 
     info "Checking AI CLI tools..."
     if check_claude; then
@@ -2109,17 +2149,21 @@ main() {
         has_pi=true
         success "Pi CLI found at $(get_pi_path)"
     fi
+    if check_grok; then
+        has_grok=true
+        success "Grok CLI found at $(get_grok_path)"
+    fi
 
-    if [[ "$has_claude" == "false" && "$has_opencode" == "false" && "$has_codex" == "false" && "$has_gemini" == "false" && "$has_antigravity" == "false" && "$has_pi" == "false" ]]; then
+    if [[ "$has_claude" == "false" && "$has_opencode" == "false" && "$has_codex" == "false" && "$has_gemini" == "false" && "$has_antigravity" == "false" && "$has_pi" == "false" && "$has_grok" == "false" ]]; then
         echo ""
-        warn "No AI CLI found. Codeman needs at least one: Claude Code, OpenCode, Codex, Antigravity, Gemini, or Pi."
+        warn "No AI CLI found. Codeman needs at least one: Claude Code, OpenCode, Codex, Antigravity, Gemini, Pi, or Grok."
         headless_guard "install an AI CLI (curl | bash from its vendor)"
         echo ""
         echo -e "  ${BOLD}Which AI CLI would you like to install?${NC}"
         echo -e "    ${CYAN}1)${NC} Claude Code  (Anthropic)"
         echo -e "    ${CYAN}2)${NC} OpenCode     (open-source)"
         echo -e "    ${CYAN}3)${NC} Both"
-        echo -e "    ${CYAN}4)${NC} Skip         (I'll install one myself, e.g. Codex, Antigravity or Pi)"
+        echo -e "    ${CYAN}4)${NC} Skip         (I'll install one myself, e.g. Codex, Antigravity, Pi or Grok)"
         echo ""
 
         local cli_choice=""
@@ -2167,6 +2211,7 @@ main() {
             info "Install one later, e.g.: npm install -g @openai/codex                          (Codex)"
             info "                    or: curl -fsSL https://antigravity.google/cli/install.sh | bash  (Antigravity)"
             info "                    or: npm install -g --ignore-scripts @earendil-works/pi-coding-agent   (Pi)"
+            info "                    or: curl -fsSL https://x.ai/cli/install.sh | bash                     (Grok)"
         elif [[ "$has_claude" == "false" ]] && [[ "$has_opencode" == "false" ]]; then
             die "The selected AI CLI failed to install. Install one manually and re-run the installer."
         fi
@@ -2467,13 +2512,14 @@ main() {
     echo -e "    https://github.com/Ark0N/Codeman"
     echo ""
 
-    if ! check_claude && ! check_opencode && ! check_codex && ! check_gemini && ! check_antigravity && ! check_pi; then
+    if ! check_claude && ! check_opencode && ! check_codex && ! check_gemini && ! check_antigravity && ! check_pi && ! check_grok; then
         echo -e "  ${YELLOW}${BOLD}Reminder:${NC} Install at least one AI CLI to start using Codeman:"
         echo -e "    ${CYAN}curl -fsSL https://claude.ai/install.sh | bash${NC}                # Claude Code"
         echo -e "    ${CYAN}curl -fsSL https://opencode.ai/install | bash${NC}                 # OpenCode"
         echo -e "    ${CYAN}npm install -g @openai/codex${NC}                                  # Codex"
         echo -e "    ${CYAN}curl -fsSL https://antigravity.google/cli/install.sh | bash${NC}   # Antigravity"
         echo -e "    ${CYAN}npm install -g --ignore-scripts @earendil-works/pi-coding-agent${NC}  # Pi"
+        echo -e "    ${CYAN}curl -fsSL https://x.ai/cli/install.sh | bash${NC}                 # Grok"
         echo ""
     fi
 

@@ -1,5 +1,5 @@
 /**
- * @fileoverview Quick start (case loading, session spawning for Claude/Shell/OpenCode/Codex/Gemini/Antigravity/Pi),
+ * @fileoverview Quick start (case loading, session spawning for Claude/Shell/OpenCode/Codex/Gemini/Antigravity/Pi/Grok),
  * session options modal (per-session settings, color picker, rename),
  * session options tabs (Ralph config tab), case settings (CRUD, links),
  * create case modal, and mobile case picker.
@@ -403,6 +403,9 @@ Object.assign(CodemanApp.prototype, {
       if (mode === 'pi') {
         return await this.runPi();
       }
+      if (mode === 'grok') {
+        return await this.runGrok();
+      }
       if (mode === 'shell') {
         return await this.runShell();
       }
@@ -468,7 +471,7 @@ Object.assign(CodemanApp.prototype, {
    * run modes like the rest, and neither `agy` nor `pi` is likely to be installed.
    */
   _refreshRunModeAvailability(menu) {
-    for (const mode of ['claude', 'opencode', 'codex', 'gemini', 'antigravity', 'pi']) {
+    for (const mode of ['claude', 'opencode', 'codex', 'gemini', 'antigravity', 'pi', 'grok']) {
       const btn = menu.querySelector(`.run-mode-option[data-mode="${mode}"]`);
       if (btn) btn.style.display = this.isCliAvailable(mode) ? 'flex' : 'none';
     }
@@ -565,7 +568,7 @@ Object.assign(CodemanApp.prototype, {
       gearBtn.className = `btn-toolbar btn-run-gear mode-${mode}`;
     }
     if (label) {
-      label.textContent = mode === 'opencode' ? 'Run OC' : mode === 'codex' ? 'Run CX' : mode === 'gemini' ? 'Run GM' : mode === 'antigravity' ? 'Run AG' : mode === 'pi' ? 'Run PI' : mode === 'shell' ? 'Run SH' : 'Run';
+      label.textContent = mode === 'opencode' ? 'Run OC' : mode === 'codex' ? 'Run CX' : mode === 'gemini' ? 'Run GM' : mode === 'antigravity' ? 'Run AG' : mode === 'pi' ? 'Run PI' : mode === 'grok' ? 'Run GK' : mode === 'shell' ? 'Run SH' : 'Run';
     }
   },
 
@@ -1278,6 +1281,66 @@ Object.assign(CodemanApp.prototype, {
     }
   },
 
+  /**
+   * Launch a Grok Build (xAI `grok`) session.
+   *
+   * Sends `grokConfig: { alwaysApprove: true }` the way runAntigravity() sends
+   * `dangerouslySkipPermissions: true`: Codeman sessions exist for autonomous
+   * work, so the Run button opts into grok's bypassPermissions mode
+   * (`--always-approve`; config-level deny rules still apply on top). The
+   * multi-user clamp forces it back off for non-granted owners server-side.
+   */
+  async runGrok() {
+    const caseName = document.getElementById('quickStartCase').value || 'testcase';
+    // Remote/docker cases run grok on the OTHER side: skip the local status probe and the
+    // local-only config/env below (quick-start rejects them for remote cases).
+    const _runLoc = (this.cases || []).find(c => c.name === caseName)?.location;
+    const isRemote = _runLoc === 'remote' || _runLoc === 'docker';
+
+    const ownsLaunchTerminal = this._beginSessionLaunchStatus(`Starting Grok session in ${caseName}...`);
+    this.terminal.focus();
+
+    try {
+      if (!isRemote) {
+        const statusRes = await fetch('/api/grok/status');
+        const status = (await statusRes.json()).data;
+        if (!status.available) {
+          this._reportSessionLaunchError(
+            ownsLaunchTerminal,
+            'Grok CLI not found. Install with: curl -fsSL https://x.ai/cli/install.sh | bash'
+          );
+          return;
+        }
+      }
+
+      const envOverrides = this.buildEnvOverrides(this.getCaseSettings(caseName), this.loadAppSettingsFromStorage());
+      const res = await fetch('/api/quick-start', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          caseName,
+          mode: 'grok',
+          sessionName: `w${this._nextCaseSessionStartNumber(caseName)}-${caseName}`,
+          ...(isRemote ? {} : {
+            grokConfig: { alwaysApprove: true },
+            ...(Object.keys(envOverrides).length > 0 ? { envOverrides } : {}),
+          }),
+        })
+      });
+      const data = await res.json();
+      if (!data.success) throw new Error(data.error || 'Failed to start Grok');
+      await this._ensureCreatedSessionVisible(data.data.sessionId, data.data.session);
+
+      if (data.data.sessionId) {
+        await this.selectSession(data.data.sessionId);
+      }
+
+      this.terminal.focus();
+    } catch (err) {
+      this._reportSessionLaunchError(ownsLaunchTerminal, err.message);
+    }
+  },
+
 
   // ═══════════════════════════════════════════════════════════════
   // Session Options Modal
@@ -1343,7 +1406,7 @@ Object.assign(CodemanApp.prototype, {
     if (detachToggle) detachToggle.checked = this.hasTabDetachOverride(sessionId);
 
     // Reset to an appropriate tab — Summary for external CLIs (Respawn/Ralph are Claude-only)
-    const isAltMode = session.mode === 'opencode' || session.mode === 'codex' || session.mode === 'gemini' || session.mode === 'antigravity' || session.mode === 'pi';
+    const isAltMode = session.mode === 'opencode' || session.mode === 'codex' || session.mode === 'gemini' || session.mode === 'antigravity' || session.mode === 'pi' || session.mode === 'grok';
     this.switchOptionsTab(isAltMode ? 'summary' : 'respawn');
 
     // Update respawn status display and buttons
@@ -1373,7 +1436,7 @@ Object.assign(CodemanApp.prototype, {
     }
 
     // Hide Claude-specific options for external CLI sessions
-    const isExternalCli = session.mode === 'opencode' || session.mode === 'codex' || session.mode === 'gemini' || session.mode === 'antigravity' || session.mode === 'pi';
+    const isExternalCli = session.mode === 'opencode' || session.mode === 'codex' || session.mode === 'gemini' || session.mode === 'antigravity' || session.mode === 'pi' || session.mode === 'grok';
     const claudeOnlyEls = document.querySelectorAll('[data-claude-only]');
     claudeOnlyEls.forEach(el => { el.style.display = isExternalCli ? 'none' : ''; });
 
@@ -3114,7 +3177,7 @@ Object.defineProperty(CodemanApp.prototype, 'runMode', {
   },
   set(mode) {
     this._runMode =
-      mode === 'opencode' || mode === 'codex' || mode === 'gemini' || mode === 'antigravity' || mode === 'pi' || mode === 'claude'
+      mode === 'opencode' || mode === 'codex' || mode === 'gemini' || mode === 'antigravity' || mode === 'pi' || mode === 'grok' || mode === 'claude'
         ? mode
         : 'claude';
   },

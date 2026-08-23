@@ -92,6 +92,12 @@ vi.mock('../../src/utils/pi-cli-resolver.js', () => ({
   getPiCliVersion: vi.fn(() => null),
 }));
 
+vi.mock('../../src/utils/grok-cli-resolver.js', () => ({
+  isGrokAvailable: vi.fn(() => false),
+  resolveGrokDir: vi.fn(() => null),
+  getGrokCliVersion: vi.fn(() => null),
+}));
+
 import fs from 'node:fs/promises';
 import { existsSync, readdirSync } from 'node:fs';
 import { subagentWatcher } from '../../src/subagent-watcher.js';
@@ -100,6 +106,7 @@ import { isOpenCodeAvailable, resolveOpenCodeDir } from '../../src/utils/opencod
 import { isGeminiAvailable, resolveGeminiDir } from '../../src/utils/gemini-cli-resolver.js';
 import { isAntigravityAvailable, resolveAntigravityDir } from '../../src/utils/antigravity-cli-resolver.js';
 import { isPiAvailable, resolvePiDir, getPiCliVersion } from '../../src/utils/pi-cli-resolver.js';
+import { isGrokAvailable, resolveGrokDir, getGrokCliVersion } from '../../src/utils/grok-cli-resolver.js';
 
 const mockedReadFile = vi.mocked(fs.readFile);
 const mockedWriteFile = vi.mocked(fs.writeFile);
@@ -116,6 +123,9 @@ const mockedResolveAntigravityDir = vi.mocked(resolveAntigravityDir);
 const mockedIsPiAvailable = vi.mocked(isPiAvailable);
 const mockedResolvePiDir = vi.mocked(resolvePiDir);
 const mockedGetPiCliVersion = vi.mocked(getPiCliVersion);
+const mockedIsGrokAvailable = vi.mocked(isGrokAvailable);
+const mockedResolveGrokDir = vi.mocked(resolveGrokDir);
+const mockedGetGrokCliVersion = vi.mocked(getGrokCliVersion);
 
 describe('system-routes', () => {
   let harness: RouteTestHarness;
@@ -878,6 +888,38 @@ describe('system-routes', () => {
       expect(body.available).toBe(true);
       expect(body.path).toBe('/home/user/.local/bin');
       expect(body.version).toBe('0.84.1');
+    });
+  });
+
+  // ========== GET /api/grok/status ==========
+
+  describe('GET /api/grok/status', () => {
+    it('returns unavailable when grok is not installed', async () => {
+      mockedIsGrokAvailable.mockReturnValue(false);
+      mockedResolveGrokDir.mockReturnValue(null);
+      mockedGetGrokCliVersion.mockReturnValue(null);
+
+      const res = await harness.app.inject({ method: 'GET', url: '/api/grok/status' });
+      expect(res.statusCode).toBe(200);
+      const body = JSON.parse(res.body);
+      expect(body.available).toBe(false);
+      expect(body.path).toBeNull();
+      expect(body.version).toBeNull();
+    });
+
+    it('returns available with path AND version when grok is installed', async () => {
+      // `version` matters for the same reason as pi: `grok` has known squatters,
+      // so this endpoint is where a misresolution shows up.
+      mockedIsGrokAvailable.mockReturnValue(true);
+      mockedResolveGrokDir.mockReturnValue('/home/user/.grok/bin');
+      mockedGetGrokCliVersion.mockReturnValue('1.0.5');
+
+      const res = await harness.app.inject({ method: 'GET', url: '/api/grok/status' });
+      expect(res.statusCode).toBe(200);
+      const body = JSON.parse(res.body);
+      expect(body.available).toBe(true);
+      expect(body.path).toBe('/home/user/.grok/bin');
+      expect(body.version).toBe('1.0.5');
     });
   });
 

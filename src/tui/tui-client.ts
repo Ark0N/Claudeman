@@ -149,7 +149,7 @@ export type TuiAnswerResult =
 
 export interface TuiQuickStartOptions {
   caseName: string;
-  mode?: 'claude' | 'shell' | 'opencode' | 'codex' | 'gemini' | 'antigravity' | 'pi';
+  mode?: 'claude' | 'shell' | 'opencode' | 'codex' | 'gemini' | 'antigravity' | 'pi' | 'grok';
   sessionName?: string;
   /** The tab this spawn came from, for the lineage lines (cosmetic, dropped if unresolvable). */
   parentSessionId?: string;

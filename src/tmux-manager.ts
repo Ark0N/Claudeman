@@ -52,6 +52,7 @@ import {
   type GeminiConfig,
   type AntigravityConfig,
   type PiConfig,
+  type GrokConfig,
   type SessionRemote,
   type SessionDocker,
   type DockerCommandMode,
@@ -92,6 +93,8 @@ import {
   getAntigravityNotFoundMessage,
   resolvePiDir,
   getPiNotFoundMessage,
+  resolveGrokDir,
+  getGrokNotFoundMessage,
   resolveLocalShell,
   loginShellArgs,
 } from './utils/index.js';
@@ -803,6 +806,47 @@ function buildPiCommand(config?: PiConfig): string {
 }
 
 /**
+ * Build the Grok Build CLI (xAI `grok`) command with appropriate flags.
+ *
+ * The bypass switch is `--always-approve` ("auto-approve all tool executions",
+ * grok's `bypassPermissions` permission mode; config-level deny rules still
+ * apply on top). Absent config spawns bare `grok`, i.e. grok's own default
+ * ask-mode, which is why the multi-user clamp only needs the only-if-sent
+ * branch for grok. Flag surface verified against grok 1.0.5.
+ *
+ * `XAI_API_KEY` is deliberately never wired as a flag: secrets flow through
+ * socket-scoped `tmux setenv` (envOverrides), never the spawn command line.
+ *
+ * Like the sibling builders, every user value is regex-allowlisted and silently
+ * DROPPED on failure: the result is interpolated into a `bash -c "..."` string.
+ */
+function buildGrokCommand(config?: GrokConfig): string {
+  const parts = ['grok'];
+
+  if (config?.alwaysApprove) {
+    parts.push('--always-approve');
+  }
+
+  if (config?.model) {
+    const safeModel = /^[a-zA-Z0-9._\-/]+$/.test(config.model) ? config.model : undefined;
+    if (safeModel) parts.push('--model', safeModel);
+  }
+
+  // --resume and -c conflict; a valid explicit session id wins. Ids only:
+  // grok's --resume also accepts session TITLES, which are arbitrary user
+  // strings, so the id regex doubles as the no-titles rule here.
+  const safeSessionId =
+    config?.resumeSessionId && /^[a-zA-Z0-9._-]+$/.test(config.resumeSessionId) ? config.resumeSessionId : undefined;
+  if (safeSessionId) {
+    parts.push('--resume', safeSessionId);
+  } else if (config?.continueSession) {
+    parts.push('--continue');
+  }
+
+  return parts.join(' ');
+}
+
+/**
  * Build the spawn command for any session mode.
  * Shared by createSession() and respawnPane() to avoid duplication.
  */
@@ -845,6 +889,7 @@ export function buildSpawnCommand(options: {
   geminiConfig?: GeminiConfig;
   antigravityConfig?: AntigravityConfig;
   piConfig?: PiConfig;
+  grokConfig?: GrokConfig;
   resumeSessionId?: string;
   effort?: EffortLevel;
   /** Codeman session name, passed to claude as `--name` (version-gated, sanitized; local spawns only). */
@@ -893,6 +938,9 @@ export function buildSpawnCommand(options: {
   }
   if (options.mode === 'pi') {
     return buildPiCommand(options.piConfig);
+  }
+  if (options.mode === 'grok') {
+    return buildGrokCommand(options.grokConfig);
   }
   // #208: NOT the literal '$SHELL'. This string is embedded in the `bash -c "…"`
   // argument of the respawn-pane line, which execSync runs through `/bin/sh -c`,
@@ -1109,6 +1157,8 @@ function appendResumeFlag(modeCommand: string, mode: SessionMode, resumeId: stri
       return `${modeCommand} --conversation ${resumeId}`;
     case 'pi':
       return `${modeCommand} --session ${resumeId}`;
+    case 'grok':
+      return `${modeCommand} --resume ${resumeId}`;
     default:
       return modeCommand; // shell / opencode: no resume
   }
@@ -1699,10 +1749,12 @@ export class TmuxManager extends EventEmitter implements TerminalMultiplexer {
     const exports = [
       'export LANG=en_US.UTF-8',
       'export LC_ALL=en_US.UTF-8',
-      mode === 'codex' || mode === 'gemini' || mode === 'antigravity' || mode === 'pi'
+      mode === 'codex' || mode === 'gemini' || mode === 'antigravity' || mode === 'pi' || mode === 'grok'
         ? 'export COLORTERM=truecolor'
         : 'unset COLORTERM',
-      ...(mode === 'codex' || mode === 'gemini' || mode === 'antigravity' || mode === 'pi' ? ['unset NO_COLOR'] : []),
+      ...(mode === 'codex' || mode === 'gemini' || mode === 'antigravity' || mode === 'pi' || mode === 'grok'
+        ? ['unset NO_COLOR']
+        : []),
       // Stamp each Codex pane with a unique originator so the response-viewer
       // can locate THIS pane's rollout exactly — codex writes the value into
       // session_meta.originator of every rollout it creates. Without it,
@@ -1797,6 +1849,10 @@ export class TmuxManager extends EventEmitter implements TerminalMultiplexer {
       const dir = resolvePiDir();
       return { pathExport: dir ? `export PATH="${dir}:$PATH" && ` : '', dir };
     }
+    if (mode === 'grok') {
+      const dir = resolveGrokDir();
+      return { pathExport: dir ? `export PATH="${dir}:$PATH" && ` : '', dir };
+    }
     return { pathExport: '', dir: null };
   }
 
@@ -1846,6 +1902,7 @@ export class TmuxManager extends EventEmitter implements TerminalMultiplexer {
       geminiConfig,
       antigravityConfig,
       piConfig,
+      grokConfig,
       resumeSessionId,
       envOverrides,
       effort,
@@ -1906,6 +1963,9 @@ export class TmuxManager extends EventEmitter implements TerminalMultiplexer {
     if (mode === 'pi' && !cliDir) {
       throw new Error(getPiNotFoundMessage());
     }
+    if (mode === 'grok' && !cliDir) {
+      throw new Error(getGrokNotFoundMessage());
+    }
 
     const envExportsStr = this.buildEnvExports(sessionId, muxName, mode).join(' && ');
 
@@ -1920,6 +1980,7 @@ export class TmuxManager extends EventEmitter implements TerminalMultiplexer {
       geminiConfig,
       antigravityConfig,
       piConfig,
+      grokConfig,
       resumeSessionId,
       effort,
       sessionName: name,
@@ -2144,6 +2205,7 @@ export class TmuxManager extends EventEmitter implements TerminalMultiplexer {
       geminiConfig,
       antigravityConfig,
       piConfig,
+      grokConfig,
       resumeSessionId,
       envOverrides,
       effort,
@@ -2173,6 +2235,7 @@ export class TmuxManager extends EventEmitter implements TerminalMultiplexer {
       geminiConfig,
       antigravityConfig,
       piConfig,
+      grokConfig,
       resumeSessionId,
       effort,
       sessionName: name,

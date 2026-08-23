@@ -380,7 +380,7 @@ export function registerSystemRoutes(
   });
 
   // ═══════════════════════════════════════════════════════════════
-  // CLI Integrations (Claude, OpenCode, Codex, Gemini, Antigravity, Pi)
+  // CLI Integrations (Claude, OpenCode, Codex, Gemini, Antigravity, Pi, Grok)
   // ═══════════════════════════════════════════════════════════════
 
   // ========== Claude ==========
@@ -443,6 +443,21 @@ export function registerSystemRoutes(
       available: isPiAvailable(),
       path: resolvePiDir(),
       version: getPiCliVersion(),
+    };
+  });
+
+  // ========== Grok ==========
+
+  // Carries `version` on top of the sibling shape, same reason as pi: `grok` is a
+  // binary name with known squatters, so the resolver version-probes candidates and
+  // this endpoint is where a misresolution shows up (path + version) instead of
+  // presenting as "the mode just doesn't work".
+  app.get('/api/grok/status', async () => {
+    const { isGrokAvailable, resolveGrokDir, getGrokCliVersion } = await import('../../utils/grok-cli-resolver.js');
+    return {
+      available: isGrokAvailable(),
+      path: resolveGrokDir(),
+      version: getGrokCliVersion(),
     };
   });
 

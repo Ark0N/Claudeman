@@ -45,5 +45,6 @@ export {
   getAntigravityNotFoundMessage,
 } from './antigravity-cli-resolver.js';
 export { resolvePiDir, isPiAvailable, getPiCliVersion, getPiNotFoundMessage } from './pi-cli-resolver.js';
+export { resolveGrokDir, isGrokAvailable, getGrokCliVersion, getGrokNotFoundMessage } from './grok-cli-resolver.js';
 export { compileFileQuery, matchFileQuery } from './file-query.js';
 export type { FileQueryMatcher } from './file-query.js';

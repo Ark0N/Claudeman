@@ -51,6 +51,7 @@ import {
   type GeminiConfig,
   type AntigravityConfig,
   type PiConfig,
+  type GrokConfig,
   type SessionRemote,
   type SessionDocker,
 } from './types.js';
@@ -171,7 +172,14 @@ const NEWLINE_SPLIT_PATTERN = /\r?\n/;
 
 /** True for external-CLI run modes (non-Claude) that use their own TUI and output format. */
 export function isExternalCliMode(mode: SessionMode): boolean {
-  return mode === 'opencode' || mode === 'codex' || mode === 'gemini' || mode === 'antigravity' || mode === 'pi';
+  return (
+    mode === 'opencode' ||
+    mode === 'codex' ||
+    mode === 'gemini' ||
+    mode === 'antigravity' ||
+    mode === 'pi' ||
+    mode === 'grok'
+  );
 }
 
 function getModeLabel(mode: SessionMode): string {
@@ -186,6 +194,8 @@ function getModeLabel(mode: SessionMode): string {
       return 'Antigravity';
     case 'pi':
       return 'Pi';
+    case 'grok':
+      return 'Grok';
     case 'shell':
       return 'Shell';
     case 'claude':
@@ -202,8 +212,9 @@ function getModeLabel(mode: SessionMode): string {
  * repaint via cursor positioning, so dropping the alt-screen switch is safe —
  * content stays in the normal buffer. Excluded: `shell` (arbitrary programs like
  * vim/less/htop legitimately need the alt screen), `opencode` (renders its own
- * TUI that may rely on it) and `pi` (below). Keep parity with the replay-side
- * strip in session-routes.ts.
+ * TUI that may rely on it), `pi` (below) and `grok` (a fullscreen alt-screen TUI
+ * with mouse support, i.e. the opencode case, not the Ink case). Keep parity
+ * with the replay-side strip in session-routes.ts.
  *
  * ⚠️ Being excluded here does NOT preserve the alt screen. Every excluded mode
  * falls through to isMuxAltScreenOnlyStripMode(), which strips the alt-screen
@@ -508,6 +519,8 @@ export class Session extends EventEmitter {
   private _antigravityConfig: AntigravityConfig | undefined;
   // Pi configuration (only for mode === 'pi')
   private _piConfig: PiConfig | undefined;
+  // Grok configuration (only for mode === 'grok')
+  private _grokConfig: GrokConfig | undefined;
   private _resumeSessionId: string | undefined;
 
   // Ephemeral env overrides (e.g., CLAUDE_CODE_EXPERIMENTAL_AGENT_TEAMS). Exported by tmux
@@ -603,6 +616,8 @@ export class Session extends EventEmitter {
       antigravityConfig?: AntigravityConfig;
       /** Pi configuration (only for mode === 'pi') */
       piConfig?: PiConfig;
+      /** Grok configuration (only for mode === 'grok') */
+      grokConfig?: GrokConfig;
       /** Resume a previous Claude conversation (used after server reboot) */
       resumeSessionId?: string;
       /** Extra env vars exported to the CLI at spawn time (no disk persistence) */
@@ -710,6 +725,11 @@ export class Session extends EventEmitter {
     // Apply Pi configuration
     if (config.piConfig) {
       this._piConfig = config.piConfig;
+    }
+
+    // Apply Grok configuration
+    if (config.grokConfig) {
+      this._grokConfig = config.grokConfig;
     }
 
     // Apply env overrides (exported at spawn, not persisted to disk).
@@ -1304,6 +1324,7 @@ export class Session extends EventEmitter {
       geminiConfig: this._geminiConfig,
       antigravityConfig: this._antigravityConfig,
       piConfig: this._piConfig,
+      grokConfig: this._grokConfig,
       resumeSessionId: this._resumeSessionId,
       effort: this._effort,
       // COD-118: runtime-only — surfaced so the frontend can require explicit user
@@ -1476,7 +1497,11 @@ export class Session extends EventEmitter {
           // COD-75: codex/gemini/antigravity/pi get COLORTERM=truecolor — mirrors buildEnvExports()
           // in tmux-manager.ts so the attach client and the tmux session agree.
           env: buildMuxAttachEnv(
-            this.mode === 'codex' || this.mode === 'gemini' || this.mode === 'antigravity' || this.mode === 'pi'
+            this.mode === 'codex' ||
+              this.mode === 'gemini' ||
+              this.mode === 'antigravity' ||
+              this.mode === 'pi' ||
+              this.mode === 'grok'
           ),
         })
       );
@@ -1546,6 +1571,7 @@ export class Session extends EventEmitter {
       geminiConfig: this._geminiConfig,
       antigravityConfig: this._antigravityConfig,
       piConfig: this._piConfig,
+      grokConfig: this._grokConfig,
       resumeSessionId: this._resumeSessionId,
       envOverrides: this._envOverrides,
       effort: this._effort,
@@ -1804,6 +1830,7 @@ export class Session extends EventEmitter {
             geminiConfig: this._geminiConfig,
             antigravityConfig: this._antigravityConfig,
             piConfig: this._piConfig,
+            grokConfig: this._grokConfig,
             resumeSessionId: this._resumeSessionId,
             envOverrides: this._envOverrides,
             effort: this._effort,
@@ -1892,6 +1919,10 @@ export class Session extends EventEmitter {
       // Pi sessions require tmux for env override injection via setenv
       if (this.mode === 'pi') {
         throw new Error('Pi sessions require tmux. Direct PTY fallback is not supported.');
+      }
+      // Grok sessions require tmux for XAI_API_KEY / GROK_* injection via setenv
+      if (this.mode === 'grok') {
+        throw new Error('Grok sessions require tmux. Direct PTY fallback is not supported.');
       }
       try {
         // Pass --session-id to use the SAME ID as the Codeman session

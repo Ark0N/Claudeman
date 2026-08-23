@@ -1,8 +1,8 @@
 /**
  * @fileoverview Shared CLI executable resolution for the per-CLI resolvers.
  *
- * One lookup chain behind all six *-cli-resolver modules (claude, opencode,
- * codex, gemini, antigravity, pi): the server process PATH first, then the
+ * One lookup chain behind all seven *-cli-resolver modules (claude, opencode,
+ * codex, gemini, antigravity, pi, grok): the server process PATH first, then the
  * CLI's common install directories in order, then — last, because it is the
  * only step that spawns anything — an interactive login shell, which is what
  * finds nvm/Homebrew/user-npm installs when Codeman runs as a systemd/launchd
