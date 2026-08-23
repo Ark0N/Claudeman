@@ -459,6 +459,7 @@ describe('Inline rename input', () => {
           app: {
             _activeRename: { sessionId: string } | null;
             sessions: Map<string, { id: string; name: string }>;
+            renderSessionTabs: () => void;
             startInlineRename: (id: string) => void;
           };
         }
@@ -475,10 +476,20 @@ describe('Inline rename input', () => {
       tabName.textContent = 'Second';
       wrap.appendChild(tabName);
       document.body.appendChild(wrap);
+
+      // Cancelling the first rename is allowed to repaint the tab list. Model
+      // that synchronously so a target captured before cancel() becomes stale.
+      const originalRenderSessionTabs = app.renderSessionTabs;
+      app.renderSessionTabs = () => {
+        const current = document.querySelector('.tab-name[data-session-id="second-id"]');
+        current?.replaceWith(current.cloneNode(true));
+      };
       app.startInlineRename('second-id');
+      app.renderSessionTabs = originalRenderSessionTabs;
       return {
         firstActive,
         secondActive: app._activeRename?.sessionId,
+        secondInputVisible: !!document.querySelector('.tab-name[data-session-id="second-id"] input.tab-rename-input'),
         firstRenameClassActive:
           document.querySelector('.tab-name[data-session-id="first-id"]')?.classList.contains('tab-name-renaming') ??
           false,
@@ -487,6 +498,7 @@ describe('Inline rename input', () => {
 
     expect(result.firstActive).toBe('first-id');
     expect(result.secondActive).toBe('second-id');
+    expect(result.secondInputVisible).toBe(true);
     expect(result.firstRenameClassActive).toBe(false);
   });
 

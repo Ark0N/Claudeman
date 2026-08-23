@@ -1788,10 +1788,10 @@ Object.assign(CodemanApp.prototype, {
     const session = this.sessions.get(sessionId);
     if (!session) return;
 
+    this._activeRename?.cancel();
+
     const tabName = document.querySelector(`.tab-name[data-session-id="${sessionId}"]`);
     if (!tabName) return;
-
-    this._activeRename?.cancel();
 
     // Prevent tab re-renders from destroying the input while renaming
     this._inlineRenameActive = true;
