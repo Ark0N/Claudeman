@@ -919,6 +919,8 @@ class CodemanApp {
     // Calls applyTabWrapSettings() itself (it owns tabs-two-rows / tabs-show-folder)
     // and then applies the sidebar variant on top — do not call both.
     this.applySessionListLayout();
+    this.applyTabOrientation();
+    this.initTabRailResize?.();
     this.applyMonitorVisibility();
     this.applyLineageLineSettings?.();
     this._installLineageStripScrollListener?.();
@@ -3758,6 +3760,18 @@ class CodemanApp {
     return layout === 'sidebar' || layout === 'sidebar-rich' ? layout : 'header';
   }
 
+  resolveSessionSidebarFontSize(value) {
+    const size = Number(value);
+    return Number.isInteger(size) && size >= 11 && size <= 18 ? size : 14;
+  }
+
+  applySessionSidebarFontSize(settings = null) {
+    const resolvedSettings = settings ?? this.loadAppSettingsFromStorage();
+    const size = this.resolveSessionSidebarFontSize(resolvedSettings?.sessionSidebarFontSize);
+    document.documentElement.style.setProperty('--session-sidebar-name-font-size', `${size}px`);
+    return size;
+  }
+
   /**
    * Reads the APPLIED layout off <html>, not the settings blob: this is called
    * per dragover event and per tab in render loops, and getSessionListLayout()
@@ -3767,6 +3781,15 @@ class CodemanApp {
    */
   isSessionSidebarActive() {
     return document.documentElement.dataset.sessionList === 'sidebar';
+  }
+
+  _tabOrientation() {
+    return document.documentElement.getAttribute('data-tab-orientation') === 'vertical' ? 'vertical' : 'horizontal';
+  }
+
+  shouldInlineSessionActions() {
+    if (this.isSessionSidebarActive()) return !this.isSessionSidebarCollapsed();
+    return this._tabOrientation() === 'vertical' && !document.documentElement.classList.contains('tab-rail-compact');
   }
 
   /**
@@ -3861,17 +3884,22 @@ class CodemanApp {
    */
   applySessionListLayout() {
     const mode = this.getSessionListLayout();
+    this.applySessionSidebarFontSize();
     // 'sidebar' and 'sidebar-rich' are the same column; only row detail differs.
     const sidebar = mode === 'sidebar' || mode === 'sidebar-rich';
     const collapsed = this.isSessionSidebarCollapsed();
     const prevMode = document.documentElement.dataset.sessionList;
     const prevDetail = document.documentElement.dataset.sidebarDetail;
+    const prevCollapsed = document.documentElement.dataset.sidebar;
     const tabsEl = document.getElementById('sessionTabs');
     const headerHost = document.getElementById('sessionTabsHost');
     const sidebarList = document.getElementById('sessionSidebarList');
     if (!tabsEl || !headerHost || !sidebarList) return;
 
-    const host = sidebar ? sidebarList : headerHost;
+    const rail = document.getElementById('tabRail');
+    const railOwnsTabs =
+      !sidebar && document.documentElement.getAttribute('data-tab-orientation') === 'vertical';
+    const host = sidebar ? sidebarList : railOwnsTabs && rail ? rail : headerHost;
     if (tabsEl.parentElement !== host) host.appendChild(tabsEl);
 
     document.documentElement.dataset.sessionList = sidebar ? 'sidebar' : 'header';
@@ -3880,7 +3908,7 @@ class CodemanApp {
     // would let the sidebar CSS style a strip that has nothing to style.
     document.documentElement.dataset.sidebarDetail = mode === 'sidebar-rich' ? 'rich' : 'simple';
     document.documentElement.dataset.sidebar = collapsed ? 'collapsed' : 'expanded';
-    tabsEl.setAttribute('aria-orientation', sidebar ? 'vertical' : 'horizontal');
+    tabsEl.setAttribute('aria-orientation', host === headerHost ? 'horizontal' : 'vertical');
 
     const btn = document.getElementById('sidebarToggleBtn');
     if (btn) {
@@ -3933,7 +3961,8 @@ class CodemanApp {
     const layoutChanged =
       prevMode !== document.documentElement.dataset.sessionList ||
       prevDetail !== document.documentElement.dataset.sidebarDetail;
-    if (layoutChanged && prevTall === this._tallTabsEnabled) {
+    const collapseChanged = prevCollapsed !== document.documentElement.dataset.sidebar;
+    if ((layoutChanged || collapseChanged) && prevTall === this._tallTabsEnabled) {
       this._fullRenderSessionTabs();
     }
     // tabs-auto-wrap is measured, not derived from settings — updateTabOverflowMode()
@@ -4476,9 +4505,17 @@ class CodemanApp {
         const nameEl = tab.querySelector('.tab-name');
         if (nameEl) {
           const _p = parseSessionPrefix(name);
-          const _label = _p && _p.suffix ? _p.suffix : name;
-          if (nameEl.textContent !== _label) {
-            nameEl.textContent = _label;
+          if (nameEl.dataset.fullName !== name) {
+            nameEl.replaceChildren();
+            if (_p && _p.suffix) {
+              const prefix = document.createElement('span');
+              prefix.className = 'tab-name-prefix';
+              prefix.textContent = `${_p.prefix}: `;
+              nameEl.append(prefix, document.createTextNode(_p.suffix));
+            } else {
+              nameEl.textContent = name;
+            }
+            nameEl.dataset.fullName = name;
             tab.title = _p && _p.suffix
               ? (session.workingDir ? `${_p.prefix} (${session.workingDir})` : _p.prefix)
               : (session.workingDir || '');
@@ -4529,9 +4566,11 @@ class CodemanApp {
           // Need to add badge - insert before the action-icon overlay so the
           // badge stays a direct child of the tab (outside .tab-actions)
           const badgeHtml = this.renderSubagentTabBadge(id, minimizedAgents);
-          const actionsEl = tab.querySelector('.tab-actions');
+          const actionsEl = tab.querySelector(':scope > .tab-actions');
           if (actionsEl) {
             actionsEl.insertAdjacentHTML('beforebegin', badgeHtml);
+          } else {
+            tab.insertAdjacentHTML('beforeend', badgeHtml);
           }
         } else if (minimizedCount === 0 && subagentBadgeEl) {
           // Count went to 0 - remove badge
@@ -4589,6 +4628,17 @@ class CodemanApp {
     const defaults = this.getDefaultSettings();
     const manualTwoRows = deviceType === 'desktop' ? (settings.tabTwoRows ?? defaults.tabTwoRows ?? false) : false;
 
+    const orientation = window.CodemanTabOverflow?.resolveTabOrientation
+      ? window.CodemanTabOverflow.resolveTabOrientation({
+          deviceType,
+          setting: settings.tabOrientation ?? defaults.tabOrientation ?? 'horizontal',
+        })
+      : 'horizontal';
+    if (orientation === 'vertical') {
+      container.classList.remove('tabs-auto-wrap');
+      return;
+    }
+
     if (manualTwoRows || deviceType !== 'desktop') {
       container.classList.remove('tabs-auto-wrap');
       return;
@@ -4629,6 +4679,7 @@ class CodemanApp {
   }
 
   _fullRenderSessionTabs() {
+    this.closeTabRailActionMenu?.();
     if (this._inlineRenameActive) return;
     const container = this.$('sessionTabs');
 
@@ -4706,7 +4757,9 @@ class CodemanApp {
       // JUST the description on the tab; the generated w<n>-<case> id moves to the
       // tooltip and stays visible in the session settings modal.
       const parsedName = parseSessionPrefix(name);
-      const tabLabel = parsedName && parsedName.suffix ? parsedName.suffix : name;
+      const tabLabel = parsedName && parsedName.suffix
+        ? `<span class="tab-name-prefix">${escapeHtml(parsedName.prefix)}: </span>${escapeHtml(parsedName.suffix)}`
+        : escapeHtml(name);
       const tabTooltip = parsedName && parsedName.suffix
         ? (session.workingDir ? `${parsedName.prefix} (${session.workingDir})` : parsedName.prefix)
         : (session.workingDir || '');
@@ -4721,6 +4774,9 @@ class CodemanApp {
         ? ` data-tab-state="${richRow.state}" data-tab-meta-sig="${richRow.state}:${richRow.since ? richRow.since.at : 0}:${richRow.createdAt}"`
         : '';
 
+      const inlineSessionActions = this.shouldInlineSessionActions();
+      const tabActionsHtml = `<span class="tab-actions"><span class="tab-gear" onclick="event.stopPropagation(); app.openSessionOptions(${escapeHtml(JSON.stringify(id))})" title="Session options" aria-label="Session options" tabindex="0">&#x2699;</span><span class="tab-detach" onclick="event.stopPropagation(); app.detachSession(${escapeHtml(JSON.stringify(id))})" title="Open in a new window" aria-label="Open session in a new window" tabindex="0">&#x29C9;</span><span class="tab-close" onclick="event.stopPropagation(); app.requestCloseSession(${escapeHtml(JSON.stringify(id))})" title="Close session" aria-label="Close session" tabindex="0">&times;</span><button type="button" class="tab-more" onclick="event.stopPropagation(); app.openTabRailActionMenu(event, ${escapeHtml(JSON.stringify(id))})" title="Session actions" aria-label="Session actions">&#x22EF;</button></span>`;
+
       parts.push(`<div class="session-tab ${isActive ? 'active' : ''}${alertClass}${richClass}${loadState ? ' tab-loading' : ''}${this.hasTabDetachOverride(id) ? ' tab-show-detach' : ''}"${richData} data-id="${id}" data-color="${color}" ${loadState ? `data-load-phase="${escapeHtml(loadState.phase)}"` : ''} onclick="app.handleSessionTabClick(event, ${escapeHtml(JSON.stringify(id))})" oncontextmenu="event.preventDefault(); app.startInlineRename(${escapeHtml(JSON.stringify(id))})" tabindex="0" role="tab" aria-selected="${isActive ? 'true' : 'false'}" aria-busy="${loadState ? 'true' : 'false'}" aria-label="${escapeHtml(name)} session" ${tabTooltip ? `title="${escapeHtml(tabTooltip)}"` : ''}>
           ${_tabIdx < 9 ? '<span class="tab-number">' + (_tabIdx + 1) + '</span>' : ''}
           ${loadState ? '<span class="tab-load-spinner" aria-hidden="true"></span>' : ''}
@@ -4728,7 +4784,8 @@ class CodemanApp {
           <span class="tab-info">
             <span class="tab-name-row">
               ${mode === 'shell' ? '<span class="tab-mode shell" aria-hidden="true">sh</span>' : mode === 'opencode' ? '<span class="tab-mode opencode" aria-hidden="true">oc</span>' : mode === 'codex' ? '<span class="tab-mode codex" aria-hidden="true">cx</span>' : mode === 'gemini' ? '<span class="tab-mode gemini" aria-hidden="true">gm</span>' : mode === 'antigravity' ? '<span class="tab-mode antigravity" aria-hidden="true">ag</span>' : mode === 'pi' ? '<span class="tab-mode pi" aria-hidden="true">pi</span>' : mode === 'grok' ? '<span class="tab-mode grok" aria-hidden="true">gk</span>' : ''}
-              <span class="tab-name" data-session-id="${id}">${escapeHtml(tabLabel)}</span>
+              <span class="tab-name" data-session-id="${id}" data-full-name="${escapeHtml(name)}">${tabLabel}</span>
+              ${inlineSessionActions ? tabActionsHtml : ''}
               <span class="tab-detached-badge" aria-hidden="true">detached</span>
             </span>
             ${showFolder ? `<span class="tab-folder">\u{1F4C1} ${escapeHtml(folderName)}</span>` : ''}
@@ -4737,7 +4794,7 @@ class CodemanApp {
           ${hasRunningTasks ? `<span class="tab-badge" onclick="event.stopPropagation(); app.toggleTaskPanel()" aria-label="${taskStats.running} running tasks">${taskStats.running}</span>` : ''}
           ${subagentBadge}
           ${ultracodeBadge}
-          <span class="tab-actions"><span class="tab-gear" onclick="event.stopPropagation(); app.openSessionOptions(${escapeHtml(JSON.stringify(id))})" title="Session options" aria-label="Session options" tabindex="0">&#x2699;</span><span class="tab-detach" onclick="event.stopPropagation(); app.detachSession(${escapeHtml(JSON.stringify(id))})" title="Open in a new window" aria-label="Open session in a new window" tabindex="0">&#x29C9;</span><span class="tab-close" onclick="event.stopPropagation(); app.requestCloseSession(${escapeHtml(JSON.stringify(id))})" title="Close session" aria-label="Close session" tabindex="0">&times;</span></span>
+          ${inlineSessionActions ? '' : tabActionsHtml}
         </div>`);
       _tabIdx++;
     }
@@ -6027,6 +6084,7 @@ class CodemanApp {
 
   // Shared cleanup for all session data — called from both closeSession() and session:deleted handler
   _cleanupSessionData(sessionId) {
+    this.closeTabRailActionMenu?.();
     // If the deleted session is currently being renamed, abort the rename
     // so the inline <input> doesn't ghost as a stale tab on screen.
     if (this._activeRename?.sessionId === sessionId) {

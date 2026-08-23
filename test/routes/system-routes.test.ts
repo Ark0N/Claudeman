@@ -332,11 +332,16 @@ describe('system-routes', () => {
 
   describe('POST /api/cleanup-state', () => {
     it('cleans up stale session state', async () => {
+      const runStaleSessionCleanup = vi.fn(
+        async (_activeIds: Set<string>, action: (ids: ReadonlySet<string>) => unknown) => action(new Set())
+      );
+      harness.ctx.tabLayouts.runStaleSessionCleanup = runStaleSessionCleanup;
       const res = await harness.app.inject({ method: 'POST', url: '/api/cleanup-state' });
       expect(res.statusCode).toBe(200);
       const body = JSON.parse(res.body);
       expect(body.cleanedSessions).toBe(0);
-      expect(harness.ctx.store.cleanupStaleSessions).toHaveBeenCalled();
+      expect(harness.ctx.store.cleanupSessionsByIds).toHaveBeenCalledWith(new Set());
+      expect(runStaleSessionCleanup).toHaveBeenCalledOnce();
     });
   });
 

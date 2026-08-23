@@ -995,6 +995,8 @@ export const SettingsUpdateSchema = z
     // CODEMAN_ALLOW_UNAUTHENTICATED_NETWORK env var. Stripped before persisting.
     acknowledgeUnauthTunnel: z.boolean().optional(),
     tabTwoRows: z.boolean().optional(),
+    tabOrientation: z.enum(['horizontal', 'vertical']).optional(),
+    tabRailWidth: z.number().int().min(208).max(360).optional(),
     /**
      * Session list layout. Display key (per-device).
      * 'header'       = horizontal tab strip
@@ -1006,6 +1008,8 @@ export const SettingsUpdateSchema = z
      * on data-sidebar-detail. See applySessionListLayout() in app.js.
      */
     sessionListLayout: z.enum(['header', 'sidebar', 'sidebar-rich']).optional(),
+    /** Session-name text size in vertical navigation. Display key (per-device). */
+    sessionSidebarFontSize: z.number().int().min(11).max(18).optional(),
     agentTeamsEnabled: z.boolean().optional(),
     /** Model for new Claude sessions (e.g. "claude-fable-5[1m]", "opus[1m]"); takes precedence over opusContext1mEnabled */
     claudeModel: z.string().max(50).optional(),

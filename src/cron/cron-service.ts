@@ -426,7 +426,7 @@ export class CronService {
         piConfig,
         owner: job.owner,
       });
-      this.deps.addSession(session);
+      await this.deps.addSession(session);
       this.store.incrementSessionsCreated();
       this.deps.persistSessionState(session);
       await this.deps.setupSessionListeners(session);

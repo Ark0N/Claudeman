@@ -5,7 +5,7 @@
  * and referenced by the frontend (`SSE_EVENTS` in `constants.js`).
  * Both files MUST be kept in sync.
  *
- * 155 event constants organized by category:
+ * 156 event constants organized by category:
  * - **Core** (1): init
  * - **Transport** (1): sse:heartbeat
  * - **Session lifecycle** (23): created, updated, deleted, terminal, idle, working, ...
@@ -25,14 +25,14 @@
  * - **Plan orchestration** (5): started, progress, subagent, completed, cancelled
  * - **Tunnel** (7): started, stopped, progress, error, qrRotated, qrRegenerated, qrAuthUsed
  * - **Image / attachments** (2): image:detected, attachment:detected
- * - **Hooks** (8): idle_prompt, permission_prompt, elicitation_dialog, elicitation_complete, elicitation_response, stop, teammate_idle, task_completed
+ * - **Hooks** (9): idle_prompt, permission_prompt, elicitation_dialog, elicitation_complete, elicitation_response, stop, teammate_idle, task_completed, suppressed
  * - **Approvals** (3): pending, updated, resolved (cross-session Approvals Inbox)
  * - **Orchestrator** (12): stateChanged, planProgress, planReady, phase*, verification, task*, completed, error
  * - **Clipboard** (1): write
  * - **Cases** (4): created, linked, deleted, order-changed
  * - **Docker cases** (8): exportComplete/Failed, importComplete, imageBuild*, containerRecreated
  * - **Multi-user** (3): admin:usersChanged, auth:passwordChangeRequired, session:orderChanged
- * - **Web tabs** (1): webview:changed
+ * - **Web tabs** (2): webview:changed, tab:layoutChanged
  *
  * Naming convention: `domain:action` (e.g., `session:created`, `respawn:stateChanged`)
  *
@@ -449,6 +449,8 @@ export const SessionOrderChanged = 'session:orderChanged' as const;
  *  Payload: `{ action: 'created' | 'updated' | 'deleted', id }`. The client
  *  re-fetches the list rather than patching from the payload. */
 export const WebviewChanged = 'webview:changed' as const;
+/** Owner-scoped layout invalidation. Payload contains only `{ owner, version }`. */
+export const TabLayoutChanged = 'tab:layoutChanged' as const;
 
 // ─── Namespace Re-export ─────────────────────────────────────────────────────
 
@@ -665,4 +667,5 @@ export const SseEvent = {
 
   // Web tabs (dashboard URLs)
   WebviewChanged,
+  TabLayoutChanged,
 } as const;

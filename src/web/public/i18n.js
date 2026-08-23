@@ -233,6 +233,8 @@
     'Redraw Terminal Button': '重绘终端按钮',
     'Tab Bar': '标签栏',
     'Session List Layout': '会话列表布局',
+    'Session Name Font Size': '会话名称字体大小',
+    'Adjust only session names in the vertical sidebar.': '仅调整垂直侧边栏中的会话名称。',
     'Header tab strip': '顶栏标签条',
     'Left sidebar': '左侧边栏',
     'Left sidebar simple': '左侧边栏（简洁）',

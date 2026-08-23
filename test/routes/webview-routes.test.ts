@@ -5,7 +5,7 @@
  * the developer's real ~/.codeman/webviews.json.
  */
 
-import { describe, it, expect, beforeEach, afterEach } from 'vitest';
+import { describe, it, expect, beforeEach, afterEach, vi } from 'vitest';
 import Fastify, { type FastifyInstance } from 'fastify';
 import fastifyCookie from '@fastify/cookie';
 import fastifyWebsocket from '@fastify/websocket';
@@ -16,17 +16,23 @@ import { registerWebviewRoutes } from '../../src/web/routes/webview-routes.js';
 import { installRouteErrorHandler } from '../../src/web/route-error-handler.js';
 import { webviewCapabilities } from '../../src/webview-capabilities.js';
 import { capabilityFromProxyPath } from '../../src/web/webview-proxy.js';
+import { TabLayoutService } from '../../src/tab-layout-service.js';
+import type { TabLayout } from '../../src/tab-layout.js';
 
 let app: FastifyInstance;
 let tmpDir: string;
 let savedDataDir: string | undefined;
 const broadcasts: Array<{ event: string; data: unknown }> = [];
+const webviewCreated = vi.fn(async () => {});
+const webviewDeleted = vi.fn(async () => {});
 
 beforeEach(async () => {
   tmpDir = await fs.mkdtemp(path.join(os.tmpdir(), 'codeman-webviews-'));
   savedDataDir = process.env.CODEMAN_DATA_DIR;
   process.env.CODEMAN_DATA_DIR = tmpDir;
   broadcasts.length = 0;
+  webviewCreated.mockClear();
+  webviewDeleted.mockClear();
 
   app = Fastify({ logger: false });
   await app.register(fastifyCookie);
@@ -34,6 +40,7 @@ beforeEach(async () => {
   await app.register(fastifyWebsocket);
   registerWebviewRoutes(app, {
     broadcast: (event: string, data: unknown) => broadcasts.push({ event, data }),
+    tabLayouts: { webviewCreated, webviewDeleted },
   } as never);
   installRouteErrorHandler(app);
   await app.ready();
@@ -90,6 +97,58 @@ describe('POST /api/webviews', () => {
     }
   });
 
+  it('rolls back webview persistence and emits nothing when layout capacity rejects insertion', async () => {
+    const refs = Array.from({ length: 512 }, (_, index) => ({ kind: 'session' as const, id: `s-${index}` }));
+    const original: TabLayout = {
+      version: 9,
+      groups: [],
+      ungrouped: refs,
+      updatedAt: '2026-08-16T00:00:00.000Z',
+    };
+    let stored = original;
+    const live = new Map(refs.map((ref, index) => [ref.id, { id: ref.id, createdAt: index }]));
+    const atomicBroadcast = vi.fn();
+    const service = new TabLayoutService({
+      store: {
+        getTabLayout: () => stored,
+        setTabLayout: (_owner, layout) => {
+          stored = layout;
+        },
+        getSessions: () => ({}),
+        getSessionOrder: () => [],
+      } as never,
+      sessions: live,
+      readWebviews: async () =>
+        (await import('../../src/webview-store.js')).readWebviews(tmpDir) as Promise<
+          Array<{ id: string; owner?: string }>
+        >,
+      broadcast: atomicBroadcast,
+      broadcastSessionOrder: vi.fn(),
+    });
+    const atomicApp = Fastify({ logger: false });
+    await atomicApp.register(fastifyCookie);
+    await atomicApp.register(fastifyWebsocket);
+    registerWebviewRoutes(atomicApp, {
+      broadcast: atomicBroadcast,
+      tabLayouts: service,
+    } as never);
+    installRouteErrorHandler(atomicApp);
+    await atomicApp.ready();
+
+    const response = await atomicApp.inject({
+      method: 'POST',
+      url: '/api/webviews',
+      payload: { name: 'overflow', url: 'https://example.test/' },
+    });
+    const list = (await atomicApp.inject({ method: 'GET', url: '/api/webviews' })).json().data.webviews;
+
+    expect(response.statusCode).toBe(500);
+    expect(list).toEqual([]);
+    expect(stored).toEqual(original);
+    expect(atomicBroadcast).not.toHaveBeenCalled();
+    await atomicApp.close();
+  });
+
   it('rejects URLs carrying embedded credentials', async () => {
     const res = await create({ name: 'bad', url: 'http://user:pass@host:4000/' });
     expect(res.statusCode).toBe(400);
@@ -140,6 +199,19 @@ describe('DELETE /api/webviews/:id', () => {
     expect((await app.inject({ method: 'DELETE', url: `/api/webviews/${id}` })).statusCode).toBe(200);
     expect((await app.inject({ method: 'GET', url: '/api/webviews' })).json().data.webviews).toEqual([]);
     expect(webviewCapabilities.resolve(cap)).toBeUndefined();
+  });
+
+  it('keeps the exact saved record and emits nothing when layout deletion fails', async () => {
+    const created = (await create({ name: 'Keep me', url: 'https://keep.example/' })).json().data;
+    broadcasts.length = 0;
+    webviewDeleted.mockRejectedValueOnce(new Error('tab layout restoration failed'));
+
+    const response = await app.inject({ method: 'DELETE', url: `/api/webviews/${created.id}` });
+    const list = (await app.inject({ method: 'GET', url: '/api/webviews' })).json().data.webviews;
+
+    expect(response.statusCode).toBe(500);
+    expect(list).toEqual([created]);
+    expect(broadcasts).toEqual([]);
   });
 
   it('404s an unknown id', async () => {

@@ -901,6 +901,7 @@ Object.assign(CodemanApp.prototype, {
     const MIN_ROWS = 10;
 
     const throttledResize = () => {
+      if (this._tabRailResizeOwnsObserver) return;
       // Trailing-edge debounce: ALL resize work (fit + clear + SIGWINCH) happens
       // once after the user stops resizing. During active resize, the terminal
       // stays at its old dimensions for up to 300ms.
