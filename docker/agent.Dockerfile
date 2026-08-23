@@ -54,10 +54,16 @@ RUN npm install -g --ignore-scripts @earendil-works/pi-coding-agent \
 # Grok Build (`grok`, xAI) is NOT on npm: a standalone ~160MB Rust binary through
 # xAI's installer, which targets $HOME/.grok/bin with no --dir override. At build
 # time that is root's home and unreachable by the `agent` user, so copy the binary
-# (through the bin/ symlink, hence -L) into /usr/local/bin and drop root's ~/.grok
-# in the same layer so the image does not carry the download twice.
+# into /usr/local/bin and drop root's ~/.grok in the same layer so the image does
+# not carry the download twice. The staging cp -T is what makes this survive the
+# installer's own behavior EITHER way: newer installers already symlink
+# /usr/local/bin/grok -> /root/.grok/bin/grok, and a direct `cp -L` onto that
+# symlink fails with "same file" (2026-08-24 rebuild), while removing the link
+# first and copying fresh works for both old and new installers.
 RUN curl -fsSL https://x.ai/cli/install.sh | bash \
- && cp -L /root/.grok/bin/grok /usr/local/bin/grok \
+ && cp -L /root/.grok/bin/grok /usr/local/bin/grok.real \
+ && rm -f /usr/local/bin/grok \
+ && mv /usr/local/bin/grok.real /usr/local/bin/grok \
  && chmod 755 /usr/local/bin/grok \
  && rm -rf /root/.grok /root/.local/bin/grok /root/.local/bin/agent \
  && grok --version
