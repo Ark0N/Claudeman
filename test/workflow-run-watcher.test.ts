@@ -19,9 +19,11 @@ const RUN_ID = 'wf_test1234-abc';
 
 /** A run JSON shaped like a real (killed) run: all three agent states + the bloat fields. */
 function sampleRunJson() {
+  const startTime = Date.now() - 15 * 60_000;
+
   return {
     runId: RUN_ID,
-    timestamp: '2026-06-15T00:00:00.000Z',
+    timestamp: new Date(startTime).toISOString(),
     taskId: 'task_abc',
     // --- bloat fields that MUST be stripped ---
     script: 'export const meta = {};\n'.repeat(5000), // ~110KB
@@ -35,7 +37,7 @@ function sampleRunJson() {
     workflowName: 'review-open-prs',
     status: 'killed',
     error: 'user stopped the task',
-    startTime: 1781466999000,
+    startTime,
     defaultModel: 'claude-opus-4-8[1m]',
     totalTokens: 109703,
     totalToolCalls: 44,
@@ -55,13 +57,13 @@ function sampleRunJson() {
         agentId: 'a6c0e282c3f5ac0bf',
         model: 'claude-opus-4-8[1m]',
         state: 'done',
-        startedAt: 1781467000002,
-        queuedAt: 1781466999962,
+        startedAt: startTime + 1002,
+        queuedAt: startTime + 962,
         attempt: 1,
         lastToolName: 'StructuredOutput',
         lastToolSummary: 'Does the profile setting make the allowlist dead config',
         promptPreview: 'You are reviewing a pull request...',
-        lastProgressAt: 1781467524143,
+        lastProgressAt: startTime + 525143,
         tokens: 104703,
         toolCalls: 41,
         durationMs: 524140,
@@ -76,12 +78,12 @@ function sampleRunJson() {
         agentId: 'a1234567890abcdef',
         model: 'claude-opus-4-8[1m]',
         state: 'progress',
-        startedAt: 1781467010000,
-        queuedAt: 1781466999970,
+        startedAt: startTime + 11000,
+        queuedAt: startTime + 970,
         attempt: 1,
         lastToolName: 'Read',
         promptPreview: 'Review PR 127...',
-        lastProgressAt: 1781467600000,
+        lastProgressAt: startTime + 601000,
         tokens: 5000,
         toolCalls: 3,
       },
@@ -93,9 +95,9 @@ function sampleRunJson() {
         phaseTitle: 'Verify',
         model: 'claude-opus-4-8[1m]',
         state: 'start',
-        queuedAt: 1781466999980,
+        queuedAt: startTime + 980,
         promptPreview: 'Verify finding x...',
-        lastProgressAt: 1781466999980,
+        lastProgressAt: startTime + 980,
       },
     ],
   };
