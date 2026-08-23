@@ -10,7 +10,7 @@
  * @globals {function} scheduleBackground - scheduler.postTask wrapper (background priority)
  * @globals {function} getEventCoords - Unified mouse/touch coordinate extractor
  * @globals {function} escapeHtml - XSS-safe HTML escaping
- * @globals {object} SSE_EVENTS - Centralized SSE event type constants (120 event types; must match backend src/web/sse-events.ts)
+ * @globals {object} SSE_EVENTS - Centralized SSE event type constants (156 event types; must match backend src/web/sse-events.ts)
  * @globals {Array} BUILTIN_RESPAWN_PRESETS - Built-in respawn configuration presets
  *
  * @dependency None (first in load order)
@@ -969,6 +969,7 @@ const SSE_EVENTS = {
 
   // Web tabs (dashboard URLs)
   WEBVIEW_CHANGED: 'webview:changed',
+  TAB_LAYOUT_CHANGED: 'tab:layoutChanged',
 };
 
 // ═══════════════════════════════════════════════════════════════

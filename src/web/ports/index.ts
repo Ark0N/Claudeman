@@ -14,3 +14,4 @@ export type { InfraPort, ScheduledRun } from './infra-port.js';
 export type { AuthPort } from './auth-port.js';
 export type { OrchestratorPort } from './orchestrator-port.js';
 export type { CronPort } from './cron-port.js';
+export type { TabLayoutPort } from './tab-layout-port.js';

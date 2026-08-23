@@ -53,7 +53,8 @@ import { AUTH_COOKIE_NAME } from '../middleware/auth.js';
 import { canAccessOwned, getAuthUser, ownerFor, parseBody } from '../route-helpers.js';
 import { WebviewCreateSchema, WebviewProbeSchema, WebviewUpdateSchema } from '../schemas.js';
 import { SseEvent } from '../sse-events.js';
-import type { EventPort } from '../ports/index.js';
+import type { EventPort, TabLayoutPort } from '../ports/index.js';
+import { ownerLayoutKey } from '../../tab-layout-persistence.js';
 import {
   buildDownstreamResponseHeaders,
   buildProxyCorsHeaders,
@@ -98,14 +99,14 @@ function withWebviews<T>(fn: (list: Webview[]) => Promise<T> | T): Promise<T> {
   return next;
 }
 
-export function registerWebviewRoutes(app: FastifyInstance, ctx: EventPort): void {
+export function registerWebviewRoutes(app: FastifyInstance, ctx: EventPort & TabLayoutPort): void {
   registerCrudRoutes(app, ctx);
   registerProxyRoutes(app);
 }
 
 // ───────────────────────────── CRUD ─────────────────────────────
 
-function registerCrudRoutes(app: FastifyInstance, ctx: EventPort): void {
+function registerCrudRoutes(app: FastifyInstance, ctx: EventPort & TabLayoutPort): void {
   app.get('/api/webviews', async (req) => {
     const user = getAuthUser(req);
     const all = await readWebviews(configDir());
@@ -145,6 +146,21 @@ function registerCrudRoutes(app: FastifyInstance, ctx: EventPort): void {
         .send(createErrorResponse(ApiErrorCode.INVALID_INPUT, `Webview limit reached (max ${MAX_WEBVIEWS})`));
     }
 
+    try {
+      await ctx.tabLayouts.webviewCreated(ownerLayoutKey(created.owner));
+    } catch (error) {
+      // The saved webview and its layout ref are one logical creation. If the
+      // layout rejects the new ref (for example at MAX_TAB_REFS), roll back the
+      // already-written JSON record and publish neither creation event.
+      await withWebviews(async (list) => {
+        const index = list.findIndex((webview) => webview.id === created.id);
+        if (index >= 0) {
+          list.splice(index, 1);
+          await writeWebviews(configDir(), list);
+        }
+      });
+      throw error;
+    }
     ctx.broadcast(SseEvent.WebviewChanged, { action: 'created', id: created.id });
     return { success: true, data: created };
   });
@@ -187,9 +203,19 @@ function registerCrudRoutes(app: FastifyInstance, ctx: EventPort): void {
       const index = list.findIndex((w) => w.id === id);
       if (index === -1) return 'not-found' as const;
       if (!canAccessOwned(user, list[index].owner)) return 'forbidden' as const;
+      const removed = list[index];
       list.splice(index, 1);
       await writeWebviews(configDir(), list);
-      return 'deleted' as const;
+      try {
+        await ctx.tabLayouts.webviewDeleted(ownerLayoutKey(removed.owner), id);
+      } catch (error) {
+        // Still inside withWebviews' mutex: restore the exact record at its
+        // original position without overwriting any concurrent mutation.
+        list.splice(index, 0, removed);
+        await writeWebviews(configDir(), list);
+        throw error;
+      }
+      return { status: 'deleted' as const, owner: removed.owner };
     });
 
     if (result === 'not-found') {
