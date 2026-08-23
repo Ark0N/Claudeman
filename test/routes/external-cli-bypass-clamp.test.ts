@@ -5,7 +5,7 @@
  * `POST /api/quick-start` and, until pi was added, had no tests at all.
  *
  * The helper has two shapes and the difference is the whole point:
- *  - only-if-sent (codex, antigravity): an ABSENT config already spawns safe, so
+ *  - only-if-sent (codex, antigravity, grok): an ABSENT config already spawns safe, so
  *    only a sent config needs its flag forced off.
  *  - MATERIALIZE (gemini, pi): the absent-config default is itself unsafe for a
  *    non-granted owner (gemini's builder defaults to `yolo`; pi's default is an
@@ -25,20 +25,23 @@ describe('clampExternalCliBypassForOwner — single-user mode', () => {
       { dangerouslyBypassApprovals: true },
       { approvalMode: 'yolo' },
       { dangerouslySkipPermissions: true },
-      { approveProjectTrust: true }
+      { approveProjectTrust: true },
+      { alwaysApprove: true }
     );
     expect(out.codexConfig).toEqual({ dangerouslyBypassApprovals: true });
     expect(out.geminiConfig).toEqual({ approvalMode: 'yolo' });
     expect(out.antigravityConfig).toEqual({ dangerouslySkipPermissions: true });
     expect(out.piConfig).toEqual({ approveProjectTrust: true });
+    expect(out.grokConfig).toEqual({ alwaysApprove: true });
   });
 
   it('leaves absent configs absent', async () => {
-    const out = await _clampExternalCliBypassForOwner(undefined, undefined, undefined, undefined, undefined);
+    const out = await _clampExternalCliBypassForOwner(undefined, undefined, undefined, undefined, undefined, undefined);
     expect(out.codexConfig).toBeUndefined();
     expect(out.geminiConfig).toBeUndefined();
     expect(out.antigravityConfig).toBeUndefined();
     expect(out.piConfig).toBeUndefined();
+    expect(out.grokConfig).toBeUndefined();
   });
 });
 
@@ -64,57 +67,75 @@ describe('clampExternalCliBypassForOwner — multi-user mode', () => {
       { dangerouslyBypassApprovals: true },
       undefined,
       { dangerouslySkipPermissions: true },
-      { approveProjectTrust: true }
+      { approveProjectTrust: true },
+      { alwaysApprove: true }
     );
     expect(out.codexConfig).toEqual({ dangerouslyBypassApprovals: true });
     expect(out.geminiConfig).toBeUndefined();
     expect(out.antigravityConfig).toEqual({ dangerouslySkipPermissions: true });
     expect(out.piConfig).toEqual({ approveProjectTrust: true });
+    expect(out.grokConfig).toEqual({ alwaysApprove: true });
   });
 
   it('passes through for a user holding the bypass grant', async () => {
-    const out = await _clampExternalCliBypassForOwner('trusted', undefined, undefined, undefined, {
-      approveProjectTrust: true,
-    });
+    const out = await _clampExternalCliBypassForOwner(
+      'trusted',
+      undefined,
+      undefined,
+      undefined,
+      { approveProjectTrust: true },
+      { alwaysApprove: true }
+    );
     expect(out.piConfig).toEqual({ approveProjectTrust: true });
+    expect(out.grokConfig).toEqual({ alwaysApprove: true });
   });
 
-  it('forces codex/antigravity bypass off for a non-granted owner (only-if-sent branch)', async () => {
+  it('forces codex/antigravity/grok bypass off for a non-granted owner (only-if-sent branch)', async () => {
     const out = await _clampExternalCliBypassForOwner(
       'peon',
       { dangerouslyBypassApprovals: true, model: 'gpt-5' },
       undefined,
       { dangerouslySkipPermissions: true, model: 'gemini-3-pro' },
-      undefined
+      undefined,
+      { alwaysApprove: true, model: 'grok-4.5' }
     );
     expect(out.codexConfig).toEqual({ dangerouslyBypassApprovals: false, model: 'gpt-5' });
     expect(out.antigravityConfig).toEqual({ dangerouslySkipPermissions: false, model: 'gemini-3-pro' });
+    expect(out.grokConfig).toEqual({ alwaysApprove: false, model: 'grok-4.5' });
   });
 
-  it('leaves codex/antigravity absent when nothing was sent (they already spawn safe)', async () => {
-    const out = await _clampExternalCliBypassForOwner('peon', undefined, undefined, undefined, undefined);
+  it('leaves codex/antigravity/grok absent when nothing was sent (they already spawn safe)', async () => {
+    const out = await _clampExternalCliBypassForOwner('peon', undefined, undefined, undefined, undefined, undefined);
     expect(out.codexConfig).toBeUndefined();
     expect(out.antigravityConfig).toBeUndefined();
+    expect(out.grokConfig).toBeUndefined();
   });
 
   it('MATERIALIZES gemini to auto_edit even when no config was sent', async () => {
-    const out = await _clampExternalCliBypassForOwner('peon', undefined, undefined, undefined, undefined);
+    const out = await _clampExternalCliBypassForOwner('peon', undefined, undefined, undefined, undefined, undefined);
     expect(out.geminiConfig).toEqual({ approvalMode: 'auto_edit' });
   });
 
   it('MATERIALIZES pi to --no-approve even when no config was sent', async () => {
     // The load-bearing case: omitting --approve is NOT a clamp for pi, because
     // pi's own default is to ASK, and the session user can answer that prompt.
-    const out = await _clampExternalCliBypassForOwner('peon', undefined, undefined, undefined, undefined);
+    const out = await _clampExternalCliBypassForOwner('peon', undefined, undefined, undefined, undefined, undefined);
     expect(out.piConfig).toEqual({ approveProjectTrust: false });
   });
 
   it('forces a sent pi approveProjectTrust:true down to false, keeping other fields', async () => {
-    const out = await _clampExternalCliBypassForOwner('peon', undefined, undefined, undefined, {
-      approveProjectTrust: true,
-      model: 'sonnet:high',
-      provider: 'anthropic',
-    });
+    const out = await _clampExternalCliBypassForOwner(
+      'peon',
+      undefined,
+      undefined,
+      undefined,
+      {
+        approveProjectTrust: true,
+        model: 'sonnet:high',
+        provider: 'anthropic',
+      },
+      undefined
+    );
     expect(out.piConfig).toEqual({
       approveProjectTrust: false,
       model: 'sonnet:high',
@@ -123,10 +144,16 @@ describe('clampExternalCliBypassForOwner — multi-user mode', () => {
   });
 
   it('fails closed for an unknown/deleted owner', async () => {
-    const out = await _clampExternalCliBypassForOwner('ghost', undefined, undefined, undefined, {
-      approveProjectTrust: true,
-    });
+    const out = await _clampExternalCliBypassForOwner(
+      'ghost',
+      undefined,
+      undefined,
+      undefined,
+      { approveProjectTrust: true },
+      { alwaysApprove: true }
+    );
     expect(out.piConfig).toEqual({ approveProjectTrust: false });
     expect(out.geminiConfig).toEqual({ approvalMode: 'auto_edit' });
+    expect(out.grokConfig).toEqual({ alwaysApprove: false });
   });
 });

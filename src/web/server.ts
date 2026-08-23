@@ -1434,6 +1434,7 @@ export class WebServer extends EventEmitter {
         { isGeminiAvailable },
         { isAntigravityAvailable },
         { isPiAvailable },
+        { isGrokAvailable },
         { isCloudflaredAvailable },
         { isGitAvailable },
       ] = await Promise.all([
@@ -1443,6 +1444,7 @@ export class WebServer extends EventEmitter {
         import('../utils/gemini-cli-resolver.js'),
         import('../utils/antigravity-cli-resolver.js'),
         import('../utils/pi-cli-resolver.js'),
+        import('../utils/grok-cli-resolver.js'),
         import('../utils/cloudflared-resolver.js'),
         import('../git-clone.js'),
       ]);
@@ -1453,6 +1455,7 @@ export class WebServer extends EventEmitter {
         gemini: isGeminiAvailable(),
         antigravity: isAntigravityAvailable(),
         pi: isPiAvailable(),
+        grok: isGrokAvailable(),
         cloudflared: isCloudflaredAvailable(),
         // Not a run mode: the Add Case → Clone tab is an offer this box cannot
         // keep without git (issue #236), same reasoning as cloudflared above.
@@ -2733,6 +2736,7 @@ export class WebServer extends EventEmitter {
               geminiConfig: muxSession.mode === 'gemini' ? savedState?.geminiConfig : undefined,
               antigravityConfig: muxSession.mode === 'antigravity' ? savedState?.antigravityConfig : undefined,
               piConfig: muxSession.mode === 'pi' ? savedState?.piConfig : undefined,
+              grokConfig: muxSession.mode === 'grok' ? savedState?.grokConfig : undefined,
               envOverrides: savedEnvOverrides,
               effort: savedState?.effort,
               attachmentHistory: savedAttachmentHistory,

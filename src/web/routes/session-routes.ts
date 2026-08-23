@@ -24,6 +24,7 @@ import {
   type GeminiConfig,
   type AntigravityConfig,
   type PiConfig,
+  type GrokConfig,
 } from '../../types.js';
 import { Session, isAltScreenStripMode, isMuxAltScreenOnlyStripMode } from '../../session.js';
 import { SseEvent } from '../sse-events.js';
@@ -332,21 +333,27 @@ export function _resetPasteRateBuckets(): void {
  * session user could simply answer "yes" to in the terminal, so merely omitting
  * `--approve` is not a clamp. Forcing `approveProjectTrust: false` makes
  * buildPiCommand emit `--no-approve`, and the prompt never appears.
+ *
+ * Grok is like Codex/Antigravity: the bypass switch is `alwaysApprove`
+ * (`--always-approve`), and an ABSENT config already spawns in grok's own
+ * ask-mode default, so only a sent config needs the flag forced off.
  */
 async function clampExternalCliBypassForOwner(
   owner: string | undefined,
   codexConfig: CodexConfig | undefined,
   geminiConfig: GeminiConfig | undefined,
   antigravityConfig: AntigravityConfig | undefined,
-  piConfig: PiConfig | undefined
+  piConfig: PiConfig | undefined,
+  grokConfig: GrokConfig | undefined
 ): Promise<{
   codexConfig: CodexConfig | undefined;
   geminiConfig: GeminiConfig | undefined;
   antigravityConfig: AntigravityConfig | undefined;
   piConfig: PiConfig | undefined;
+  grokConfig: GrokConfig | undefined;
 }> {
   const granted = await canUsernameRunPrivilegedCommands(owner);
-  if (granted) return { codexConfig, geminiConfig, antigravityConfig, piConfig };
+  if (granted) return { codexConfig, geminiConfig, antigravityConfig, piConfig, grokConfig };
   // Non-granted: force codex/antigravity bypass off (only meaningful when a config was
   // sent) and materialize gemini to auto_edit (clamps an explicit 'yolo' and the yolo default)
   // and pi to --no-approve (clamps an explicit true AND pi's own "ask" default).
@@ -356,11 +363,13 @@ async function clampExternalCliBypassForOwner(
     ? { ...antigravityConfig, dangerouslySkipPermissions: false }
     : antigravityConfig;
   const clampedPi: PiConfig = { ...(piConfig ?? {}), approveProjectTrust: false };
+  const clampedGrok = grokConfig ? { ...grokConfig, alwaysApprove: false } : grokConfig;
   return {
     codexConfig: clampedCodex,
     geminiConfig: clampedGemini,
     antigravityConfig: clampedAntigravity,
     piConfig: clampedPi,
+    grokConfig: clampedGrok,
   };
 }
 
@@ -760,6 +769,7 @@ export function registerSessionRoutes(
       body.mode !== 'gemini' &&
       body.mode !== 'antigravity' &&
       body.mode !== 'pi' &&
+      body.mode !== 'grok' &&
       body.envOverrides &&
       Object.keys(body.envOverrides).length > 0 &&
       (workingDir.startsWith(CASES_DIR + '/') || workingDir.startsWith(managedCasesBase + '/'));
@@ -849,6 +859,12 @@ export function registerSessionRoutes(
         return createErrorResponse(ApiErrorCode.OPERATION_FAILED, getPiNotFoundMessage());
       }
     }
+    if (body.mode === 'grok') {
+      const { isGrokAvailable, getGrokNotFoundMessage } = await import('../../utils/grok-cli-resolver.js');
+      if (!isGrokAvailable()) {
+        return createErrorResponse(ApiErrorCode.OPERATION_FAILED, getGrokNotFoundMessage());
+      }
+    }
 
     // Pre-validate resumeSessionId: check that the conversation file actually exists
     // in Claude's projects directory. If not, skip resume to avoid confusing
@@ -894,9 +910,11 @@ export function registerSessionRoutes(
               ? body.antigravityConfig?.model
               : mode === 'pi'
                 ? body.piConfig?.model
-                : mode !== 'shell'
-                  ? modelConfig?.defaultModel || undefined
-                  : undefined;
+                : mode === 'grok'
+                  ? body.grokConfig?.model
+                  : mode !== 'shell'
+                    ? modelConfig?.defaultModel || undefined
+                    : undefined;
     const claudeModeConfig = await ctx.getClaudeModeConfig();
     // Section 6.3: force non-granted users to a classifier-guarded mode.
     const effectiveClaudeMode = await resolveClaudeModeForUsername(claudeModeConfig.claudeMode, owner);
@@ -906,12 +924,14 @@ export function registerSessionRoutes(
       geminiConfig: gatedGeminiConfig,
       antigravityConfig: gatedAntigravityConfig,
       piConfig: gatedPiConfig,
+      grokConfig: gatedGrokConfig,
     } = await clampExternalCliBypassForOwner(
       owner,
       body.codexConfig,
       body.geminiConfig,
       body.antigravityConfig,
-      body.piConfig
+      body.piConfig,
+      body.grokConfig
     );
     const terminalHistoryConfig = await ctx.getTerminalHistoryConfig();
     const session = new Session({
@@ -929,6 +949,7 @@ export function registerSessionRoutes(
       geminiConfig: mode === 'gemini' ? gatedGeminiConfig : undefined,
       antigravityConfig: mode === 'antigravity' ? gatedAntigravityConfig : undefined,
       piConfig: mode === 'pi' ? gatedPiConfig : undefined,
+      grokConfig: mode === 'grok' ? gatedGrokConfig : undefined,
       resumeSessionId: validatedResumeId,
       envOverrides: body.envOverrides,
       effort: body.effort,
@@ -1160,6 +1181,7 @@ export function registerSessionRoutes(
         session.mode !== 'gemini' &&
         session.mode !== 'antigravity' &&
         session.mode !== 'pi' &&
+        session.mode !== 'grok' &&
         ctx.store.getConfig().ralphEnabled &&
         !session.ralphTracker.autoEnableDisabled
       ) {
@@ -2694,6 +2716,7 @@ export function registerSessionRoutes(
       geminiConfig,
       antigravityConfig,
       piConfig,
+      grokConfig,
       envOverrides,
       effort,
       parentSessionId,
@@ -2742,6 +2765,7 @@ export function registerSessionRoutes(
         geminiConfig ||
         antigravityConfig ||
         piConfig ||
+        grokConfig ||
         openCodeConfig
       ) {
         return createErrorResponse(
@@ -2774,6 +2798,7 @@ export function registerSessionRoutes(
         geminiConfig ||
         antigravityConfig ||
         piConfig ||
+        grokConfig ||
         openCodeConfig
       ) {
         return createErrorResponse(
@@ -2876,6 +2901,14 @@ export function registerSessionRoutes(
         }
       }
 
+      // Check Grok availability if requested
+      if (mode === 'grok') {
+        const { isGrokAvailable, getGrokNotFoundMessage } = await import('../../utils/grok-cli-resolver.js');
+        if (!isGrokAvailable()) {
+          return createErrorResponse(ApiErrorCode.OPERATION_FAILED, getGrokNotFoundMessage());
+        }
+      }
+
       // Resolve case path: check linked-cases registry first, then fall back to CASES_DIR.
       // This mirrors the behaviour of resolveCasePath() in case-routes so that linked
       // external project directories are honoured by quick-start just like regular case routes.
@@ -2922,8 +2955,15 @@ export function registerSessionRoutes(
         writeFileSync(join(resolvedCasePath, 'CLAUDE.md'), claudeMd);
 
         // Write .claude/settings.local.json with hooks for desktop notifications
-        // (Claude-specific — OpenCode, Codex, Gemini, and Antigravity use their own systems)
-        if (mode !== 'opencode' && mode !== 'codex' && mode !== 'gemini' && mode !== 'antigravity' && mode !== 'pi') {
+        // (Claude-specific — OpenCode, Codex, Gemini, Antigravity, Pi and Grok use their own systems)
+        if (
+          mode !== 'opencode' &&
+          mode !== 'codex' &&
+          mode !== 'gemini' &&
+          mode !== 'antigravity' &&
+          mode !== 'pi' &&
+          mode !== 'grok'
+        ) {
           await writeHooksConfig(resolvedCasePath);
         }
 
@@ -2995,6 +3035,7 @@ export function registerSessionRoutes(
       mode !== 'gemini' &&
       mode !== 'antigravity' &&
       mode !== 'pi' &&
+      mode !== 'grok' &&
       !remote &&
       envOverrides &&
       Object.keys(envOverrides).length > 0
@@ -3017,9 +3058,11 @@ export function registerSessionRoutes(
               ? antigravityConfig?.model
               : mode === 'pi'
                 ? piConfig?.model
-                : mode !== 'shell'
-                  ? qsModelConfig?.defaultModel || undefined
-                  : undefined;
+                : mode === 'grok'
+                  ? grokConfig?.model
+                  : mode !== 'shell'
+                    ? qsModelConfig?.defaultModel || undefined
+                    : undefined;
     const qsClaudeModeConfig = await ctx.getClaudeModeConfig();
     const qsEffectiveClaudeMode = await resolveClaudeModeForUsername(qsClaudeModeConfig.claudeMode, owner);
     // Section 6.3: clamp Codex/Gemini/Antigravity bypass switches for a non-granted owner (no-op single-user/granted).
@@ -3028,7 +3071,8 @@ export function registerSessionRoutes(
       geminiConfig: qsGatedGeminiConfig,
       antigravityConfig: qsGatedAntigravityConfig,
       piConfig: qsGatedPiConfig,
-    } = await clampExternalCliBypassForOwner(owner, codexConfig, geminiConfig, antigravityConfig, piConfig);
+      grokConfig: qsGatedGrokConfig,
+    } = await clampExternalCliBypassForOwner(owner, codexConfig, geminiConfig, antigravityConfig, piConfig, grokConfig);
     const qsTerminalHistoryConfig = await ctx.getTerminalHistoryConfig();
     const session = new Session({
       workingDir: resolvedCasePath,
@@ -3046,6 +3090,7 @@ export function registerSessionRoutes(
       geminiConfig: mode === 'gemini' ? qsGatedGeminiConfig : undefined,
       antigravityConfig: mode === 'antigravity' ? qsGatedAntigravityConfig : undefined,
       piConfig: mode === 'pi' ? qsGatedPiConfig : undefined,
+      grokConfig: mode === 'grok' ? qsGatedGrokConfig : undefined,
       envOverrides,
       effort,
       remote,
@@ -3096,7 +3141,7 @@ export function registerSessionRoutes(
         });
         ctx.broadcast(SseEvent.SessionInteractive, { id: session.id, mode: 'shell' });
       } else {
-        // 'claude', 'opencode', 'codex', 'gemini', and 'antigravity' modes use startInteractive()
+        // every non-shell mode ('claude', the external CLIs) uses startInteractive()
         await session.startInteractive();
         getLifecycleLog().log({
           event: 'started',

@@ -176,6 +176,7 @@ describe('Run launch synchronization', () => {
         'runGemini',
         'runAntigravity',
         'runPi',
+        'runGrok',
       ])
     );
 
@@ -365,12 +366,13 @@ describe('Codex quick start settings', () => {
         'welcomeAntigravityBtn',
         'welcomeGeminiBtn',
         'welcomePiBtn',
+        'welcomeGrokBtn',
         'welcomeTunnelBtn',
       ]) {
         welcomeBtns[id] = { style: { display: 'PRISTINE' } };
       }
       const modeBtns: Record<string, { style: { display: string } }> = {};
-      for (const mode of ['claude', 'opencode', 'codex', 'gemini', 'antigravity', 'pi', 'shell']) {
+      for (const mode of ['claude', 'opencode', 'codex', 'gemini', 'antigravity', 'pi', 'grok', 'shell']) {
         modeBtns[mode] = { style: { display: 'PRISTINE' } };
       }
       const menu = {
@@ -402,6 +404,7 @@ describe('Codex quick start settings', () => {
       gemini: false,
       antigravity: false,
       pi: false,
+      grok: false,
       cloudflared: false,
     };
 
@@ -425,6 +428,13 @@ describe('Codex quick start settings', () => {
       const withPi = loadUi({ ...ALL_OFF, pi: true });
       withPi.app.applyWelcomeCliVisibility();
       expect(withPi.welcomeBtns.welcomePiBtn.style.display).toBe('flex');
+
+      // Grok is gated on `grok` like the rest; the resolver additionally
+      // version-probes the binary, so a stray `grok` on PATH reports unavailable.
+      const withGrok = loadUi({ ...ALL_OFF, grok: true });
+      withGrok.app.applyWelcomeCliVisibility();
+      expect(withGrok.welcomeBtns.welcomeGrokBtn.style.display).toBe('flex');
+      expect(withGrok.welcomeBtns.welcomeClaudeBtn.style.display).toBe('none');
       expect(withPi.welcomeBtns.welcomeClaudeBtn.style.display).toBe('none');
 
       // Antigravity is a first-class welcome action, gated on `agy` like the rest.
@@ -457,6 +467,7 @@ describe('Codex quick start settings', () => {
       );
       expect(offered).toContain('antigravity');
       expect(offered).toContain('pi');
+      expect(offered).toContain('grok');
       const src = readFileSync(resolve(import.meta.dirname, '../src/web/public/session-ui.js'), 'utf8');
       // Anchor on the DEFINITION, not the earlier call site in toggleRunModeMenu.
       const fn = src.slice(src.indexOf('_refreshRunModeAvailability(menu) {'));
@@ -991,5 +1002,99 @@ describe('Pi quick start', () => {
 
     expect(requests).toEqual(['/api/pi/status']);
     expect(errors[0]).toContain('@earendil-works/pi-coding-agent');
+  });
+});
+
+describe('Grok quick start', () => {
+  // Same envelope-unwrap regression guard as the blocks above, for runGrok(),
+  // plus the rule that makes grok the OPPOSITE of pi: the Run button DOES send
+  // `grokConfig: { alwaysApprove: true }` (grok's bypassPermissions mode), the
+  // same product decision as runAntigravity's dangerouslySkipPermissions and
+  // claude's --dangerously-skip-permissions. The multi-user clamp strips it
+  // server-side for non-granted owners.
+  it('drives runGrok() through the {success,data} envelope and sends alwaysApprove', async () => {
+    const elements: Record<string, any> = {
+      quickStartCase: { value: 'grok-case' },
+    };
+    const requests: Array<{ url: string; body?: any }> = [];
+    const CodemanApp = function CodemanApp(this: any) {};
+
+    const context = vm.createContext({
+      CodemanApp,
+      localStorage: { getItem: () => null, setItem: () => {} },
+      document: { getElementById: (id: string) => elements[id] ?? null },
+      fetch: async (url: string, init?: { body?: string }) => {
+        requests.push({ url, body: init?.body ? JSON.parse(init.body) : undefined });
+        if (url === '/api/grok/status')
+          return {
+            json: async () => ({
+              success: true,
+              data: { available: true, path: '/home/user/.grok/bin', version: '1.0.5' },
+            }),
+          };
+        if (url === '/api/quick-start')
+          return { json: async () => ({ success: true, data: { sessionId: 'sess-gk' } }) };
+        if (url === '/api/sessions/sess-gk')
+          return { json: async () => ({ success: true, data: { id: 'sess-gk', name: 'w1-grok-case' } }) };
+        throw new Error(`unexpected fetch: ${url}`);
+      },
+      console,
+    });
+
+    const sessionUi = readFileSync(resolve(import.meta.dirname, '../src/web/public/session-ui.js'), 'utf8');
+    vm.runInContext(sessionUi, context, { filename: 'session-ui.js' });
+
+    const app = new (CodemanApp as any)();
+    app.terminal = { clear: () => {}, writeln: () => {}, focus: () => {} };
+    app.loadAppSettingsFromStorage = () => ({});
+    app.getCaseSettings = () => ({});
+    app.buildEnvOverrides = () => ({});
+    app.sessions = new Map();
+    app._onSessionCreated = (session: any) => app.sessions.set(session.id, session);
+    app._renderSessionTabsImmediate = vi.fn();
+    const selected: string[] = [];
+    app.selectSession = async (id: string) => {
+      selected.push(id);
+    };
+
+    await app.runGrok();
+
+    const body = requests.find((req) => req.url === '/api/quick-start')?.body;
+    expect(body).toMatchObject({
+      caseName: 'grok-case',
+      mode: 'grok',
+      grokConfig: { alwaysApprove: true },
+    });
+    expect(selected).toEqual(['sess-gk']);
+  });
+
+  it('reports the install hint when the CLI is missing and starts nothing', async () => {
+    const elements: Record<string, any> = { quickStartCase: { value: 'grok-case' } };
+    const requests: string[] = [];
+    const CodemanApp = function CodemanApp(this: any) {};
+    const context = vm.createContext({
+      CodemanApp,
+      localStorage: { getItem: () => null, setItem: () => {} },
+      document: { getElementById: (id: string) => elements[id] ?? null },
+      fetch: async (url: string) => {
+        requests.push(url);
+        if (url === '/api/grok/status')
+          return { json: async () => ({ success: true, data: { available: false, path: null, version: null } }) };
+        throw new Error(`unexpected fetch: ${url}`);
+      },
+      console,
+    });
+    const sessionUi = readFileSync(resolve(import.meta.dirname, '../src/web/public/session-ui.js'), 'utf8');
+    vm.runInContext(sessionUi, context, { filename: 'session-ui.js' });
+
+    const app = new (CodemanApp as any)();
+    app.terminal = { clear: () => {}, writeln: () => {}, focus: () => {} };
+    const errors: string[] = [];
+    app._reportSessionLaunchError = (_owns: boolean, msg: string) => errors.push(msg);
+
+    await app.runGrok();
+
+    expect(requests).toEqual(['/api/grok/status']);
+    expect(errors[0]).toContain('https://x.ai/cli/install.sh');
   });
 });

@@ -114,6 +114,7 @@ export function defaultRemoteCommandForMode(mode: SessionMode): string {
     gemini: remoteLoginShellCommand('gemini'),
     antigravity: remoteLoginShellCommand('agy'),
     pi: remoteLoginShellCommand('pi'),
+    grok: remoteLoginShellCommand('grok'),
   };
   return commands[mode as RemoteCommandMode] || commands.shell;
 }

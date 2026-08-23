@@ -237,7 +237,7 @@ minutes, never retry the credential.
 flushed slightly *after* the `stop` hook fires, so a read taken the instant the wait
 returns is too early (verified live: empty on the first call, full prose seconds later).
 It is also `""` before the worker's first completed turn, and permanently `""` for
-`shell`, `opencode`, `gemini`, `antigravity` and `pi`, which write no Claude transcript.
+`shell`, `opencode`, `gemini`, `antigravity`, `pi` and `grok`, which write no Claude transcript.
 
 **Fix** Poll it, bounded (10 tries, 1 s apart). If it is still empty on a hook-less mode,
 that is expected, not a failure: read `terminal?tail=` and strip ANSI instead.
@@ -336,19 +336,20 @@ ESC=$(printf '\033')
 
 `POST /api/v1/quick-start` body (all optional):
 `{"caseName":"worker-1","mode":"claude","sessionName":"w9-worker","effort":"high"}`
-,  `mode` ∈ `claude|shell|opencode|codex|gemini|antigravity|pi`; response is
+,  `mode` ∈ `claude|shell|opencode|codex|gemini|antigravity|pi|grok`; response is
 `.data.{sessionId, caseName, casePath}`. Creates the case directory (a real directory
 on the user's disk) if missing, do not retry it in a loop, and remember the name.
 
 ⚠️ A `mode` whose CLI is **not installed on the server** fails the spawn with
 `OPERATION_FAILED`; it never falls back to claude. Probe first whenever you did not pick
 the mode yourself: `GET /api/v1/claude/status`, `GET /api/v1/opencode/status`,
-`GET /api/v1/codex/status`, `GET /api/v1/gemini/status`, `GET /api/v1/antigravity/status`
+`GET /api/v1/codex/status`, `GET /api/v1/gemini/status`, `GET /api/v1/antigravity/status`, `GET /api/v1/grok/status`
 and `GET /api/v1/pi/status` each return `.data.{available, path}` (no session needed).
-Pi's also carries `.data.version`, because `pi` is a short generic name that an unrelated
-binary on `$PATH` can shadow: the resolver rejects one whose `--version` is not
-semver-shaped, so `available:false` there can mean "a different `pi` is in front" rather
-than "nothing is installed". `shell` has no CLI to probe.
+Pi's and grok's also carry `.data.version`, because `pi` is a short generic name and
+`grok` is a name with npm squatters, so an unrelated binary on `$PATH` can shadow either:
+the resolver rejects one whose `--version` is not version-shaped, so `available:false`
+there can mean "a different `pi`/`grok` is in front" rather than "nothing is installed".
+`shell` has no CLI to probe.
 
 ⚠️ **Branch on `.success` before reading `.data.sessionId`.** On any failure the field
 is absent, `jq -r` prints the literal string `null`, and every later call then targets
@@ -462,10 +463,10 @@ Quirks that will bite you:
   session answers with an empty timeline rather than a 404.
 - ⚠️ **`active-tools` proves presence, never absence.** It is fed by the BashToolParser,
   which reads Claude's rendered `● Bash(…)` lines, and `_processExpensiveParsers`
-  returns early for every external CLI mode (`session.ts:2136`), so it is permanently
-  `[]` on `opencode`/`codex`/`gemini`/`antigravity`/`pi`. ⚠️ **`shell` is NOT one of those**
-  (`isExternalCliMode`, `session.ts:165-167`, lists only those five), so the parser does
-  run on a shell worker, and `TEXT_COMMAND_PATTERN` (`bash-tool-parser.ts:88`) matches
+  returns early for every external CLI mode (`session.ts:2261`), so it is permanently
+  `[]` on `opencode`/`codex`/`gemini`/`antigravity`/`pi`/`grok`. ⚠️ **`shell` is NOT one of those**
+  (`isExternalCliMode`, `session.ts:174-183`, lists only those six), so the parser does
+  run on a shell worker, and `TEXT_COMMAND_PATTERN` (`bash-tool-parser.ts:89`) matches
   bare `tail|cat|head|less|grep|watch|multitail <path>` lines with no `● Bash(` wrapper:
   a shell worker running `cat build.log` really does populate this. In practice it stays
   empty for most shell work. It also never sees non-Bash

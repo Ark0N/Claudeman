@@ -190,7 +190,7 @@ describe('_updateLocalEchoState mode gating', () => {
     expect(app._localEchoEnabled).toBe(false);
   });
 
-  it.each(['claude', 'gemini', 'opencode', 'pi'])('keeps the overlay enabled for %s sessions', (mode) => {
+  it.each(['claude', 'gemini', 'opencode', 'pi', 'grok'])('keeps the overlay enabled for %s sessions', (mode) => {
     const overlay = makeOverlay();
     const app = makeApp(mode, overlay);
     app._updateLocalEchoState();
@@ -373,7 +373,7 @@ describe('_updateLocalEchoState echo policy', () => {
     expect(app._predictiveEcho.clearPredictions).toHaveBeenCalled();
   });
 
-  it.each(['claude', 'gemini', 'opencode', 'pi'])(
+  it.each(['claude', 'gemini', 'opencode', 'pi', 'grok'])(
     "%s -> policy 'buffer' + overlay enabled (existing behavior)",
     (mode) => {
       const overlay = makeOverlay();
