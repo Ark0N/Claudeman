@@ -65,7 +65,7 @@
        app.js, NOT the handheld storage-key test `m`. Use a different predicate
        here and boot will contradict this value, animating the drawer open by
        itself on every load between 768 and 1023px. -->
-  <script>try{var m=window.innerWidth<768||(('ontouchstart' in window||navigator.maxTouchPoints>0)&&window.innerWidth<1024);var k=m?'codeman-app-settings-mobile':'codeman-app-settings';var L=JSON.parse(localStorage.getItem(k)||'{}').sessionListLayout;var solo=/^\/session\//.test(location.pathname);var C=localStorage.getItem('codeman-sidebar-collapsed');var S=(L==='sidebar'||L==='sidebar-rich')&&!solo;document.documentElement.dataset.sessionList=S?'sidebar':'header';document.documentElement.dataset.sidebarDetail=(S&&L==='sidebar-rich')?'rich':'simple';document.documentElement.dataset.sidebar=(C===null?window.innerWidth<1024:C==='1')?'collapsed':'expanded';}catch(e){document.documentElement.dataset.sessionList='header';document.documentElement.dataset.sidebarDetail='simple';document.documentElement.dataset.sidebar='expanded';}</script>
+  <script>try{var m=window.innerWidth<768||(('ontouchstart' in window||navigator.maxTouchPoints>0)&&window.innerWidth<1024);var k=m?'codeman-app-settings-mobile':'codeman-app-settings';var A=JSON.parse(localStorage.getItem(k)||'{}');var L=A.sessionListLayout;var F=Number(A.sessionSidebarFontSize);var solo=/^\/session\//.test(location.pathname);var C=localStorage.getItem('codeman-sidebar-collapsed');var S=(L==='sidebar'||L==='sidebar-rich')&&!solo;document.documentElement.dataset.sessionList=S?'sidebar':'header';document.documentElement.dataset.sidebarDetail=(S&&L==='sidebar-rich')?'rich':'simple';document.documentElement.dataset.sidebar=(C===null?window.innerWidth<1024:C==='1')?'collapsed':'expanded';if(Number.isInteger(F)&&F>=11&&F<=18)document.documentElement.style.setProperty('--session-sidebar-name-font-size',F+'px');}catch(e){document.documentElement.dataset.sessionList='header';document.documentElement.dataset.sidebarDetail='simple';document.documentElement.dataset.sidebar='expanded';}</script>
   <!-- Inline critical CSS for instant skeleton paint (before styles.css loads) -->
   <style>
     .loading-skeleton{display:flex;flex-direction:column;height:100vh;height:100dvh;background:var(--bg-dark,#11151c)}
@@ -358,6 +358,20 @@
 
     <!-- Main Terminal Area -->
     <main class="main">
+      <aside class="tab-rail" id="tabRail" aria-label="Session navigation">
+        <div
+          id="tabRailResizeHandle"
+          class="tab-rail-resize-handle"
+          role="separator"
+          aria-orientation="vertical"
+          aria-label="Resize session rail"
+          aria-valuemin="208"
+          aria-valuemax="360"
+          aria-valuenow="256"
+          tabindex="0"
+        ></div>
+      </aside>
+
       <!-- Collapsible session sidebar (opt-in layout). Deliberately EMPTY in
            markup: applySessionListLayout() moves #sessionTabs in here, so the
            vertical list is the exact same DOM node as the header strip and every
@@ -509,6 +523,7 @@
            desktop (which never loads mobile.css) can never render it. -->
       <div class="mobile-overview" id="mobileOverview" hidden></div>
     </main>
+    <div class="tab-rail-resize-shield" id="tabRailResizeShield" aria-hidden="true" hidden></div>
 
     <!-- Project Insights Panel (shows file-viewing Bash commands) -->
     <div class="project-insights-panel" id="projectInsightsPanel">
@@ -1869,6 +1884,29 @@
               <div class="set-group">
                 <div class="set-group-head"><h4>Tabs</h4><span class="set-scope">device</span></div>
                 <div class="set-group-body">
+                  <div class="set-row has-field" data-search="tab orientation horizontal vertical side rail">
+                    <div class="set-row-text">
+                      <span class="set-row-label">Tab Orientation</span>
+                      <span class="set-row-desc">Keep tabs in the header or place them beside the terminal. Phones stay horizontal.</span>
+                    </div>
+                    <select id="appSettingsTabOrientation" class="set-select">
+                      <option value="horizontal">Horizontal (top)</option>
+                      <option value="vertical">Vertical (side rail)</option>
+                    </select>
+                  </div>
+                  <div class="set-row has-field" data-search="tab rail width resize compact wide maximum">
+                    <div class="set-row-text">
+                      <span class="set-row-label">Vertical Rail Width</span>
+                      <span class="set-row-desc">Set the preferred rail width for this device.</span>
+                    </div>
+                    <select id="appSettingsTabRailWidth" class="set-select">
+                      <option value="208">Compact (208px)</option>
+                      <option value="256">Default (256px)</option>
+                      <option value="320">Wide (320px)</option>
+                      <option value="360">Maximum (360px)</option>
+                      <option value="custom" disabled>Custom</option>
+                    </select>
+                  </div>
                   <div class="set-row has-field" data-search="session list layout sidebar tab strip vertical">
                     <div class="set-row-text">
                       <span class="set-row-label">Session List Layout</span>
@@ -1879,6 +1917,18 @@
                       <option value="sidebar">Left sidebar simple</option>
                       <option value="sidebar-rich">Left sidebar</option>
                     </select>
+                  </div>
+                  <div class="set-row has-field" data-search="session sidebar name font size text">
+                    <div class="set-row-text">
+                      <span class="set-row-label" id="appSettingsSessionSidebarFontSizeLabel">Session Name Font Size</span>
+                      <span class="set-row-desc">Adjust only session names in the vertical sidebar.</span>
+                    </div>
+                    <label class="set-range-field" for="appSettingsSessionSidebarFontSize">
+                      <input type="range" id="appSettingsSessionSidebarFontSize" min="11" max="18" step="1" value="14"
+                        aria-labelledby="appSettingsSessionSidebarFontSizeLabel"
+                        oninput="document.getElementById('appSettingsSessionSidebarFontSizeValue').textContent=this.value+' px'">
+                      <output id="appSettingsSessionSidebarFontSizeValue" for="appSettingsSessionSidebarFontSize">14 px</output>
+                    </label>
                   </div>
                   <div class="set-row" data-search="tall tabs folder name two rows">
                     <div class="set-row-text">
@@ -3323,6 +3373,7 @@
   <!-- Hardened markdown HTML sanitizer (wires DOMPurify). Must precede app.js. -->
   <script defer src="sanitize-html.js"></script>
   <script defer src="app.js"></script>
+  <script defer src="tab-rail-resize.js"></script>
   <script defer src="terminal-ui.js"></script>
   <script defer src="respawn-ui.js"></script>
   <script defer src="ralph-panel.js"></script>

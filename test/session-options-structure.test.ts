@@ -16,6 +16,7 @@ import { resolve } from 'node:path';
 const publicDir = resolve(import.meta.dirname, '../src/web/public');
 const html = readFileSync(resolve(publicDir, 'index.html'), 'utf8');
 const sessionUi = readFileSync(resolve(publicDir, 'session-ui.js'), 'utf8');
+const styles = readFileSync(resolve(publicDir, 'styles.css'), 'utf8');
 
 /** The Session Options markup, so assertions can't be satisfied elsewhere. */
 function optionsModal(): string {
@@ -93,5 +94,13 @@ describe('Session Options modal structure', () => {
     const css = readFileSync(resolve(publicDir, 'styles.css'), 'utf8');
     expect(css).toContain(':is(#appSettingsModal, #sessionOptionsModal, #createCaseModal) .set-row {');
     expect(css).toContain(':is(#sessionOptionsModal, #createCaseModal) .set-section.hidden {');
+  });
+
+  it('uses document-safe context columns and widens only at the desktop breakpoint', () => {
+    expect(styles).toMatch(/#sessionOptionsModal #context-tab\s*\{[^}]*minmax\(0, 1fr\)/s);
+    expect(styles).toMatch(
+      /@media \(min-width: 1200px\)[\s\S]*#sessionOptionsModal #context-tab[^}]*repeat\(2, minmax\(0, 1fr\)\)/
+    );
+    expect(styles).not.toMatch(/@media \(min-width: 680px\)[\s\S]{0,1200}#sessionOptionsModal #context-tab/);
   });
 });

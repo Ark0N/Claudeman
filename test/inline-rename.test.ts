@@ -186,6 +186,9 @@ describe('Inline rename input', () => {
         renameActiveAfter: !!app._activeRename,
         sessionGone: !app.sessions.has('ghost-id'),
         fetchFired,
+        renameClassActive:
+          document.querySelector('.tab-name[data-session-id="ghost-id"]')?.classList.contains('tab-name-renaming') ??
+          false,
       };
     });
 
@@ -194,6 +197,7 @@ describe('Inline rename input', () => {
     expect(result.sessionGone).toBe(true);
     // Cancel path skips the API call — deleting a session shouldn't trigger a stale rename PUT.
     expect(result.fetchFired).toBe(false);
+    expect(result.renameClassActive).toBe(false);
   });
 
   it('Ghost tab: _cleanupSessionData for a DIFFERENT session does NOT cancel rename', async () => {
@@ -386,10 +390,16 @@ describe('Inline rename input', () => {
       await new Promise((r) => setTimeout(r, 60));
 
       window.fetch = origFetch;
-      return { mapName: app.sessions.get('no-sse')?.name ?? null };
+      return {
+        mapName: app.sessions.get('no-sse')?.name ?? null,
+        renameClassActive:
+          document.querySelector('.tab-name[data-session-id="no-sse"]')?.classList.contains('tab-name-renaming') ??
+          false,
+      };
     });
 
     expect(result.mapName).toBe('w9-case: fresh');
+    expect(result.renameClassActive).toBe(false);
   });
 
   it('A rejected rename restores the old label and leaves app.sessions untouched', async () => {
@@ -426,12 +436,16 @@ describe('Inline rename input', () => {
       return {
         mapName: app.sessions.get('rename-500')?.name ?? null,
         label: document.querySelector('.tab-name[data-session-id="rename-500"]')?.textContent ?? null,
+        renameClassActive:
+          document.querySelector('.tab-name[data-session-id="rename-500"]')?.classList.contains('tab-name-renaming') ??
+          false,
         toasts,
       };
     });
 
     expect(result.mapName).toBe('w9-case');
     expect(result.label).toBe('w9-case');
+    expect(result.renameClassActive).toBe(false);
     expect(result.toasts).toContain('Failed to rename');
   });
 
@@ -462,10 +476,68 @@ describe('Inline rename input', () => {
       wrap.appendChild(tabName);
       document.body.appendChild(wrap);
       app.startInlineRename('second-id');
-      return { firstActive, secondActive: app._activeRename?.sessionId };
+      return {
+        firstActive,
+        secondActive: app._activeRename?.sessionId,
+        firstRenameClassActive:
+          document.querySelector('.tab-name[data-session-id="first-id"]')?.classList.contains('tab-name-renaming') ??
+          false,
+      };
     });
 
     expect(result.firstActive).toBe('first-id');
     expect(result.secondActive).toBe('second-id');
+    expect(result.firstRenameClassActive).toBe(false);
+  });
+
+  it('Vertical rail paints typing in an unclamped editor and restores the clamp on cancel', async () => {
+    await resetState();
+    const id = 'vertical-live-input';
+
+    await page.evaluate((sessionId) => {
+      const app = (
+        window as unknown as {
+          app: {
+            sessions: Map<string, { id: string; name: string }>;
+            startInlineRename: (id: string) => void;
+          };
+        }
+      ).app;
+      document.documentElement.dataset.tabOrientation = 'vertical';
+      const rail = document.getElementById('tabRail') as HTMLElement;
+      const tab = document.createElement('div');
+      tab.setAttribute('data-test-tab', '1');
+      tab.className = 'session-tab';
+      tab.innerHTML =
+        `<span class="tab-name" data-session-id="${sessionId}">` +
+        '<span class="tab-name-prefix">w9-case: </span>old</span>';
+      rail.appendChild(tab);
+      app.sessions.set(sessionId, { id: sessionId, name: 'w9-case: old' });
+      app.startInlineRename(sessionId);
+    }, id);
+
+    const label = page.locator(`.tab-name[data-session-id="${id}"]`);
+    const input = label.locator('input.tab-rename-input');
+    await input.press(process.platform === 'darwin' ? 'Meta+A' : 'Control+A');
+    await page.keyboard.type('edited title');
+
+    expect(await input.inputValue()).toBe('edited title');
+    expect(await input.evaluate((node) => document.activeElement === node)).toBe(true);
+    expect(await label.evaluate((node) => node.classList.contains('tab-name-renaming'))).toBe(true);
+    expect(await label.evaluate((node) => getComputedStyle(node).webkitLineClamp)).toBe('none');
+    expect(await input.evaluate((node) => node.getBoundingClientRect().width)).toBeGreaterThan(0);
+
+    const settled = await page.evaluate((sessionId) => {
+      const app = (window as unknown as { app: { _activeRename: { cancel: () => void } | null } }).app;
+      app._activeRename?.cancel();
+      const label = document.querySelector(`.tab-name[data-session-id="${sessionId}"]`) as HTMLElement;
+      return {
+        classActive: label.classList.contains('tab-name-renaming'),
+        inputPresent: !!label.querySelector('input.tab-rename-input'),
+        webkitLineClamp: getComputedStyle(label).webkitLineClamp,
+      };
+    }, id);
+
+    expect(settled).toEqual({ classActive: false, inputPresent: false, webkitLineClamp: '2' });
   });
 });
