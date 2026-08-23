@@ -17173,11 +17173,11 @@ html[data-session-list="sidebar"] .session-sidebar .tab-name {
 html[data-session-list='sidebar'] .session-sidebar .tab-name {
   flex: 0 1 auto;
   white-space: nowrap;
-  font-size: var(--session-sidebar-name-font-size, 14px);
+  font-size: var(--session-sidebar-name-font-size, 12px);
 }
 
 html[data-tab-orientation='vertical'] .tab-rail .session-tab .tab-name {
-  font-size: var(--session-sidebar-name-font-size, 14px);
+  font-size: var(--session-sidebar-name-font-size, 12px);
 }
 
 html[data-session-list='sidebar'] .session-sidebar .tab-actions,
@@ -17198,11 +17198,13 @@ html[data-session-list="sidebar"] .session-sidebar .session-tab.active .tab-clos
 /* Drag-reorder indicators become horizontal edges. The class names stay
    drag-over-left / drag-over-right (they read as before/after now) so app.js,
    the base rules above and the generated gesture bundle need no renaming. */
-html[data-session-list="sidebar"] .session-sidebar .session-tab.drag-over-left {
+html[data-session-list="sidebar"] .session-sidebar .session-tab.drag-over-left,
+html[data-tab-orientation='vertical'] .tab-rail .session-tab.drag-over-left {
   box-shadow: 0 -2px 0 0 var(--accent);
 }
 
-html[data-session-list="sidebar"] .session-sidebar .session-tab.drag-over-right {
+html[data-session-list="sidebar"] .session-sidebar .session-tab.drag-over-right,
+html[data-tab-orientation='vertical'] .tab-rail .session-tab.drag-over-right {
   box-shadow: 0 2px 0 0 var(--accent);
 }
 

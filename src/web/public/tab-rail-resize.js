@@ -1,4 +1,17 @@
-/** @fileoverview Accessible, device-local vertical session-rail sizing. */
+/**
+ * @fileoverview Accessible, device-local vertical session-rail sizing.
+ *
+ * Pointer + keyboard resizing for the vertical tab rail (`tabOrientation:
+ * 'vertical'`), with a preferred width persisted per device (`tabRailWidth`)
+ * and re-clamped against the viewport on resize. During a drag it takes
+ * ownership of terminal refits (`_tabRailResizeOwnsObserver` suppresses
+ * terminal-ui's throttled ResizeObserver) and performs ONE settle-time resize,
+ * reverting per-frame below 40 columns so the PTY is never thrashed.
+ *
+ * @dependency CodemanApp (app.js) - methods attach to its prototype
+ * @dependency CodemanTabRail (constants.js) - width policy (resolveWidth, bounds)
+ * @loadorder 6.5 (after app.js, before terminal-ui.js)
+ */
 
 Object.assign(CodemanApp.prototype, {
   _getTabRailMinimumTerminalWidth() {

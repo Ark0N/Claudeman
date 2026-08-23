@@ -2444,7 +2444,7 @@ Object.assign(CodemanApp.prototype, {
         tabOrientation: 'horizontal',
         tabRailWidth: 256,
         sessionListLayout: 'header',
-        sessionSidebarFontSize: 14,
+        sessionSidebarFontSize: 12,
         cjkInputEnabled: false,
         terminalWheelLocalScrollback: false, // mobile scrolls via touch, not wheel
         webglRendererEnabled: false, // mobile always uses the DOM renderer

@@ -51,6 +51,7 @@ import type { TerminalMultiplexer } from '../mux-interface.js';
 import { createMultiplexer } from '../mux-factory.js';
 import { getStore } from '../state-store.js';
 import { TabLayoutService } from '../tab-layout-service.js';
+import { ownerLayoutKey } from '../tab-layout-persistence.js';
 import { readWebviews } from '../webview-store.js';
 import { extractCompletionPhrase } from '../ralph-config.js';
 import { fileStreamManager } from '../file-stream-manager.js';
@@ -615,7 +616,7 @@ export class WebServer extends EventEmitter {
   private async registerSessionWithLayout(session: Session): Promise<void> {
     this.sessions.set(session.id, session);
     try {
-      await this.tabLayouts.sessionCreated(session.owner ?? '@single');
+      await this.tabLayouts.sessionCreated(ownerLayoutKey(session.owner));
     } catch (error) {
       this.sessions.delete(session.id);
       throw error;

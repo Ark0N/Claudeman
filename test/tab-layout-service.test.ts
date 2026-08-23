@@ -65,15 +65,33 @@ describe('TabLayoutService', () => {
     await expect(h.service.runSessionDeletion([{ id: 'mine' }], action)).rejects.toThrow(/restoration.*pending/i);
     expect(action).not.toHaveBeenCalled();
 
-    h.service.markRestorationFailed();
-    await expect(h.service.runSessionDeletion([{ id: 'mine' }], action)).rejects.toThrow(/restoration.*failed/i);
-    expect(action).not.toHaveBeenCalled();
-
     h.service.markRestorationSkipped();
     await expect(h.service.runSessionDeletion([{ id: 'mine' }], action)).resolves.toBe('removed');
     expect(action).toHaveBeenCalledTimes(1);
     expect(h.store.commitTabLayoutProjection).not.toHaveBeenCalled();
     expect(h.broadcastSessionOrder).not.toHaveBeenCalled();
+  });
+
+  it('degrades an explicit deletion to best-effort after a failed restore, while the stale sweep stays blocked', async () => {
+    // A tmux hiccup at boot used to lock DELETE /api/sessions/:id (and webview
+    // deletes) into opaque 500s for the whole process lifetime. A user's
+    // explicit close now runs without layout coordination; only the AUTOMATED
+    // stale sweep stays fail-closed, because it picks its own victims from
+    // state a failed restore may have left incomplete.
+    const h = createHarness({ layouts: { '@single': existing([{ kind: 'session', id: 'mine' }]) } });
+    const action = vi.fn(async () => 'removed');
+    h.service.markRestorationFailed();
+
+    await expect(h.service.runSessionDeletion([{ id: 'mine' }], action)).resolves.toBe('removed');
+    expect(action).toHaveBeenCalledTimes(1);
+    expect(h.store.commitTabLayoutProjection).not.toHaveBeenCalled();
+    expect(h.broadcastSessionOrder).not.toHaveBeenCalled();
+
+    await expect(h.service.webviewDeleted('@single', 'w1')).resolves.toBeUndefined();
+
+    const cleanup = vi.fn();
+    await expect(h.service.runStaleSessionCleanup(new Set(), cleanup)).rejects.toThrow(/restoration.*failed/i);
+    expect(cleanup).not.toHaveBeenCalled();
   });
 
   it('prepares and commits a complete-state session deletion around the resource action', async () => {
@@ -877,7 +895,7 @@ describe('TabLayoutService', () => {
   it.each([
     ['foreign owner', ['b', 'a']],
     ['unknown stored ref', ['unknown', 'a']],
-  ])('rejects a regular legacy request containing a %s without mutation or events', async (_label, requested) => {
+  ])('drops a %s from a regular legacy request instead of rejecting the write', async (_label, requested) => {
     const original = existing([
       { kind: 'session', id: 'a' },
       { kind: 'session', id: 'unknown' },
@@ -891,14 +909,58 @@ describe('TabLayoutService', () => {
       ],
     });
 
-    await expect(h.service.putLegacyOrder({ owner: 'alice', isAdmin: false }, requested)).rejects.toThrow(
-      /not owned by layout owner/i
-    );
+    // Unknown/foreign ids are dropped, never a 400: the browser's reorder push
+    // is debounced and swallows errors, so a rejection would silently lose the
+    // user's whole reorder when a session dies inside the debounce window.
+    const result = await h.service.putLegacyOrder({ owner: 'alice', isAdmin: false }, requested);
+
+    expect(result.order).toEqual(['a']);
     expect(h.layouts.alice).toEqual(original);
     expect(h.order).toEqual(['a', 'b', 'unknown']);
-    expect(h.store.commitTabLayoutProjection).not.toHaveBeenCalled();
     expect(h.broadcast).not.toHaveBeenCalled();
     expect(h.broadcastSessionOrder).not.toHaveBeenCalled();
+  });
+
+  it('applies the surviving reorder when the request contains a deleted id (owner path)', async () => {
+    const h = createHarness({
+      layouts: {
+        alice: existing([
+          { kind: 'session', id: 'a1' },
+          { kind: 'session', id: 'a2' },
+        ]),
+      },
+      order: ['a1', 'a2'],
+      live: [
+        { id: 'a1', owner: 'alice', createdAt: 1 },
+        { id: 'a2', owner: 'alice', createdAt: 2 },
+      ],
+    });
+
+    const result = await h.service.putLegacyOrder({ owner: 'alice', isAdmin: false }, ['a2', 'ghost', 'a1']);
+
+    expect(result.order).toEqual(['a2', 'a1']);
+    expect(h.order).toEqual(['a2', 'a1']);
+  });
+
+  it('applies the surviving reorder when the request contains a deleted id (admin path)', async () => {
+    const h = createHarness({
+      layouts: {
+        alice: existing([
+          { kind: 'session', id: 'a1' },
+          { kind: 'session', id: 'a2' },
+        ]),
+      },
+      order: ['a1', 'a2'],
+      live: [
+        { id: 'a1', owner: 'alice', createdAt: 1 },
+        { id: 'a2', owner: 'alice', createdAt: 2 },
+      ],
+    });
+
+    const result = await h.service.putLegacyOrder({ owner: 'root', isAdmin: true }, ['a2', 'ghost', 'a1']);
+
+    expect(result.order).toEqual(['a2', 'a1']);
+    expect(h.order).toEqual(['a2', 'a1']);
   });
 
   it('keeps containers and anchored slots fixed, materializes ranked children, and merges missing known sessions', async () => {

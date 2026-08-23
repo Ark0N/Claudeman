@@ -988,6 +988,11 @@ class CodemanApp {
       this.applySkin();
       this.applyLocalization();
       this.applySessionListLayout();
+      // A fresh device seeding tabOrientation from the server would otherwise
+      // show no rail until a resize or a settings save: the boot-time call ran
+      // before this async load resolved. Must stay AFTER applySessionListLayout
+      // (same ordering rule as the settings-save path).
+      this.applyTabOrientation?.();
       this.applyMonitorVisibility();
       this.applyLineageLineSettings?.();
       // ultracodeFloatingWindows syncs from the server (non-display key), but on a
@@ -3762,7 +3767,10 @@ class CodemanApp {
 
   resolveSessionSidebarFontSize(value) {
     const size = Number(value);
-    return Number.isInteger(size) && size >= 11 && size <= 18 ? size : 14;
+    // Default 12, matching the sidebar's historical 0.75rem name size: a user
+    // who never touches the slider must not get silently restyled (14 here
+    // bumped every existing sidebar install on the rail feature's release).
+    return Number.isInteger(size) && size >= 11 && size <= 18 ? size : 12;
   }
 
   applySessionSidebarFontSize(settings = null) {
@@ -3785,6 +3793,17 @@ class CodemanApp {
 
   _tabOrientation() {
     return document.documentElement.getAttribute('data-tab-orientation') === 'vertical' ? 'vertical' : 'horizontal';
+  }
+
+  /**
+   * True when the session list renders as a vertical column: the sidebar layout
+   * OR the vertical tab rail. Axis decisions (drag insertion side, active-tab
+   * scroll-into-view, floating-window anchors) must use THIS, not
+   * isSessionSidebarActive() alone — the rail leaves data-session-list at
+   * 'header', so the sidebar predicate reads a vertical rail as horizontal.
+   */
+  _isVerticalTabList() {
+    return this.isSessionSidebarActive() || this._tabOrientation() === 'vertical';
   }
 
   shouldInlineSessionActions() {
@@ -4266,12 +4285,13 @@ class CodemanApp {
       container.querySelector('.session-tab.active');
     if (!tab) return;
 
-    // Sidebar layout: the list scrolls VERTICALLY in its own scroller, so the
-    // horizontal computeTabScrollLeft math below would always no-op (scrollLeft
-    // pinned at 0). With 25+ sessions the active row is routinely below the
-    // fold; 'nearest' never scrolls when it is already visible, and only the
-    // list's own scroller moves — the drawer and document stay put.
-    if (this.isSessionSidebarActive()) {
+    // Sidebar layout AND the vertical rail: the list scrolls VERTICALLY in its
+    // own scroller, so the horizontal computeTabScrollLeft math below would
+    // always no-op (scrollLeft pinned at 0). With 25+ sessions the active row
+    // is routinely below the fold; 'nearest' never scrolls when it is already
+    // visible, and only the list's own scroller moves — drawer/rail and
+    // document stay put.
+    if (this._isVerticalTabList()) {
       tab.scrollIntoView({ block: 'nearest' });
       return;
     }
@@ -4302,12 +4322,13 @@ class CodemanApp {
 
   /**
    * Where a floating window (subagent / ultracode) attaches to its parent tab.
-   * Header strip: below the tab, connector runs vertically. Sidebar: to the
-   * RIGHT of the tab, connector runs horizontally — otherwise the window spawns
-   * on top of the sidebar and its bezier loops backwards underneath it.
+   * Header strip: below the tab, connector runs vertically. Sidebar AND the
+   * vertical rail: to the RIGHT of the tab, connector runs horizontally —
+   * otherwise the window spawns on top of the list and its bezier loops
+   * backwards underneath it.
    */
   _tabAnchor(rect) {
-    if (this.isSessionSidebarActive()) {
+    if (this._isVerticalTabList()) {
       return {
         x: rect.right,
         y: rect.top + rect.height / 2,
@@ -4600,11 +4621,12 @@ class CodemanApp {
     // The full-render path already redraws the connection SVG; this incremental
     // one does not, and a badge appearing widens a tab and shifts every tab after
     // it, sliding the lineage arcs off their anchors. Only pay for it when there
-    // is something anchored to tab rects: lineage arcs, or — in sidebar layout,
-    // where lineage is skipped and the edge count stays 0 — the subagent/
-    // ultracode connectors, whose rows a badge changes the HEIGHT of. Same
-    // widening as the strip-scroll listener in session-lineage.js.
-    if (this._lineageEdgeCount > 0 || this.isSessionSidebarActive()) this.updateConnectionLines();
+    // is something anchored to tab rects: lineage arcs, or — in a VERTICAL list
+    // (sidebar, where lineage is skipped and the edge count stays 0, or the
+    // rail, which can show connectors with zero lineage edges too) — the
+    // subagent/ultracode connectors, whose rows a badge changes the HEIGHT of.
+    // Same widening as the strip-scroll listener in session-lineage.js.
+    if (this._lineageEdgeCount > 0 || this._isVerticalTabList()) this.updateConnectionLines();
 
     this.applySidebarFilter(this._sidebarFilter);
   }
@@ -5017,9 +5039,9 @@ class CodemanApp {
         // inside the handler — these listeners survive a layout flip between
         // renders, so capturing the axis at bind time would go stale.
         // drag-over-left/-right keep their names and now read as before/after;
-        // the sidebar CSS just draws them as top/bottom edges.
+        // the sidebar/rail CSS just draws them as top/bottom edges.
         const rect = tab.getBoundingClientRect();
-        const insertBefore = this.isSessionSidebarActive()
+        const insertBefore = this._isVerticalTabList()
           ? e.clientY < rect.top + rect.height / 2
           : e.clientX < rect.left + rect.width / 2;
 
@@ -5043,7 +5065,7 @@ class CodemanApp {
 
         // Determine insertion position (same axis rule as the dragover handler)
         const rect = tab.getBoundingClientRect();
-        const insertBefore = this.isSessionSidebarActive()
+        const insertBefore = this._isVerticalTabList()
           ? e.clientY < rect.top + rect.height / 2
           : e.clientX < rect.left + rect.width / 2;
 

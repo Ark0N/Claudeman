@@ -52,15 +52,17 @@ describe('vertical session navigation UX contract', () => {
     expect(html).toContain('aria-labelledby="appSettingsSessionSidebarFontSizeLabel"');
     expect(html).toContain('--session-sidebar-name-font-size');
     expect(settingsUi).toContain('sessionSidebarFontSize: this.resolveSessionSidebarFontSize(');
-    expect(settingsUi).toContain('sessionSidebarFontSize: 14,');
+    // 12 = the sidebar's historical 0.75rem name size: the default must
+    // never restyle an install whose user never touched the slider.
+    expect(settingsUi).toContain('sessionSidebarFontSize: 12,');
     expect(settingsUi).toContain("'sessionSidebarFontSize'");
     expect(app).toContain('resolveSessionSidebarFontSize(value)');
     expect(app).toContain('applySessionSidebarFontSize(settings = null)');
     expect(styles).toMatch(
-      /\.session-sidebar \.tab-name[^}]*font-size: var\(--session-sidebar-name-font-size, 14px\)/s
+      /\.session-sidebar \.tab-name[^}]*font-size: var\(--session-sidebar-name-font-size, 12px\)/s
     );
     expect(styles).toMatch(
-      /\.tab-rail \.session-tab \.tab-name[^}]*font-size: var\(--session-sidebar-name-font-size, 14px\)/s
+      /\.tab-rail \.session-tab \.tab-name[^}]*font-size: var\(--session-sidebar-name-font-size, 12px\)/s
     );
   });
 

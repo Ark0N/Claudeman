@@ -230,10 +230,12 @@ Object.assign(CodemanApp.prototype, {
     const strip = document.getElementById('sessionTabs');
     if (!strip) return;
     this._lineageScrollHandler = () => {
-      // Sidebar layout scrolls the SAME element vertically, and there the
-      // subagent/ultracode connectors anchor to tab rects too (lineage arcs are
-      // skipped, so _lineageEdgeCount alone would never redraw them).
-      if (this._lineageEdgeCount > 0 || this.isSessionSidebarActive?.()) this.updateConnectionLines();
+      // Sidebar layout and the vertical rail scroll the SAME element
+      // vertically, and there the subagent/ultracode connectors anchor to tab
+      // rects too (the sidebar skips lineage arcs entirely, and the rail can
+      // show connectors with zero lineage edges, so _lineageEdgeCount alone
+      // would never redraw them).
+      if (this._lineageEdgeCount > 0 || this._isVerticalTabList?.()) this.updateConnectionLines();
     };
     strip.addEventListener('scroll', this._lineageScrollHandler, { passive: true });
   },

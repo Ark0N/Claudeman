@@ -25,7 +25,7 @@
  * - **Plan orchestration** (5): started, progress, subagent, completed, cancelled
  * - **Tunnel** (7): started, stopped, progress, error, qrRotated, qrRegenerated, qrAuthUsed
  * - **Image / attachments** (2): image:detected, attachment:detected
- * - **Hooks** (9): idle_prompt, permission_prompt, elicitation_dialog, elicitation_complete, elicitation_response, stop, teammate_idle, task_completed, suppressed
+ * - **Hooks** (8): idle_prompt, permission_prompt, elicitation_dialog, elicitation_complete, elicitation_response, stop, teammate_idle, task_completed
  * - **Approvals** (3): pending, updated, resolved (cross-session Approvals Inbox)
  * - **Orchestrator** (12): stateChanged, planProgress, planReady, phase*, verification, task*, completed, error
  * - **Clipboard** (1): write
