@@ -12,6 +12,10 @@ import { describe, expect, it } from 'vitest';
 
 type Rect = { left: number; top: number; width: number; height: number };
 type LineagePath = { d: string; endX: number; endY: number; sameRow: boolean } | null;
+type Orientation = 'horizontal' | 'vertical';
+
+const lineageJs = readFileSync(resolve(import.meta.dirname, '../src/web/public/session-lineage.js'), 'utf8');
+const stylesCss = readFileSync(resolve(import.meta.dirname, '../src/web/public/styles.css'), 'utf8');
 
 function loadLineageHelper() {
   const context = vm.createContext({ window: {}, globalThis: {} });
@@ -20,7 +24,13 @@ function loadLineageHelper() {
   return (
     context.window as {
       CodemanLineage: {
-        computePath: (input: { parent: Rect | null; child: Rect | null; strip?: Rect; depth?: number }) => LineagePath;
+        computePath: (input: {
+          parent: Rect | null;
+          child: Rect | null;
+          strip?: Rect;
+          depth?: number;
+          orientation?: Orientation;
+        }) => LineagePath;
         DIP_MIN_PX: number;
         DIP_MAX_PX: number;
         SIBLING_STEP_PX: number;
@@ -48,7 +58,11 @@ function loadLineageApp(): { app: LineageApp; sandbox: LineageSandbox } {
     globalThis: {},
     CodemanApp,
     MobileDetection: { getDeviceType: () => 'desktop' },
-    document: { getElementById: () => null, createElementNS: () => null },
+    document: {
+      documentElement: { getAttribute: () => 'horizontal' },
+      getElementById: () => null,
+      createElementNS: () => null,
+    },
   };
   const context = vm.createContext(sandbox);
   for (const file of ['constants.js', 'session-lineage.js']) {
@@ -256,6 +270,76 @@ describe('lineage line geometry', () => {
     expect(
       helper.computePath({ parent: { left: 0, top: 0, width: 0, height: 0 }, child: tab(0), strip: STRIP })
     ).toBeNull();
+  });
+
+  it('routes vertical tabs through the empty left gutter instead of their shared centerline', () => {
+    const helper = loadLineageHelper();
+    const strip: Rect = { left: 100, top: 20, width: 320, height: 320 };
+    const parent: Rect = { left: 132, top: 40, width: 260, height: 40 };
+    const child: Rect = { left: 132, top: 200, width: 260, height: 40 };
+    const geom = helper.computePath({ parent, child, strip, orientation: 'vertical' })!;
+    const nums = geom.d.match(/-?\d+(\.\d+)?/g)?.map(Number) ?? [];
+
+    expect(geom).not.toBeNull();
+    expect(nums).toHaveLength(5);
+    expect(nums[0]).toBe(parent.left);
+    expect(nums[1]).toBe(parent.top + parent.height / 2);
+    expect(nums[2]).toBeGreaterThan(strip.left);
+    expect(nums[2]).toBeLessThan(parent.left);
+    expect(nums[3]).toBe(child.top + child.height / 2);
+    expect(nums[4]).toBe(child.left);
+    expect(geom.endX).toBe(child.left);
+    expect(geom.endY).toBe(child.top + child.height / 2);
+  });
+
+  it('offsets vertical sibling tracks without moving either tab endpoint', () => {
+    const helper = loadLineageHelper();
+    const strip: Rect = { left: 100, top: 20, width: 320, height: 320 };
+    const parent: Rect = { left: 132, top: 40, width: 260, height: 40 };
+    const child: Rect = { left: 132, top: 200, width: 260, height: 40 };
+    const first = helper.computePath({ parent, child, strip, orientation: 'vertical', depth: 0 })!;
+    const second = helper.computePath({ parent, child, strip, orientation: 'vertical', depth: 1 })!;
+    const numbers = (d: string) => d.match(/-?\d+(\.\d+)?/g)?.map(Number) ?? [];
+
+    expect(numbers(second.d)[2]).toBeGreaterThan(numbers(first.d)[2]);
+    expect([second.endX, second.endY]).toEqual([first.endX, first.endY]);
+  });
+
+  it('keeps the same gutter shape when the child sits above its parent', () => {
+    const helper = loadLineageHelper();
+    const strip: Rect = { left: 100, top: 20, width: 320, height: 320 };
+    const parent: Rect = { left: 132, top: 220, width: 260, height: 40 };
+    const child: Rect = { left: 132, top: 60, width: 260, height: 40 };
+    const geom = helper.computePath({ parent, child, strip, orientation: 'vertical' })!;
+    const nums = geom.d.match(/-?\d+(\.\d+)?/g)?.map(Number) ?? [];
+
+    expect(nums).toEqual([parent.left, 240, expect.any(Number), 80, child.left]);
+    expect(nums[2]).toBeGreaterThan(strip.left);
+    expect(nums[2]).toBeLessThan(parent.left);
+    expect([geom.endX, geom.endY]).toEqual([child.left, 80]);
+  });
+
+  it('clips vertical lineage by the visible Y range after rail scrolling', () => {
+    const helper = loadLineageHelper();
+    const strip: Rect = { left: 100, top: 100, width: 320, height: 300 };
+    const visible: Rect = { left: 132, top: 160, width: 260, height: 40 };
+    const above: Rect = { left: 132, top: 20, width: 260, height: 40 };
+    const below: Rect = { left: 132, top: 460, width: 260, height: 40 };
+
+    expect(helper.computePath({ parent: above, child: visible, strip, orientation: 'vertical' })).toBeNull();
+    expect(helper.computePath({ parent: visible, child: below, strip, orientation: 'vertical' })).toBeNull();
+    expect(
+      helper.computePath({ parent: visible, child: { ...visible, top: 300 }, strip, orientation: 'vertical' })
+    ).not.toBeNull();
+  });
+
+  it('passes the resolved DOM orientation into geometry and reserves a vertical gutter', () => {
+    expect(lineageJs).toContain("getAttribute('data-tab-orientation')");
+    expect(lineageJs).toMatch(/compute\(\{[\s\S]{0,180}orientation/);
+    const selector = "html[data-tab-orientation='vertical'] .tab-rail .session-tabs {";
+    const verticalRailBlock = stylesCss.slice(stylesCss.indexOf(selector), stylesCss.indexOf(selector) + 600);
+    expect(verticalRailBlock).toContain('--lineage-vertical-gutter');
+    expect(verticalRailBlock).toContain('padding-left');
   });
 
   it('still draws when no strip rect is supplied (clipping is opt-in)', () => {

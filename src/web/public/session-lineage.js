@@ -160,6 +160,8 @@ Object.assign(CodemanApp.prototype, {
     const strip = document.getElementById('sessionTabs');
     if (!strip) return;
     const stripRect = strip.getBoundingClientRect();
+    const orientation =
+      document.documentElement.getAttribute('data-tab-orientation') === 'vertical' ? 'vertical' : 'horizontal';
     for (const edge of edges) {
       for (const id of [edge.parentId, edge.childId]) {
         const key = 'tab:' + id;
@@ -175,7 +177,13 @@ Object.assign(CodemanApp.prototype, {
       const childRect = rects.get('tab:' + edge.childId);
       if (!parentRect || !childRect) continue;
 
-      const geom = compute({ parent: parentRect, child: childRect, strip: stripRect, depth: edge.depth });
+      const geom = compute({
+        parent: parentRect,
+        child: childRect,
+        strip: stripRect,
+        depth: edge.depth,
+        orientation,
+      });
       if (!geom) continue; // scrolled out of the strip, or a degenerate rect
 
       const line = document.createElementNS('http://www.w3.org/2000/svg', 'path');
