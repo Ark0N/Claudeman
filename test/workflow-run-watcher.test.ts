@@ -17,13 +17,22 @@ const PROJECT_HASH = '-home-arkon-default-claudeman';
 const SESSION_UUID = '388113c8-cd01-4e80-93a8-3be66ab1519b';
 const RUN_ID = 'wf_test1234-abc';
 
+/**
+ * The fixture's epochs are anchored to "now", never pinned, because the recency
+ * assertions below compare them against `Date.now()`. A frozen epoch plus a fixed
+ * window is a time bomb: the original fixture's newest activity sat at
+ * 2026-06-14T20:06:40Z, and `getRecentRunSummaries(100000)` — that argument is
+ * MINUTES, i.e. 69.4 days — stopped matching it on 2026-08-23T06:46:40Z, turning
+ * CI red on a suite nobody had touched. Offsets from the anchor are preserved
+ * verbatim, so every parsed duration and ordering assertion is unchanged.
+ */
+const RUN_ANCHOR = Date.now() - 601_000;
+
 /** A run JSON shaped like a real (killed) run: all three agent states + the bloat fields. */
 function sampleRunJson() {
-  const startTime = Date.now() - 15 * 60_000;
-
   return {
     runId: RUN_ID,
-    timestamp: new Date(startTime).toISOString(),
+    timestamp: new Date(RUN_ANCHOR).toISOString(),
     taskId: 'task_abc',
     // --- bloat fields that MUST be stripped ---
     script: 'export const meta = {};\n'.repeat(5000), // ~110KB
@@ -37,7 +46,7 @@ function sampleRunJson() {
     workflowName: 'review-open-prs',
     status: 'killed',
     error: 'user stopped the task',
-    startTime,
+    startTime: RUN_ANCHOR,
     defaultModel: 'claude-opus-4-8[1m]',
     totalTokens: 109703,
     totalToolCalls: 44,
@@ -57,13 +66,13 @@ function sampleRunJson() {
         agentId: 'a6c0e282c3f5ac0bf',
         model: 'claude-opus-4-8[1m]',
         state: 'done',
-        startedAt: startTime + 1002,
-        queuedAt: startTime + 962,
+        startedAt: RUN_ANCHOR + 1002,
+        queuedAt: RUN_ANCHOR + 962,
         attempt: 1,
         lastToolName: 'StructuredOutput',
         lastToolSummary: 'Does the profile setting make the allowlist dead config',
         promptPreview: 'You are reviewing a pull request...',
-        lastProgressAt: startTime + 525143,
+        lastProgressAt: RUN_ANCHOR + 525_143,
         tokens: 104703,
         toolCalls: 41,
         durationMs: 524140,
@@ -78,12 +87,12 @@ function sampleRunJson() {
         agentId: 'a1234567890abcdef',
         model: 'claude-opus-4-8[1m]',
         state: 'progress',
-        startedAt: startTime + 11000,
-        queuedAt: startTime + 970,
+        startedAt: RUN_ANCHOR + 11_000,
+        queuedAt: RUN_ANCHOR + 970,
         attempt: 1,
         lastToolName: 'Read',
         promptPreview: 'Review PR 127...',
-        lastProgressAt: startTime + 601000,
+        lastProgressAt: RUN_ANCHOR + 601_000,
         tokens: 5000,
         toolCalls: 3,
       },
@@ -95,9 +104,9 @@ function sampleRunJson() {
         phaseTitle: 'Verify',
         model: 'claude-opus-4-8[1m]',
         state: 'start',
-        queuedAt: startTime + 980,
+        queuedAt: RUN_ANCHOR + 980,
         promptPreview: 'Verify finding x...',
-        lastProgressAt: startTime + 980,
+        lastProgressAt: RUN_ANCHOR + 980,
       },
     ],
   };
