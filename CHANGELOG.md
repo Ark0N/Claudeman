@@ -1,5 +1,17 @@
 # aicodeman
 
+## 1.22.0
+
+### Minor Changes
+
+- 3f8c8e9: Add Grok Build (xAI `grok`) as a seventh CLI run mode. SessionMode gains 'grok', with its own resolver (version-probed, since the name has npm squatters; GET /api/grok/status surfaces path + version), GrokConfig (model, alwaysApprove -> --always-approve, resume/continue), GROK*\*/XAI*\* env allowlist entries, the multi-user only-if-sent bypass clamp, Docker (own image step + per-file credential seeding) and remote-SSH command defaults, cron agentType, run-mode/welcome/tab UI with a charcoal identity, and docs (grok-integration.md + plan). Verified end to end against grok 1.0.5 on an isolated instance.
+- 74194e4: Add the owner-scoped tab-layout model, persistence, API, lifecycle repair, and synchronized legacy ordering foundation.
+- e3a2fb7: Add an optional resizable vertical session rail with responsive layout, complete labels, accessible controls, and stable inline rename.
+
+### Patch Changes
+
+- Fix the file preview's dead pop-out control: a real detach button now opens the previewed file in a browser tab (raw route for PDFs/images/media/text, converted-PDF preview for docx/pptx) and the copy button reports when a preview has no text to copy instead of silently doing nothing. Review-driven hardening for the new tab features: PUT /api/session-order drops unknown ids again instead of rejecting the whole write (a session deleted inside the browser's debounce window could silently lose the user's reorder), a failed mux restore no longer blocks explicit session/webview deletion for the process lifetime (the automated stale sweep stays fail-closed), and the vertical rail gains the axis-awareness the sidebar-only predicates missed: correct drag-reorder insertion, active-tab scroll-into-view, floating windows anchored beside rail tabs, connector redraws on rail scroll, server-seeded orientation applied on first load, a pre-paint stamp so vertical mode no longer flashes through the header strip, and a 12px session-name default matching the sidebar's historical size so untouched installs are not restyled.
+
 ## 1.21.0
 
 ### Minor Changes
