@@ -461,6 +461,32 @@ describe('ralph-routes', () => {
   // ========== POST /api/ralph-loop/start ==========
 
   describe('POST /api/ralph-loop/start', () => {
+    it('awaits layout insertion and stops lifecycle work when registration rejects', async () => {
+      let rejectRegistration!: (error: Error) => void;
+      harness.ctx.addSession.mockImplementationOnce(
+        () =>
+          new Promise<void>((_resolve, reject) => {
+            rejectRegistration = reject;
+          })
+      );
+
+      const pending = harness.app.inject({
+        method: 'POST',
+        url: '/api/ralph-loop/start',
+        payload: { taskDescription: 'test task', completionPhrase: 'DONE', caseName: 'registration-order' },
+      });
+      await vi.waitFor(() => expect(harness.ctx.addSession).toHaveBeenCalledTimes(1));
+      expect(harness.ctx.persistSessionState).not.toHaveBeenCalled();
+      expect(harness.ctx.setupSessionListeners).not.toHaveBeenCalled();
+
+      rejectRegistration(new Error('layout capacity exceeded'));
+      const response = await pending;
+      expect(response.statusCode).toBe(500);
+      expect(harness.ctx.persistSessionState).not.toHaveBeenCalled();
+      expect(harness.ctx.setupSessionListeners).not.toHaveBeenCalled();
+      expect(harness.ctx.broadcast).not.toHaveBeenCalledWith('session:created', expect.anything());
+    });
+
     it('rejects invalid request body', async () => {
       const res = await harness.app.inject({
         method: 'POST',

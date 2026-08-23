@@ -199,6 +199,20 @@ describe('StateStore', () => {
       expect(store.getSession('pinned-1')).not.toBeNull();
       expect(store.getSession('plain-1')).toBeNull();
     });
+
+    it('cleans only requested unpinned session ids', () => {
+      const store = new StateStore(testFilePath);
+      store.setSession('requested', createMockSessionState('requested'));
+      store.setSession('pinned', { ...createMockSessionState('pinned'), pinned: true, pinnedAt: Date.now() });
+      store.setSession('unrequested', createMockSessionState('unrequested'));
+
+      const result = store.cleanupSessionsByIds(new Set(['requested', 'pinned', 'missing']));
+
+      expect(result.cleaned.map((session) => session.id)).toEqual(['requested']);
+      expect(store.getSession('requested')).toBeNull();
+      expect(store.getSession('pinned')).not.toBeNull();
+      expect(store.getSession('unrequested')).not.toBeNull();
+    });
   });
 
   describe('task operations', () => {

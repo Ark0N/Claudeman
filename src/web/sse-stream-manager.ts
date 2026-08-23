@@ -17,9 +17,11 @@
 
 import type { FastifyReply } from 'fastify';
 import type { BackgroundTask } from '../session.js';
+import type { SessionOrderProjectionChange } from '../tab-layout-service.js';
 import type { AuthUser } from '../types.js';
 import { CleanupManager, StaleExpirationMap } from '../utils/index.js';
 import { SseEvent } from './sse-events.js';
+import { sessionOrderPayloadFor } from './session-order-sse.js';
 import {
   TERMINAL_BATCH_INTERVAL,
   TASK_UPDATE_BATCH_INTERVAL,
@@ -34,6 +36,7 @@ import {
 // Appending SSE comment padding (ignored by EventSource) forces the proxy to flush.
 // Pre-computed once at startup to avoid repeated string allocation.
 const SSE_PADDING = ':' + 'p'.repeat(SSE_PADDING_SIZE) + '\n';
+const UNROUTED_TAB_LAYOUT = Symbol('unrouted-tab-layout');
 
 /** Dependencies injected by WebServer — keeps SseStreamManager decoupled from session/respawn state. */
 interface SseStreamManagerDeps {
@@ -77,6 +80,10 @@ export class SseStreamManager {
   private remoteSseClients: Set<FastifyReply> = new Set();
   /** Clients with backpressure — skip writes until 'drain' fires */
   private backpressuredClients: Set<FastifyReply> = new Set();
+  /** Latest already recipient-filtered legacy order frame awaiting a client's drain. */
+  private pendingSessionOrderFrames: Map<FastifyReply, string> = new Map();
+  /** Latest owner-filtered tab-layout invalidation per affected owner awaiting a client's drain. */
+  private pendingTabLayoutFrames: Map<FastifyReply, Map<string | symbol, string>> = new Map();
 
   // ─── Tunnel State ───────────────────────────────────────
   /** Cached tunnel active state — updated on TunnelStarted/TunnelStopped to avoid getUrl() on every broadcast */
@@ -144,10 +151,7 @@ export class SseStreamManager {
       // If a previous reply registered the same id (reconnect), drop the old one.
       const prev = this.sseClientsById.get(clientId);
       if (prev && prev !== reply) {
-        this.sseClients.delete(prev);
-        this.remoteSseClients.delete(prev);
-        this.backpressuredClients.delete(prev);
-        this.sseClientIdentity.delete(prev);
+        this.removeClient(prev);
       }
       this.sseClientsById.set(clientId, reply);
     }
@@ -157,6 +161,8 @@ export class SseStreamManager {
     this.sseClients.delete(reply);
     this.remoteSseClients.delete(reply);
     this.backpressuredClients.delete(reply);
+    this.pendingSessionOrderFrames.delete(reply);
+    this.pendingTabLayoutFrames.delete(reply);
     this.sseClientIdentity.delete(reply);
     // Clear any clientId mappings pointing at this reply
     for (const [id, r] of this.sseClientsById) {
@@ -199,8 +205,7 @@ export class SseStreamManager {
     try {
       reply.raw.write(`event: ${event}\ndata: ${JSON.stringify(data)}\n\n`);
     } catch {
-      this.sseClients.delete(reply);
-      this.remoteSseClients.delete(reply);
+      this.removeClient(reply);
     }
   }
 
@@ -210,7 +215,44 @@ export class SseStreamManager {
     try {
       reply.raw.write(SSE_PADDING);
     } catch {
-      /* client gone */
+      this.removeClient(reply);
+    }
+  }
+
+  private markBackpressured(reply: FastifyReply): void {
+    this.backpressuredClients.add(reply);
+    reply.raw.once('drain', () => this.flushBackpressuredClient(reply));
+  }
+
+  private flushBackpressuredClient(reply: FastifyReply): void {
+    if (!this.sseClients.has(reply)) return;
+    this.backpressuredClients.delete(reply);
+    try {
+      const drainPadding = this._isTunnelActive ? SSE_PADDING : '';
+      const recovered = reply.raw.write(`event: ${SseEvent.SessionNeedsRefresh}\ndata: {}\n\n${drainPadding}`);
+      if (!recovered) {
+        this.markBackpressured(reply);
+        return;
+      }
+      const pendingLayouts = this.pendingTabLayoutFrames.get(reply);
+      if (pendingLayouts) {
+        for (const [owner, pendingLayout] of pendingLayouts) {
+          pendingLayouts.delete(owner);
+          this.sendSSEPreformatted(reply, pendingLayout);
+          if (!this.sseClients.has(reply)) return;
+          if (this.backpressuredClients.has(reply)) {
+            if (pendingLayouts.size === 0) this.pendingTabLayoutFrames.delete(reply);
+            return;
+          }
+        }
+        this.pendingTabLayoutFrames.delete(reply);
+      }
+      const pendingOrder = this.pendingSessionOrderFrames.get(reply);
+      if (!pendingOrder) return;
+      this.pendingSessionOrderFrames.delete(reply);
+      this.sendSSEPreformatted(reply, pendingOrder);
+    } catch {
+      this.removeClient(reply);
     }
   }
 
@@ -224,24 +266,11 @@ export class SseStreamManager {
     try {
       const ok = reply.raw.write(message);
       if (!ok) {
-        // Buffer is full — mark as backpressured, resume on drain
-        this.backpressuredClients.add(reply);
-        reply.raw.once('drain', () => {
-          this.backpressuredClients.delete(reply);
-          // Client may have missed terminal data during backpressure.
-          // Tell it to reload the active session's buffer to recover.
-          try {
-            const drainPadding = this._isTunnelActive ? SSE_PADDING : '';
-            reply.raw.write(`event: ${SseEvent.SessionNeedsRefresh}\ndata: {}\n\n${drainPadding}`);
-          } catch {
-            /* client gone */
-          }
-        });
+        // Buffer is full — mark as backpressured, resume on drain.
+        this.markBackpressured(reply);
       }
     } catch {
-      this.sseClients.delete(reply);
-      this.remoteSseClients.delete(reply);
-      this.backpressuredClients.delete(reply);
+      this.removeClient(reply);
     }
   }
 
@@ -276,6 +305,36 @@ export class SseStreamManager {
     for (const [client] of this.sseClients) {
       // Multi-user ownership routing (no-op for identity-less single-user clients).
       if (!this.canDeliver(client, hint)) continue;
+      if (event === SseEvent.TabLayoutChanged && this.backpressuredClients.has(client)) {
+        const owner =
+          data !== null &&
+          typeof data === 'object' &&
+          Object.hasOwn(data, 'owner') &&
+          typeof (data as { owner?: unknown }).owner === 'string'
+            ? (data as { owner: string }).owner
+            : (hint?.username ?? hint?.owner ?? UNROUTED_TAB_LAYOUT);
+        let pending = this.pendingTabLayoutFrames.get(client);
+        if (!pending) {
+          pending = new Map();
+          this.pendingTabLayoutFrames.set(client, pending);
+        }
+        pending.set(owner, message);
+        continue;
+      }
+      this.sendSSEPreformatted(client, message);
+    }
+  }
+
+  /** Dispatch the legacy order projection selected from each trusted client identity. */
+  broadcastSessionOrder(change: SessionOrderProjectionChange): void {
+    for (const [client] of this.sseClients) {
+      const payload = sessionOrderPayloadFor(this.sseClientIdentity.get(client), change);
+      if (!payload) continue;
+      const message = `event: ${SseEvent.SessionOrderChanged}\ndata: ${JSON.stringify(payload)}\n\n`;
+      if (this.backpressuredClients.has(client)) {
+        this.pendingSessionOrderFrames.set(client, message);
+        continue;
+      }
       this.sendSSEPreformatted(client, message);
     }
   }
@@ -504,9 +563,7 @@ export class SseStreamManager {
 
     // Remove dead clients
     for (const client of deadClients) {
-      this.sseClients.delete(client);
-      this.remoteSseClients.delete(client);
-      this.backpressuredClients.delete(client);
+      this.removeClient(client);
     }
 
     if (deadClients.length > 0) {
@@ -553,6 +610,8 @@ export class SseStreamManager {
     this.sseClients.clear();
     this.remoteSseClients.clear();
     this.backpressuredClients.clear();
+    this.pendingSessionOrderFrames.clear();
+    this.pendingTabLayoutFrames.clear();
 
     // Clear per-session batch timers
     for (const timer of this.terminalBatchTimers.values()) {

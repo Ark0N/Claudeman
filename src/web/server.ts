@@ -50,6 +50,8 @@ import { RespawnController, RespawnConfig } from '../respawn-controller.js';
 import type { TerminalMultiplexer } from '../mux-interface.js';
 import { createMultiplexer } from '../mux-factory.js';
 import { getStore } from '../state-store.js';
+import { TabLayoutService } from '../tab-layout-service.js';
+import { readWebviews } from '../webview-store.js';
 import { extractCompletionPhrase } from '../ralph-config.js';
 import { fileStreamManager } from '../file-stream-manager.js';
 import {
@@ -81,6 +83,7 @@ import { applyWorkspaceHooks } from '../hooks-config.js';
 import { PushSubscriptionStore } from '../push-store.js';
 import webpush from 'web-push';
 import { SseStreamManager } from './sse-stream-manager.js';
+import { deriveTabLayoutSseHint } from './tab-layout-sse.js';
 import {
   type SessionListenerRefs,
   createSessionListeners,
@@ -170,6 +173,7 @@ import {
   registerWsRoutes,
   registerVoiceRoutes,
   registerWebviewRoutes,
+  registerTabLayoutRoutes,
   tryWebviewRefererFallback,
 } from './routes/index.js';
 import { CronService } from '../cron/cron-service.js';
@@ -247,6 +251,7 @@ export class WebServer extends EventEmitter {
   private cronService!: CronService;
   private sse: SseStreamManager;
   private store = getStore();
+  private tabLayouts!: TabLayoutService;
   private port: number;
   private host: string;
   private https: boolean;
@@ -350,6 +355,17 @@ export class WebServer extends EventEmitter {
       },
       this.cleanup
     );
+    this.tabLayouts = new TabLayoutService({
+      store: this.store,
+      sessions: this.sessions,
+      readWebviews: () => readWebviews(getDataDir()),
+      broadcast: this.broadcast.bind(this),
+      broadcastSessionOrder: (change) => {
+        this.cachedLightState = null;
+        this.sse.broadcastSessionOrder(change);
+      },
+    });
+    if (this.testMode) this.tabLayouts.markRestorationSkipped();
 
     // Approvals Inbox → SSE. The singleton has no server reference; these
     // callbacks are its only way out. Broadcasts carry sessionId, so the
@@ -595,6 +611,17 @@ export class WebServer extends EventEmitter {
     }
   }
 
+  /** Add a tentative session only after its owner layout accepts the creation. */
+  private async registerSessionWithLayout(session: Session): Promise<void> {
+    this.sessions.set(session.id, session);
+    try {
+      await this.tabLayouts.sessionCreated(session.owner ?? '@single');
+    } catch (error) {
+      this.sessions.delete(session.id);
+      throw error;
+    }
+  }
+
   /**
    * Build a route context object satisfying all 5 port interfaces.
    * Single object with zero runtime cost — ISP enforced at the type level.
@@ -605,9 +632,8 @@ export class WebServer extends EventEmitter {
     return {
       // SessionPort
       sessions: this.sessions as ReadonlyMap<string, Session>,
-      addSession: (session: Session) => {
-        this.sessions.set(session.id, session);
-      },
+      addSession: this.registerSessionWithLayout.bind(this),
+      tabLayouts: this.tabLayouts,
       cleanupSession: this.cleanupSession.bind(this),
       setupSessionListeners: this.setupSessionListeners.bind(this),
       persistSessionState: this.persistSessionState.bind(this),
@@ -991,6 +1017,7 @@ export class WebServer extends EventEmitter {
     registerAdminRoutes(this.app, ctx);
     registerOrchestratorRoutes(this.app, ctx);
     registerWebviewRoutes(this.app, ctx);
+    registerTabLayoutRoutes(this.app, ctx);
 
     // Cron: build the service from the same context, recompute
     // due times for any persisted jobs, then expose it to its routes.
@@ -1154,8 +1181,19 @@ export class WebServer extends EventEmitter {
     }
   }
 
-  private async _doCleanupSession(sessionId: string, killMux: boolean, reason?: string): Promise<void> {
+  private async _doCleanupSession(
+    sessionId: string,
+    killMux: boolean,
+    reason?: string,
+    coordinateLayout = true
+  ): Promise<void> {
     const session = this.sessions.get(sessionId);
+    const pinned = session?.pinned === true || this.store.getSession(sessionId)?.pinned === true;
+    if (coordinateLayout && session && killMux && !pinned) {
+      return this.tabLayouts.runSessionDeletion([{ id: sessionId, owner: session.owner }], () =>
+        this._doCleanupSession(sessionId, killMux, reason, false)
+      );
+    }
     const lifecycleLog = getLifecycleLog();
     lifecycleLog.log({
       event: killMux ? 'deleted' : 'detached',
@@ -1857,7 +1895,7 @@ export class WebServer extends EventEmitter {
           // mode) so the flag-off path stays byte-identical.
           session = new Session({ workingDir: run.workingDir });
         }
-        this.sessions.set(session.id, session);
+        await this.registerSessionWithLayout(session);
         this.store.incrementSessionsCreated();
         this.persistSessionState(session);
         await this.setupSessionListeners(session);
@@ -1987,9 +2025,11 @@ export class WebServer extends EventEmitter {
    * Called on startup and can be called via API endpoint.
    * @returns Number of sessions cleaned up
    */
-  private cleanupStaleSessions(): number {
+  private async cleanupStaleSessions(): Promise<number> {
     const activeSessionIds = new Set(this.sessions.keys());
-    const result = this.store.cleanupStaleSessions(activeSessionIds);
+    const result = await this.tabLayouts.runStaleSessionCleanup(activeSessionIds, (ids) =>
+      this.store.cleanupSessionsByIds(ids)
+    );
     const lifecycleLog = getLifecycleLog();
     for (const s of result.cleaned) {
       lifecycleLog.log({ event: 'stale_cleaned', sessionId: s.id, name: s.name });
@@ -2013,11 +2053,13 @@ export class WebServer extends EventEmitter {
 
   /** Shallow-filter the light-state blob to what a non-admin user may see. */
   private filterLightStateForUser(base: Record<string, unknown>, username: string): Record<string, unknown> {
-    const ownedIds = new Set<string>();
+    const authoritativeOwners = new Map<string, string | undefined>();
+    for (const [id, session] of Object.entries(this.store.getSessions())) authoritativeOwners.set(id, session.owner);
+    for (const [id, session] of this.sessions) authoritativeOwners.set(id, session.owner);
+    const ownedIds = new Set([...authoritativeOwners].filter(([, owner]) => owner === username).map(([id]) => id));
     const ownedClaudeIds = new Set<string>();
-    for (const [id, s] of this.sessions) {
+    for (const s of this.sessions.values()) {
       if (s.owner === username) {
-        ownedIds.add(id);
         if (s.claudeSessionId) ownedClaudeIds.add(s.claudeSessionId);
       }
     }
@@ -2035,6 +2077,9 @@ export class WebServer extends EventEmitter {
     const filtered: Record<string, unknown> = {
       ...base,
       sessions,
+      sessionOrder: Array.isArray(base.sessionOrder)
+        ? (base.sessionOrder as string[]).filter((id) => ownedIds.has(id))
+        : [],
       respawnStatus,
       scheduledRuns: [], // legacy ScheduledRun has no owner yet → admin-only
       subagents: bySession(base.subagents, 'sessionId'),
@@ -2071,6 +2116,7 @@ export class WebServer extends EventEmitter {
     const result = {
       version: APP_VERSION,
       sessions: this.getLightSessionsState(),
+      sessionOrder: this.store.getSessionOrder(),
       scheduledRuns: Array.from(this.scheduledRuns.values()),
       respawnStatus,
       globalStats: this.store.getAggregateStats(activeSessionTokens),
@@ -2079,7 +2125,6 @@ export class WebServer extends EventEmitter {
       timestamp: now,
       inputCjkForm: process.env.INPUT_CJK_FORM?.toUpperCase() === 'ON',
       planUsage: getLatestPlanUsage(), // last-known plan-usage telemetry, for the header chip on fresh load
-      sessionOrder: this.store.getSessionOrder(), // global tab order, synced across devices (COD-131)
     };
 
     this.cachedLightState = { data: result, timestamp: now };
@@ -2117,6 +2162,11 @@ export class WebServer extends EventEmitter {
       event === SseEvent.SessionStatusTelemetry
     ) {
       return { adminOnly: true };
+    }
+    // Layout payloads contain only trusted routing metadata. Route them to that
+    // exact owner plus admins, never by resolving a client-supplied ref.
+    if (event.startsWith('tab:')) {
+      return deriveTabLayoutSseHint(data);
     }
     // Session-scoped families: resolve the owner from the payload's session id.
     const SESSION_PREFIXES = [
@@ -2363,25 +2413,25 @@ export class WebServer extends EventEmitter {
     // This prevents race conditions where clients connect before state is ready
     // CRITICAL: Skip in test mode to prevent tests from picking up user sessions
     if (!this.testMode) {
-      await this.restoreMuxSessions();
+      const restored = await this.restoreMuxSessions();
+      await this.finalizeRestoredState(restored);
 
       // Instance-scoped reaper: after restore, `docker rm -f` managed containers of
       // THIS instance whose case is gone from docker-cases.json (best-effort, never
       // touches another instance's containers). Runs after restore so containers
       // still referenced by a restored session are preserved.
-      void import('../docker-hosts.js')
-        .then(({ reapOrphanedDockerContainers }) => reapOrphanedDockerContainers(getDataDir(), CODEMAN_INSTANCE))
-        .then((reaped) => {
-          if (reaped.length > 0)
-            console.log(`[Docker] reaped ${reaped.length} orphaned container(s): ${reaped.join(', ')}`);
-        })
-        .catch(() => {
-          /* best-effort — daemon may be absent */
-        });
+      if (restored) {
+        void import('../docker-hosts.js')
+          .then(({ reapOrphanedDockerContainers }) => reapOrphanedDockerContainers(getDataDir(), CODEMAN_INSTANCE))
+          .then((reaped) => {
+            if (reaped.length > 0)
+              console.log(`[Docker] reaped ${reaped.length} orphaned container(s): ${reaped.join(', ')}`);
+          })
+          .catch(() => {
+            /* best-effort — daemon may be absent */
+          });
+      }
     }
-
-    // Clean up stale sessions from state file that don't have active mux sessions
-    this.cleanupStaleSessions();
 
     // Bound disk use under heavy paste-image traffic: delete `paste-*` files
     // older than 7 days from each live session's .claude-images/ hourly.
@@ -2618,7 +2668,7 @@ export class WebServer extends EventEmitter {
     return false;
   }
 
-  private async restoreMuxSessions(): Promise<void> {
+  private async restoreMuxSessions(): Promise<boolean> {
     try {
       // Reconcile mux sessions to find which ones are still alive (also discovers unknown ones)
       const { alive, dead, discovered } = await this.mux.reconcileSessions();
@@ -2897,9 +2947,22 @@ export class WebServer extends EventEmitter {
       if (dead.length > 0) {
         console.log(`[Server] Cleaned up ${dead.length} dead mux session(s)`);
       }
+      return true;
     } catch (err) {
       console.error('[Server] Failed to restore mux sessions:', err);
+      return false;
     }
+  }
+
+  /** Unlock destructive reconciliation only after mux restoration fully succeeds. */
+  private async finalizeRestoredState(restored: boolean): Promise<void> {
+    if (!restored) {
+      this.tabLayouts.markRestorationFailed();
+      return;
+    }
+    this.tabLayouts.markRestorationComplete();
+    await this.cleanupStaleSessions();
+    await this.tabLayouts.reconcileAfterRestoration();
   }
 
   /**

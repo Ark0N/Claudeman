@@ -119,7 +119,7 @@ Shell and external CLI sessions accept `idle`, `working`, and `exit`.
 
 ## SSE
 
-`GET /api/events` is the live event stream. 155 event names, kept in sync between server and
+`GET /api/events` is the live event stream. 156 event names, kept in sync between server and
 client with a test that fails on drift.
 
 The heartbeat is a **named** `sse:heartbeat` event rather than an SSE comment, because

@@ -47,7 +47,8 @@ import {
   SessionWaitQuerySchema,
   SessionWaitOutputQuerySchema,
 } from '../schemas.js';
-import { mergeSessionOrder } from '../../session-order.js';
+import { ownerLayoutKey } from '../../tab-layout-persistence.js';
+import { TabLayoutValidationError } from '../../tab-layout.js';
 import {
   sessionWaits,
   resolveWaitSignals,
@@ -107,7 +108,7 @@ import {
   setHistoryIndexRefresher,
   setHistorySessionIndex,
 } from '../session-history-index.js';
-import type { SessionPort, EventPort, ConfigPort, InfraPort, AuthPort } from '../ports/index.js';
+import type { SessionPort, EventPort, ConfigPort, InfraPort, AuthPort, TabLayoutPort } from '../ports/index.js';
 import { RunSummaryTracker } from '../../run-summary.js';
 
 import { MAX_INPUT_LENGTH, MAX_SESSION_NAME_LENGTH } from '../../config/terminal-limits.js';
@@ -641,7 +642,7 @@ async function injectAgentSkill(casePath: string): Promise<void> {
 
 export function registerSessionRoutes(
   app: FastifyInstance,
-  ctx: SessionPort & EventPort & ConfigPort & InfraPort & AuthPort
+  ctx: SessionPort & EventPort & ConfigPort & InfraPort & AuthPort & TabLayoutPort
 ): void {
   // ═══════════════════════════════════════════════════════════════
   // Auth
@@ -673,16 +674,23 @@ export function registerSessionRoutes(
     return (list as Array<{ owner?: string }>).filter((s) => canAccessOwned(user, s.owner));
   });
 
-  // ========== Session Tab Order (global sync, COD-131) ==========
+  // ========== Legacy Session Tab Order (temporary synchronized compatibility bridge) ==========
 
-  app.put('/api/session-order', async (req): Promise<ApiResponse<{ order: string[] }>> => {
-    const { order } = parseBody(SessionOrderUpdateSchema, req.body, 'Invalid session order');
-    // Server is authoritative but never drops ids it knows about that the
-    // pushing device hadn't loaded yet — those fall to the end (mergeSessionOrder).
-    const merged = mergeSessionOrder(order, ctx.store.getSessionOrder());
-    ctx.store.setSessionOrder(merged);
-    ctx.broadcast(SseEvent.SessionOrderChanged, { order: merged });
-    return { success: true, data: { order: merged } };
+  app.put('/api/session-order', async (req, reply): Promise<ApiResponse<{ order: string[] }>> => {
+    try {
+      const { order } = parseBody(SessionOrderUpdateSchema, req.body, 'Invalid session order');
+      const user = getAuthUser(req);
+      const result = await ctx.tabLayouts.putLegacyOrder(
+        { owner: ownerLayoutKey(ownerFor(req)), isAdmin: user.role === 'admin' },
+        order
+      );
+      return { success: true, data: { order: result.order } };
+    } catch (error) {
+      if (error instanceof TabLayoutValidationError) {
+        return reply.code(400).send(createErrorResponse(ApiErrorCode.INVALID_INPUT, error.message));
+      }
+      throw error;
+    }
   });
 
   // ========== Session Creation ==========
@@ -930,7 +938,7 @@ export function registerSessionRoutes(
       parentSessionId: resolveParentSessionId(ctx, req, body.parentSessionId, owner),
     });
 
-    ctx.addSession(session);
+    await ctx.addSession(session);
     ctx.store.incrementSessionsCreated();
     ctx.persistSessionState(session);
     await ctx.setupSessionListeners(session);
@@ -2643,7 +2651,7 @@ export function registerSessionRoutes(
       allowedTools: runClaudeModeConfig.allowedTools,
       owner: runOwner,
     });
-    ctx.addSession(session);
+    await ctx.addSession(session);
     ctx.store.incrementSessionsCreated();
     ctx.persistSessionState(session);
     await ctx.setupSessionListeners(session);
@@ -3057,7 +3065,7 @@ export function registerSessionRoutes(
       }
     }
 
-    ctx.addSession(session);
+    await ctx.addSession(session);
     ctx.store.incrementSessionsCreated();
     ctx.persistSessionState(session);
     await ctx.setupSessionListeners(session);
