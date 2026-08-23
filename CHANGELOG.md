@@ -1,5 +1,13 @@
 # aicodeman
 
+## 1.22.0
+
+### Minor Changes
+
+- 3f8c8e9: Add Grok Build (xAI `grok`) as a seventh CLI run mode. SessionMode gains 'grok', with its own resolver (version-probed, since the name has npm squatters; GET /api/grok/status surfaces path + version), GrokConfig (model, alwaysApprove -> --always-approve, resume/continue), GROK*\*/XAI*\* env allowlist entries, the multi-user only-if-sent bypass clamp, Docker (own image step + per-file credential seeding) and remote-SSH command defaults, cron agentType, run-mode/welcome/tab UI with a charcoal identity, and docs (grok-integration.md + plan). Verified end to end against grok 1.0.5 on an isolated instance.
+- 74194e4: Add the owner-scoped tab-layout model, persistence, API, lifecycle repair, and synchronized legacy ordering foundation.
+- e3a2fb7: Add an optional resizable vertical session rail with responsive layout, complete labels, accessible controls, and stable inline rename.
+
 ## 1.21.0
 
 ### Minor Changes
