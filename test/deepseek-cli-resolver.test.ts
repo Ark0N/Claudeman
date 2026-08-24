@@ -224,6 +224,51 @@ describe('DeepSeek profile inventory', () => {
     expect(resolveDefaultDeepSeekProfile()).toBe('custom');
   });
 
+  it('does not treat a bundle-less stock profile as launchable', () => {
+    // readProfile() yields an empty bundle list for any package.json without a
+    // `dsh.profile.bundles` array (hand-edited, older layout, mid-install), and
+    // with no bundles to read the shipped web/headless profiles used to look
+    // exactly like an unrecognized third-party one — inheriting its
+    // launchable-by-default treatment and producing the pane-dies-on-arrival
+    // failure the two-part availability gate exists to prevent.
+    const bare = (name: string) => {
+      const dir = join(home, 'profiles', name);
+      mkdirSync(dir, { recursive: true });
+      writeFileSync(join(dir, 'package.json'), JSON.stringify({ name: `dsh-profile-${name}` }));
+    };
+    bare('web');
+    bare('headless');
+
+    const profiles = listDeepSeekProfiles();
+    expect(profiles.map((p) => `${p.name}:${p.kind}`).sort()).toEqual(['headless:headless', 'web:web']);
+    expect(profiles.every((p) => !isLaunchableProfile(p))).toBe(true);
+    expect(resolveDefaultDeepSeekProfile()).toBeNull();
+  });
+
+  it('lets bundle evidence beat the name fallback', () => {
+    // The name check is a LAST resort, so a profile the user happened to call
+    // `web` that really composes a terminal app is still interactive. Otherwise
+    // a directory name would override what the profile actually contains.
+    writeProfile('web', ['@deepseek-ai/dsh-base', '@someone/dsh-tui']);
+    const profile = listDeepSeekProfiles().find((p) => p.name === 'web')!;
+    expect(profile.kind).toBe('interactive');
+    expect(resolveDefaultDeepSeekProfile()).toBe('web');
+  });
+
+  it('does not read `tui` out of the middle of an unrelated word', () => {
+    // The loose arm is a TOKEN match: `@someone/tui-app` is a TUI, `intuition`
+    // is a word. Being wrong is cheap (unknown is launchable too) but it decides
+    // which profile boots by DEFAULT, and "its name contains t-u-i" is not a
+    // rule anyone could predict.
+    writeProfile('intuition', ['@someone/gratuitous-surface']);
+    expect(listDeepSeekProfiles().find((p) => p.name === 'intuition')!.kind).toBe('unknown');
+
+    writeProfile('mine', ['@someone/tui-app']);
+    expect(listDeepSeekProfiles().find((p) => p.name === 'mine')!.kind).toBe('interactive');
+    // Preferred over the merely-unknown one, which is the whole point of ranking.
+    expect(resolveDefaultDeepSeekProfile()).toBe('mine');
+  });
+
   it('survives a stray directory under profiles/', () => {
     mkdirSync(join(home, 'profiles', 'not-a-profile'), { recursive: true });
     writeProfile('dsh-tui', ['@deepseek-harness-tui/dsh-tui']);

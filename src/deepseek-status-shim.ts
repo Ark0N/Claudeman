@@ -44,7 +44,7 @@
  * @module deepseek-status-shim
  */
 
-import { chmodSync, mkdirSync, readFileSync, writeFileSync } from 'node:fs';
+import { chmodSync, mkdirSync, readFileSync, renameSync, rmSync, writeFileSync } from 'node:fs';
 import { dirname } from 'node:path';
 import { dataPath } from './config/instance.js';
 
@@ -54,7 +54,7 @@ import { dataPath } from './config/instance.js';
  * by an older Codeman and rewrite only when needed (rather than rewriting on
  * every session create, or — worse — leaving a stale one in place forever).
  */
-const SHIM_VERSION = 1;
+const SHIM_VERSION = 2;
 const SHIM_MARKER = `codeman-dsh-status-shim v${SHIM_VERSION}`;
 
 /**
@@ -125,8 +125,13 @@ const event = STATE_TO_EVENT[String(flag('--state') ?? '')]
 if (!event) process.exit(0)
 
 // The pane id we hand the TUI IS the Codeman session id, but prefer the ambient
-// env: it is set by the same code that set HERDR_PANE_ID and cannot be spoofed
-// by an argument the agent itself could influence.
+// env: it is set by the same code that set HERDR_PANE_ID, so a TUI that mangles,
+// truncates or re-uses the pane argument still reports against the right session.
+// NOT a security boundary, and do not read it as one: the agent runs IN this pane
+// and can invoke the shim with CODEMAN_SESSION_ID unset and any argv it likes.
+// That buys it nothing it did not already have, since the hook-secret file is
+// readable from the same pane and any process there can POST /api/hook-event
+// directly. Attribution here is about accidents, not adversaries.
 const sessionId = process.env.CODEMAN_SESSION_ID || argv[2]
 const apiUrl = process.env.CODEMAN_API_URL
 if (!sessionId || !apiUrl) process.exit(1)
@@ -213,7 +218,26 @@ export function ensureDeepSeekStatusShim(): string | null {
     }
     if (!current.includes(SHIM_MARKER)) {
       mkdirSync(dirname(path), { recursive: true });
-      writeFileSync(path, SHIM_SOURCE, { mode: 0o700 });
+      // Temp + rename, not a plain write: the TUI can be executing this exact
+      // path at the moment an upgraded Codeman refreshes it (every state change
+      // runs it, and session create is when the rewrite happens), and a reader
+      // that catches a half-written file gets a syntax error, exits non-zero,
+      // and is retried four times per state change for a file that will never
+      // parse. rename(2) is atomic within the directory, so a concurrent exec
+      // sees either the old shim or the new one, never a truncated one.
+      // Same reasoning as the state-store writes; pid-suffixed so two instances
+      // sharing a data dir cannot collide on the temp name.
+      const tempPath = `${path}.${process.pid}.tmp`;
+      try {
+        writeFileSync(tempPath, SHIM_SOURCE, { mode: 0o700 });
+        // The mode argument only applies when writeFileSync CREATES the file, so
+        // a leftover temp from a crashed run would keep its old permissions.
+        chmodSync(tempPath, 0o700);
+        renameSync(tempPath, path);
+      } catch (err) {
+        rmSync(tempPath, { force: true });
+        throw err;
+      }
     }
     // Re-assert the mode even when the content matched: a shim that lost its
     // executable bit (a restored backup, a copied data dir) would make every

@@ -120,8 +120,36 @@ const HEADLESS_BUNDLE_PATTERN = /dsh-headless/i;
  * scoped `dsh-tui` packages from a dozen different authors compete. Anything
  * matching is a TUI; anything unmatched is `unknown`, which still counts as
  * launchable.
+ *
+ * `tui` carries word boundaries so the loose arm stays a TOKEN match: `-` and
+ * `/` are non-word characters, so `@someone/tui-app` and `dsh-tui` both match
+ * while `intuition` and `gratuitous` do not. Being wrong here is cheap (an
+ * unmatched profile is `unknown`, which is launchable too) but it decides which
+ * profile a session boots by DEFAULT, and "the one whose name happens to contain
+ * t-u-i" is not a rule anyone could predict.
  */
-const TUI_BUNDLE_PATTERN = /dsh-tui|dsh-terminal-app|tui/i;
+const TUI_BUNDLE_PATTERN = /dsh-tui|dsh-terminal-app|\btui\b/i;
+
+/**
+ * The profile names DeepSeek itself ships for its non-interactive surfaces.
+ *
+ * Consulted only AFTER the bundle patterns have found nothing, and only against
+ * the directory name. `readProfile()` yields an empty bundle list for any
+ * `package.json` without a `dsh.profile.bundles` array — a hand-edited file, an
+ * older layout, a profile mid-install — and with no bundles to read, the stock
+ * `web` and `headless` profiles look exactly like an unrecognized third-party
+ * one and inherit its launchable-by-default treatment. That is the single
+ * "unknown" that is knowably wrong, and it produces precisely the
+ * pane-dies-on-arrival failure the two-part availability gate exists to prevent.
+ *
+ * Deliberately a fallback rather than a first check: a third-party profile that
+ * legitimately composes a terminal app is identified by its BUNDLES, and its
+ * directory name (which the user chose) must never override that evidence.
+ */
+const STOCK_NON_INTERACTIVE_PROFILES = new Map<string, DeepSeekProfileKind>([
+  ['web', 'web'],
+  ['headless', 'headless'],
+]);
 
 /** Profile directory names that are not profiles. */
 const NON_PROFILE_DIRS = new Set(['node_modules', '.bin', '.pnpm']);
@@ -134,7 +162,7 @@ function classifyProfile(name: string, bundles: string[]): DeepSeekProfileKind {
   if (WEB_BUNDLE_PATTERN.test(haystack)) return 'web';
   if (HEADLESS_BUNDLE_PATTERN.test(haystack)) return 'headless';
   if (TUI_BUNDLE_PATTERN.test(haystack)) return 'interactive';
-  return 'unknown';
+  return STOCK_NON_INTERACTIVE_PROFILES.get(name.toLowerCase()) ?? 'unknown';
 }
 
 /**
