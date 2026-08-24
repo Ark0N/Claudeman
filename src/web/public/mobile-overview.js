@@ -55,6 +55,7 @@ const MOBILE_OVERVIEW_RUN_MODES = [
   { mode: 'antigravity', label: 'Antigravity', short: 'Antigravity' },
   { mode: 'pi', label: 'Pi', short: 'Pi' },
   { mode: 'grok', label: 'Grok', short: 'Grok' },
+  { mode: 'deepseek', label: 'DeepSeek', short: 'DeepSeek' },
   { mode: 'shell', label: 'Terminal / Shell', short: 'Shell' },
 ];
 

@@ -48,8 +48,9 @@ const delay = (ms: number): Promise<void> => new Promise((r) => setTimeout(r, ms
  *    answer "yes" to, which then loads and EXECUTES repo-local `.pi/extensions` TypeScript,
  *    so `approveProjectTrust: false` (`--no-approve`) is materialized. Omitting `--approve`
  *    is NOT a clamp.
- * Codex, antigravity and grok need nothing here: their absent config already spawns safe
- * (grok's bare spawn is its own ask-mode default; --always-approve is only ever sent).
+ * Codex, antigravity, grok and deepseek need nothing here: their absent config already spawns safe
+ * (grok's bare spawn is its own ask-mode default and deepseek's omits DSH_PERMISSION_MODE
+ * entirely, leaving the harness on workspace-write, which asks; both switches are only ever sent).
  * Granted/admin/single-user get undefined for both, i.e. upstream defaults untouched.
  */
 export function clampCronExternalCliConfigs(

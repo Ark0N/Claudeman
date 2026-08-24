@@ -9,6 +9,7 @@
 
 import { PI_VERSION_REGEX } from '../utils/pi-cli-resolver.js';
 import { GROK_VERSION_REGEX } from '../utils/grok-cli-resolver.js';
+import { DEEPSEEK_VERSION_REGEX } from '../utils/deepseek-cli-resolver.js';
 
 export type ProbeEnvironment = 'linux' | 'darwin' | 'win32' | 'wsl';
 
@@ -158,6 +159,32 @@ export const DEPENDENCY_REGISTRY: ToolDependency[] = [
           bins: ['grok'],
           versionArg: '--version',
           versionRegex: GROK_VERSION_REGEX,
+          requireVersionMatch: true,
+        },
+      },
+    ],
+  },
+  {
+    id: 'dsh',
+    label: 'DeepSeek Harness CLI',
+    category: 'core',
+    required: false,
+    usedBy: ['DeepSeek sessions'],
+    // Version match required, and for a sharper reason than pi or grok: `dsh` is
+    // not merely a squattable npm name, it is an existing Debian program
+    // (dancer's shell, `apt install dsh`). The run mode's resolver additionally
+    // demands the harness's own help banner before it will point a spawn line at
+    // a candidate; the doctor is advisory and settles for the shared
+    // DEEPSEEK_VERSION_REGEX, so the two cannot disagree about the VERSION even
+    // though the resolver is the stricter of the pair about IDENTITY.
+    resolvers: [
+      {
+        match: ALL,
+        resolver: {
+          kind: 'path',
+          bins: ['dsh'],
+          versionArg: '--version',
+          versionRegex: DEEPSEEK_VERSION_REGEX,
           requireVersionMatch: true,
         },
       },

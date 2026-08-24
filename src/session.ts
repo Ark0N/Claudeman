@@ -52,6 +52,7 @@ import {
   type AntigravityConfig,
   type PiConfig,
   type GrokConfig,
+  type DeepSeekConfig,
   type SessionRemote,
   type SessionDocker,
 } from './types.js';
@@ -178,7 +179,8 @@ export function isExternalCliMode(mode: SessionMode): boolean {
     mode === 'gemini' ||
     mode === 'antigravity' ||
     mode === 'pi' ||
-    mode === 'grok'
+    mode === 'grok' ||
+    mode === 'deepseek'
   );
 }
 
@@ -196,6 +198,8 @@ function getModeLabel(mode: SessionMode): string {
       return 'Pi';
     case 'grok':
       return 'Grok';
+    case 'deepseek':
+      return 'DeepSeek';
     case 'shell':
       return 'Shell';
     case 'claude':
@@ -521,6 +525,9 @@ export class Session extends EventEmitter {
   private _piConfig: PiConfig | undefined;
   // Grok configuration (only for mode === 'grok')
   private _grokConfig: GrokConfig | undefined;
+
+  // DeepSeek Harness configuration (only for mode === 'deepseek')
+  private _deepSeekConfig: DeepSeekConfig | undefined;
   private _resumeSessionId: string | undefined;
 
   // Ephemeral env overrides (e.g., CLAUDE_CODE_EXPERIMENTAL_AGENT_TEAMS). Exported by tmux
@@ -618,6 +625,8 @@ export class Session extends EventEmitter {
       piConfig?: PiConfig;
       /** Grok configuration (only for mode === 'grok') */
       grokConfig?: GrokConfig;
+      /** DeepSeek Harness configuration (only for mode === 'deepseek') */
+      deepSeekConfig?: DeepSeekConfig;
       /** Resume a previous Claude conversation (used after server reboot) */
       resumeSessionId?: string;
       /** Extra env vars exported to the CLI at spawn time (no disk persistence) */
@@ -725,6 +734,11 @@ export class Session extends EventEmitter {
     // Apply Pi configuration
     if (config.piConfig) {
       this._piConfig = config.piConfig;
+    }
+
+    // Apply DeepSeek Harness configuration
+    if (config.deepSeekConfig) {
+      this._deepSeekConfig = config.deepSeekConfig;
     }
 
     // Apply Grok configuration
@@ -1325,6 +1339,7 @@ export class Session extends EventEmitter {
       antigravityConfig: this._antigravityConfig,
       piConfig: this._piConfig,
       grokConfig: this._grokConfig,
+      deepSeekConfig: this._deepSeekConfig,
       resumeSessionId: this._resumeSessionId,
       effort: this._effort,
       // COD-118: runtime-only — surfaced so the frontend can require explicit user
@@ -1501,7 +1516,8 @@ export class Session extends EventEmitter {
               this.mode === 'gemini' ||
               this.mode === 'antigravity' ||
               this.mode === 'pi' ||
-              this.mode === 'grok'
+              this.mode === 'grok' ||
+              this.mode === 'deepseek'
           ),
         })
       );
@@ -1572,6 +1588,7 @@ export class Session extends EventEmitter {
       antigravityConfig: this._antigravityConfig,
       piConfig: this._piConfig,
       grokConfig: this._grokConfig,
+      deepSeekConfig: this._deepSeekConfig,
       resumeSessionId: this._resumeSessionId,
       envOverrides: this._envOverrides,
       effort: this._effort,
@@ -1831,6 +1848,7 @@ export class Session extends EventEmitter {
             antigravityConfig: this._antigravityConfig,
             piConfig: this._piConfig,
             grokConfig: this._grokConfig,
+            deepSeekConfig: this._deepSeekConfig,
             resumeSessionId: this._resumeSessionId,
             envOverrides: this._envOverrides,
             effort: this._effort,
@@ -1923,6 +1941,12 @@ export class Session extends EventEmitter {
       // Grok sessions require tmux for XAI_API_KEY / GROK_* injection via setenv
       if (this.mode === 'grok') {
         throw new Error('Grok sessions require tmux. Direct PTY fallback is not supported.');
+      }
+      // DeepSeek sessions require tmux for DEEPSEEK_API_KEY / DSH_PERMISSION_MODE
+      // injection via setenv — and for the HERDR_* status-bridge triple, without
+      // which the mode silently loses its definitive idle/blocked signals.
+      if (this.mode === 'deepseek') {
+        throw new Error('DeepSeek Harness sessions require tmux. Direct PTY fallback is not supported.');
       }
       try {
         // Pass --session-id to use the SAME ID as the Codeman session

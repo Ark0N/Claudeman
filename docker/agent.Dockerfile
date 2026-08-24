@@ -68,6 +68,18 @@ RUN curl -fsSL https://x.ai/cli/install.sh | bash \
  && rm -rf /root/.grok /root/.local/bin/grok /root/.local/bin/agent \
  && grok --version
 
+# DeepSeek Harness (`dsh`). A normal npm package, but the ONLY entry here whose
+# binary runs nothing on its own: `dsh` is a profile launcher, and DeepSeek ships
+# only `web` and `headless`, so without an interactive profile a
+# `mode: 'deepseek'` container would start a pane that dies on arrival. The
+# profile itself is installed further down, into the `agent` HOME, because
+# Codeman deliberately does NOT seed `profiles/` from the host: it is a
+# per-profile node_modules tree, host-arch-specific and far too large to copy on
+# every container start.
+RUN npm install -g @deepseek-ai/dsh \
+ && npm cache clean --force \
+ && dsh --version
+
 # `agent` user (gid 0) with an arbitrary-uid-writable HOME. The uid is
 # auto-assigned (node:22-slim already occupies uid 1000 with its `node` user); at
 # runtime Codeman overrides with `--user <hostUid>:0` on Linux, so the baked uid
@@ -88,9 +100,19 @@ ENV HOME=/home/agent
 # `.pi/agent` and `.grok` ARE pre-created: both are seeded per-FILE (pi:
 # auth/settings/trust/models; grok: auth.json/config.toml/pager.toml), and a
 # per-file seed copy, unlike a whole-dir one, does not create its parent directory.
+# `.dsh` is pre-created for the same per-file reason (.env/settings.yaml/
+# cordis.patch.yml), and the interactive profile is built into it HERE rather than
+# after `USER agent`: this layer's closing chgrp/chmod is what makes the whole tree
+# writable by the arbitrary uid the container actually runs as, and a profile
+# installed after it would miss that fixup. DSH_HOME points the launcher at the
+# agent's dir while this still runs as root.
 RUN useradd -g 0 -m -d /home/agent -s /bin/bash agent \
  && mkdir -p /home/agent/.npm /home/agent/.cache /home/agent/.config /home/agent/.codeman \
       /home/agent/.claude/projects /home/agent/.codex/sessions /home/agent/.pi/agent /home/agent/.grok \
+      /home/agent/.dsh \
+ && DSH_HOME=/home/agent/.dsh HOME=/home/agent \
+      dsh plugin --profile dsh-tui add @deepseek-harness-tui/dsh-tui \
+ && test -f /home/agent/.dsh/profiles/dsh-tui/package.json \
  && chgrp -R 0 /home/agent \
  && chmod -R g=u /home/agent
 

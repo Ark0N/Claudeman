@@ -54,6 +54,12 @@ const BROWSER_NOTIF_RATE_LIMIT_MS = 3000;   // Rate limit for browser notificati
 const MOBILE_RESIZE_RETRY_MS = 30000;       // Small-viewport resize re-send while a desktop sizing claim is hot
 const AUTO_CLOSE_NOTIFICATION_MS = 8000;    // Auto-close browser notifications
 const THROTTLE_DELAY_MS = 100;              // General UI throttle delay
+/**
+ * Port the DeepSeek Harness browser UI is started on by the run-menu shortcut.
+ * dsh's own default, so a hand-started `dsh web` and the shortcut land on the
+ * same place and share one saved tab.
+ */
+const DEEPSEEK_WEB_PORT = 3080;
 const TERMINAL_CHUNK_SIZE = 32 * 1024;      // 32KB chunks for terminal buffer loading
 const TERMINAL_TAIL_SIZE = 1024 * 1024;     // 1MB tail for initial load (more scrollback on tab switch)
 const SYNC_WAIT_TIMEOUT_MS = 50;            // Wait timeout for terminal sync
@@ -949,6 +955,7 @@ const SSE_EVENTS = {
   HOOK_ELICITATION_COMPLETE: 'hook:elicitation_complete',
   HOOK_ELICITATION_RESPONSE: 'hook:elicitation_response',
   HOOK_STOP: 'hook:stop',
+  HOOK_AGENT_WORKING: 'hook:agent_working',
   HOOK_TEAMMATE_IDLE: 'hook:teammate_idle',
   HOOK_TASK_COMPLETED: 'hook:task_completed',
 

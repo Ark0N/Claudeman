@@ -53,6 +53,7 @@ import {
   type AntigravityConfig,
   type PiConfig,
   type GrokConfig,
+  type DeepSeekConfig,
   type SessionRemote,
   type SessionDocker,
   type DockerCommandMode,
@@ -95,6 +96,9 @@ import {
   getPiNotFoundMessage,
   resolveGrokDir,
   getGrokNotFoundMessage,
+  resolveDeepSeekDir,
+  getDeepSeekNotFoundMessage,
+  resolveDefaultDeepSeekProfile,
   resolveLocalShell,
   loginShellArgs,
 } from './utils/index.js';
@@ -119,6 +123,7 @@ import {
 // ============================================================================
 
 import { EXEC_TIMEOUT_MS } from './config/exec-timeout.js';
+import { ensureDeepSeekStatusShim } from './deepseek-status-shim.js';
 
 /** How long a cached process snapshot stays usable. */
 const PROC_SNAPSHOT_TTL_MS = 2000;
@@ -847,6 +852,51 @@ function buildGrokCommand(config?: GrokConfig): string {
 }
 
 /**
+ * Build the DeepSeek Harness (`dsh`) command with appropriate flags.
+ *
+ * Unlike every sibling builder, the interesting decision here is not a flag but
+ * WHICH PROFILE to boot: `dsh` is a launcher over `$DSH_HOME/profiles/<name>`,
+ * and DeepSeek ships no interactive terminal profile of its own, so the agent a
+ * pane runs is always one the user installed. An absent `profile` resolves to
+ * the first pane-capable profile on the box; when there is none we still emit a
+ * bare `dsh --profile <default>` rather than inventing a name, because the
+ * availability gate in createSession() has already refused the spawn by then and
+ * this path only runs for a session that passed it.
+ *
+ * There is deliberately NO permission flag: the harness has none. The sandbox
+ * and approval rows read `DSH_PERMISSION_MODE`, exported through `tmux setenv`
+ * in buildEnvExports() so it never lands on this command line.
+ *
+ * Like the sibling builders, every user value is regex-allowlisted and silently
+ * DROPPED on failure: the result is interpolated into a `bash -c "..."` string.
+ */
+function buildDeepSeekCommand(config?: DeepSeekConfig): string {
+  const parts = ['dsh'];
+
+  // A profile name is a single path segment: it is both interpolated into the
+  // shell line and joined into a filesystem path.
+  const requested = config?.profile;
+  const safeProfile =
+    requested && /^[a-zA-Z0-9][a-zA-Z0-9._-]*$/.test(requested)
+      ? requested
+      : (resolveDefaultDeepSeekProfile() ?? undefined);
+  if (safeProfile) parts.push('--profile', safeProfile);
+
+  // The launcher forwards everything after its own flags to the profile's app,
+  // which is where `--resume` is understood. An explicit id wins over the
+  // most-recent-session form, mirroring the sibling builders.
+  const safeSessionId =
+    config?.resumeSessionId && /^[a-zA-Z0-9._-]+$/.test(config.resumeSessionId) ? config.resumeSessionId : undefined;
+  if (safeSessionId) {
+    parts.push('--resume', safeSessionId);
+  } else if (config?.resumeSession) {
+    parts.push('--resume');
+  }
+
+  return parts.join(' ');
+}
+
+/**
  * Build the spawn command for any session mode.
  * Shared by createSession() and respawnPane() to avoid duplication.
  */
@@ -890,6 +940,7 @@ export function buildSpawnCommand(options: {
   antigravityConfig?: AntigravityConfig;
   piConfig?: PiConfig;
   grokConfig?: GrokConfig;
+  deepSeekConfig?: DeepSeekConfig;
   resumeSessionId?: string;
   effort?: EffortLevel;
   /** Codeman session name, passed to claude as `--name` (version-gated, sanitized; local spawns only). */
@@ -941,6 +992,9 @@ export function buildSpawnCommand(options: {
   }
   if (options.mode === 'grok') {
     return buildGrokCommand(options.grokConfig);
+  }
+  if (options.mode === 'deepseek') {
+    return buildDeepSeekCommand(options.deepSeekConfig);
   }
   // #208: NOT the literal '$SHELL'. This string is embedded in the `bash -c "…"`
   // argument of the respawn-pane line, which execSync runs through `/bin/sh -c`,
@@ -1158,6 +1212,8 @@ function appendResumeFlag(modeCommand: string, mode: SessionMode, resumeId: stri
     case 'pi':
       return `${modeCommand} --session ${resumeId}`;
     case 'grok':
+      return `${modeCommand} --resume ${resumeId}`;
+    case 'deepseek':
       return `${modeCommand} --resume ${resumeId}`;
     default:
       return modeCommand; // shell / opencode: no resume
@@ -1749,10 +1805,20 @@ export class TmuxManager extends EventEmitter implements TerminalMultiplexer {
     const exports = [
       'export LANG=en_US.UTF-8',
       'export LC_ALL=en_US.UTF-8',
-      mode === 'codex' || mode === 'gemini' || mode === 'antigravity' || mode === 'pi' || mode === 'grok'
+      mode === 'codex' ||
+      mode === 'gemini' ||
+      mode === 'antigravity' ||
+      mode === 'pi' ||
+      mode === 'grok' ||
+      mode === 'deepseek'
         ? 'export COLORTERM=truecolor'
         : 'unset COLORTERM',
-      ...(mode === 'codex' || mode === 'gemini' || mode === 'antigravity' || mode === 'pi' || mode === 'grok'
+      ...(mode === 'codex' ||
+      mode === 'gemini' ||
+      mode === 'antigravity' ||
+      mode === 'pi' ||
+      mode === 'grok' ||
+      mode === 'deepseek'
         ? ['unset NO_COLOR']
         : []),
       // Stamp each Codex pane with a unique originator so the response-viewer
@@ -1853,6 +1919,10 @@ export class TmuxManager extends EventEmitter implements TerminalMultiplexer {
       const dir = resolveGrokDir();
       return { pathExport: dir ? `export PATH="${dir}:$PATH" && ` : '', dir };
     }
+    if (mode === 'deepseek') {
+      const dir = resolveDeepSeekDir();
+      return { pathExport: dir ? `export PATH="${dir}:$PATH" && ` : '', dir };
+    }
     return { pathExport: '', dir: null };
   }
 
@@ -1884,6 +1954,65 @@ export class TmuxManager extends EventEmitter implements TerminalMultiplexer {
   }
 
   /**
+   * Configure DeepSeek Harness environment on a tmux session.
+   *
+   * Two independent things, both via `tmux setenv` so they are inherited by the
+   * pane without appearing in `ps`:
+   *
+   * 1. `DSH_PERMISSION_MODE` — the harness's only permission input. Exported
+   *    ONLY when the caller sent one, so an absent config lands on the harness's
+   *    own `workspace-write` default (which asks) rather than on ours. That
+   *    "only if sent" shape is what the multi-user clamp relies on.
+   * 2. The `HERDR_*` triple — the supervisor contract the terminal front door
+   *    uses to report idle/working/blocked. Pointing `HERDR_BIN_PATH` at our own
+   *    generated shim is what upgrades this mode from output-stabilization
+   *    guessing to definitive hook events (see deepseek-status-shim.ts). The
+   *    pane id IS the Codeman session id, which is how the shim attributes a
+   *    report without trusting anything the agent could influence.
+   *
+   * Also forwards DEEPSEEK_API_KEY / DEEPSEEK_BASE_URL from the server env when
+   * present, matching the codex/gemini precedent for headless auth.
+   */
+  private _configureDeepSeek(muxName: string, sessionId: string, config?: DeepSeekConfig): void {
+    const tmuxCmd = this.tmux();
+    const setenv = (key: string, value: string): void => {
+      const escaped = value.replace(/'/g, "'\\''");
+      try {
+        execSync(`${tmuxCmd} setenv -t '${muxName}' ${key} '${escaped}'`, {
+          encoding: 'utf8',
+          timeout: EXEC_TIMEOUT_MS,
+          stdio: ['pipe', 'pipe', 'pipe'],
+        });
+      } catch {
+        /* Non-critical */
+      }
+    };
+
+    for (const key of ['DEEPSEEK_API_KEY', 'DEEPSEEK_BASE_URL', 'DSH_HOME']) {
+      const val = process.env[key];
+      if (val) setenv(key, val);
+    }
+
+    // Enum-validated at the schema boundary; re-checked here because this value
+    // reaches a shell line, and a builder must never trust its caller.
+    if (
+      config?.permissionMode &&
+      ['read-only', 'workspace-write', 'danger-full-access'].includes(config.permissionMode)
+    ) {
+      setenv('DSH_PERMISSION_MODE', config.permissionMode);
+    }
+
+    if (config?.statusReporting !== false) {
+      const shim = ensureDeepSeekStatusShim();
+      if (shim) {
+        setenv('HERDR_ENV', '1');
+        setenv('HERDR_BIN_PATH', shim);
+        setenv('HERDR_PANE_ID', sessionId);
+      }
+    }
+  }
+
+  /**
    * Creates a new tmux session wrapping Claude CLI or a shell.
    * In test mode: creates an in-memory session only (no real tmux session).
    */
@@ -1903,6 +2032,7 @@ export class TmuxManager extends EventEmitter implements TerminalMultiplexer {
       antigravityConfig,
       piConfig,
       grokConfig,
+      deepSeekConfig,
       resumeSessionId,
       envOverrides,
       effort,
@@ -1963,6 +2093,9 @@ export class TmuxManager extends EventEmitter implements TerminalMultiplexer {
     if (mode === 'pi' && !cliDir) {
       throw new Error(getPiNotFoundMessage());
     }
+    if (mode === 'deepseek' && !cliDir) {
+      throw new Error(getDeepSeekNotFoundMessage());
+    }
     if (mode === 'grok' && !cliDir) {
       throw new Error(getGrokNotFoundMessage());
     }
@@ -1981,6 +2114,7 @@ export class TmuxManager extends EventEmitter implements TerminalMultiplexer {
       antigravityConfig,
       piConfig,
       grokConfig,
+      deepSeekConfig,
       resumeSessionId,
       effort,
       sessionName: name,
@@ -2048,6 +2182,10 @@ export class TmuxManager extends EventEmitter implements TerminalMultiplexer {
       // For Gemini: set Gemini/Google auth env vars via tmux setenv
       if (mode === 'gemini') {
         this._configureGemini(muxName);
+      }
+      // For DeepSeek: permission mode + the Herdr-compatible status bridge.
+      if (mode === 'deepseek') {
+        this._configureDeepSeek(muxName, sessionId, deepSeekConfig);
       }
 
       // Apply user-supplied env overrides (e.g., CLAUDE_CODE_EFFORT_LEVEL) via tmux setenv
@@ -2206,6 +2344,7 @@ export class TmuxManager extends EventEmitter implements TerminalMultiplexer {
       antigravityConfig,
       piConfig,
       grokConfig,
+      deepSeekConfig,
       resumeSessionId,
       envOverrides,
       effort,
@@ -2236,6 +2375,7 @@ export class TmuxManager extends EventEmitter implements TerminalMultiplexer {
       antigravityConfig,
       piConfig,
       grokConfig,
+      deepSeekConfig,
       resumeSessionId,
       effort,
       sessionName: name,
@@ -2259,6 +2399,10 @@ export class TmuxManager extends EventEmitter implements TerminalMultiplexer {
       // For Gemini: set Gemini/Google auth env vars via tmux setenv before respawn
       if (mode === 'gemini') {
         this._configureGemini(muxName);
+      }
+      // For DeepSeek: permission mode + the Herdr-compatible status bridge.
+      if (mode === 'deepseek') {
+        this._configureDeepSeek(muxName, sessionId, deepSeekConfig);
       }
 
       // Re-apply user env overrides before respawn so the new shell inherits them.

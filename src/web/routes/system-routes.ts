@@ -16,7 +16,7 @@ import { dataPath } from '../../config/instance.js';
 import { ApiErrorCode, createErrorResponse, getErrorMessage, type NiceConfig } from '../../types.js';
 import { isUnauthenticatedNetworkAcknowledged } from '../network-auth-policy.js';
 import { isMultiUserMode } from '../../config/multiuser.js';
-import { findUser } from '../../user-store.js';
+import { findUser, canUsernameRunPrivilegedCommands } from '../../user-store.js';
 import { getAuthUser, requireAdmin, canAccessOwned } from '../route-helpers.js';
 import {
   ConfigUpdateSchema,
@@ -26,6 +26,7 @@ import {
   SubagentWindowStatesSchema,
   SubagentParentMapSchema,
   RevokeSessionSchema,
+  DeepSeekInstallProfileSchema,
 } from '../schemas.js';
 import { subagentWatcher } from '../../subagent-watcher.js';
 import { imageWatcher } from '../../image-watcher.js';
@@ -48,12 +49,27 @@ import {
 } from '../route-helpers.js';
 import { SseEvent } from '../sse-events.js';
 import { getInstallInfo, checkForUpdate, startUpdate, getUpdateStatusForApi } from '../self-update.js';
+
 import { getRepositoryStatus } from '../repo-status.js';
 import type { SessionPort, EventPort, ConfigPort, InfraPort, AuthPort, TabLayoutPort } from '../ports/index.js';
 import { AUTH_COOKIE_NAME } from '../middleware/auth.js';
 import { QR_AUTH_FAILURE_MAX } from '../../config/tunnel-config.js';
 import { AUTH_SESSION_TTL_MS } from '../../config/auth-config.js';
 import { resolveTerminalHistoryConfig } from '../../config/terminal-history.js';
+
+/**
+ * Defaults for `POST /api/deepseek/install-profile`.
+ *
+ * The package is the community terminal front door with by far the widest use
+ * (~27.5k weekly downloads at time of writing, roughly 4x the next), MIT, and
+ * the one whose supervisor-reporting contract Codeman's status bridge speaks.
+ * It is a DEFAULT, not a hardcoding: the endpoint accepts any npm name, and the
+ * resolver never assumes this profile exists.
+ */
+const DEEPSEEK_DEFAULT_TUI_PACKAGE = '@deepseek-harness-tui/dsh-tui';
+const DEEPSEEK_DEFAULT_PROFILE = 'dsh-tui';
+/** A plugin install compiles and links a dependency tree; npm-scale, not curl-scale. */
+const DEEPSEEK_INSTALL_TIMEOUT_MS = 300_000;
 
 // Maximum screenshot upload size (10MB)
 const MAX_SCREENSHOT_SIZE = 10 * 1024 * 1024;
@@ -458,6 +474,111 @@ export function registerSystemRoutes(
       available: isGrokAvailable(),
       path: resolveGrokDir(),
       version: getGrokCliVersion(),
+    };
+  });
+
+  // ========== DeepSeek Harness ==========
+
+  // The widest of the per-CLI status shapes, because this mode has the widest
+  // failure surface. Three fields beyond the sibling `available`/`path`:
+  //
+  // - `version`, like pi/grok, so a misresolution is diagnosable — and here the
+  //   stakes are higher, since `dsh` is also an existing Debian program
+  //   (dancer's shell) rather than merely a squattable npm name.
+  // - `profiles`, because `dsh` is a LAUNCHER: a perfectly installed binary with
+  //   no pane-capable profile cannot start a session, and the UI has to be able
+  //   to say which of the two halves is missing.
+  // - `runnable` + `defaultProfile`, the answer the Run button actually needs,
+  //   so no caller has to re-derive it from the parts and get it subtly wrong.
+  app.get('/api/deepseek/status', async () => {
+    const {
+      isDeepSeekAvailable,
+      isDeepSeekRunnable,
+      resolveDeepSeekDir,
+      getDeepSeekCliVersion,
+      listDeepSeekProfiles,
+      resolveDefaultDeepSeekProfile,
+      resolveDshHome,
+    } = await import('../../utils/deepseek-cli-resolver.js');
+    return {
+      available: isDeepSeekAvailable(),
+      runnable: isDeepSeekRunnable(),
+      path: resolveDeepSeekDir(),
+      version: getDeepSeekCliVersion(),
+      dshHome: resolveDshHome(),
+      defaultProfile: resolveDefaultDeepSeekProfile(),
+      profiles: listDeepSeekProfiles(),
+    };
+  });
+
+  // Bootstrap an interactive profile so the mode becomes usable.
+  //
+  // This exists because DeepSeek ships NO terminal front door: `dsh` on its own
+  // can only serve a browser UI or answer one headless task, and the agent a
+  // Codeman pane runs is always a plugin the user installed. Without this the
+  // mode's first-run experience is a dead Run button and a paragraph of shell
+  // instructions.
+  //
+  // It is the only endpoint in Codeman that installs third-party code, so it is
+  // fenced accordingly:
+  //   - the privileged grant is required in multi-user mode (same bar as a
+  //     `shell` session, which can already do strictly more);
+  //   - the specifier is regex-confined to an npm name at the schema boundary —
+  //     no path, URL, git spec, or leading dash;
+  //   - the spawn is an argv ARRAY through the resolved `dsh`, never a shell
+  //     string, so even a specifier that slipped the regex could not become a
+  //     second command;
+  //   - the request is held open with a bounded timeout, mirroring the
+  //     synchronous-clone precedent in `POST /api/cases/clone` rather than
+  //     introducing a job store for a once-per-install action.
+  app.post('/api/deepseek/install-profile', async (req) => {
+    const body = parseBody(DeepSeekInstallProfileSchema, req.body);
+    if (isMultiUserMode() && !(await canUsernameRunPrivilegedCommands(getAuthUser(req).username))) {
+      return createErrorResponse(
+        ApiErrorCode.FORBIDDEN,
+        'Installing a DeepSeek Harness profile requires the can-bypass-permissions grant'
+      );
+    }
+
+    const { resolveDeepSeekDir, getDeepSeekNotFoundMessage } = await import('../../utils/deepseek-cli-resolver.js');
+    const dir = resolveDeepSeekDir();
+    if (!dir) return createErrorResponse(ApiErrorCode.OPERATION_FAILED, getDeepSeekNotFoundMessage());
+
+    const profile = body.profile || DEEPSEEK_DEFAULT_PROFILE;
+    const pkg = body.package || DEEPSEEK_DEFAULT_TUI_PACKAGE;
+    const result = await new Promise<{ code: number | null; output: string }>((resolve) => {
+      const child = spawn(join(dir, 'dsh'), ['plugin', '--profile', profile, 'add', pkg], {
+        stdio: ['ignore', 'pipe', 'pipe'],
+        timeout: DEEPSEEK_INSTALL_TIMEOUT_MS,
+        // dsh bundles its own package manager, so no system pnpm is required —
+        // but it still needs a HOME to resolve $DSH_HOME against.
+        env: process.env,
+      });
+      let output = '';
+      const capture = (chunk: Buffer) => {
+        // Bounded: a package manager can emit megabytes of progress.
+        if (output.length < 16_384) output += chunk.toString('utf-8');
+      };
+      child.stdout?.on('data', capture);
+      child.stderr?.on('data', capture);
+      child.on('error', (err) => resolve({ code: null, output: `${output}\n${err.message}` }));
+      child.on('close', (code) => resolve({ code, output }));
+    });
+
+    if (result.code !== 0) {
+      return createErrorResponse(
+        ApiErrorCode.OPERATION_FAILED,
+        `Installing ${pkg} into profile "${profile}" failed: ${result.output.slice(-1000).trim() || 'no output'}`
+      );
+    }
+    const { listDeepSeekProfiles, resolveDefaultDeepSeekProfile, isDeepSeekRunnable } =
+      await import('../../utils/deepseek-cli-resolver.js');
+    return {
+      profile,
+      package: pkg,
+      runnable: isDeepSeekRunnable(),
+      defaultProfile: resolveDefaultDeepSeekProfile(),
+      profiles: listDeepSeekProfiles(),
     };
   });
 

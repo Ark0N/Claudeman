@@ -146,6 +146,7 @@ export function defaultDockerCommandForMode(mode: SessionMode): string {
     antigravity: 'exec agy',
     pi: 'exec pi',
     grok: 'exec grok',
+    deepseek: 'exec dsh',
   };
   return commands[mode as DockerCommandMode] || commands.shell;
 }
@@ -624,6 +625,17 @@ const CRED_STORES: CredStorePolicy[] = [
   {
     rel: '.grok',
     seedFiles: ['auth.json', 'config.toml', 'pager.toml'],
+  },
+  // DeepSeek Harness keeps credentials in `~/.dsh/.env` (0600) and composition in
+  // `settings.yaml` / `cordis.patch.yml`. `profiles/` is deliberately NOT seeded:
+  // it is a pnpm workspace holding a full node_modules tree per profile, which is
+  // both enormous and host-arch-specific. An in-container dsh therefore needs its
+  // profile installed IN the image (see docker/agent.Dockerfile), and the seeded
+  // files only supply auth and model composition. Same host-invisibility trade-off
+  // as pi and grok: `~/.dsh/sessions` inside a container is that container's own.
+  {
+    rel: '.dsh',
+    seedFiles: ['.env', 'settings.yaml', 'cordis.patch.yml'],
   },
   { rel: '.config/gcloud', seedWhole: true },
   { rel: '.config/opencode', seedWhole: true },

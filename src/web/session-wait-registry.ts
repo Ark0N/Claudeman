@@ -182,7 +182,13 @@ const HOOK_ONLY_SIGNALS: readonly WaitSignal[] = ['stop', 'blocked'];
  * infinite-wait-dressed-as-a-timeout this guard exists to prevent.
  */
 export function hooksAvailableForMode(mode: SessionMode): boolean {
-  return mode === 'claude';
+  // `deepseek` earns this the same way `claude` does — by emitting DEFINITIVE
+  // signals rather than having them inferred. The DeepSeek Harness terminal
+  // front door reports idle/working/blocked to its supervisor, and Codeman is
+  // that supervisor (see deepseek-status-shim.ts), so a dsh session really can
+  // deliver `stop` and `blocked`. Every other mode is output-stabilization
+  // guesswork and must keep failing the ask.
+  return mode === 'claude' || mode === 'deepseek';
 }
 
 /** Outcome of resolving a caller-supplied wait target against a session's mode. */

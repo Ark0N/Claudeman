@@ -448,6 +448,10 @@
               <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><polygon points="5 3 19 12 5 21 5 3"/></svg>
               Run Grok
             </button>
+            <button class="welcome-btn welcome-btn-deepseek" id="welcomeDeepSeekBtn" style="display: none;" onclick="app.setRunMode('deepseek'); app.runDeepSeek()">
+              <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><polygon points="5 3 19 12 5 21 5 3"/></svg>
+              Run DeepSeek
+            </button>
           </div>
           <div class="welcome-qr" id="welcomeQr" onclick="app.toggleWelcomeQrSize()">
             <div class="welcome-qr-inner" id="welcomeQrInner"></div>
@@ -630,6 +634,15 @@
               <button class="run-mode-option" data-mode="grok" onclick="app.setRunMode('grok')">
                 <span class="run-mode-dot grok"></span>Grok
               </button>
+              <button class="run-mode-option" data-mode="deepseek" onclick="app.setRunMode('deepseek')">
+                <span class="run-mode-dot deepseek"></span>DeepSeek
+              </button>
+              <!-- Shown only when `dsh` is installed but no pane-capable profile is:
+                   DeepSeek ships no terminal front door, so the fix is an install,
+                   not a greyed-out entry the user cannot act on. -->
+              <button class="run-mode-option run-mode-option-install" data-action="deepseek-install" id="runModeDeepSeekInstall" style="display: none;" onclick="app.installDeepSeekProfile()">
+                <span class="run-mode-dot deepseek"></span>DeepSeek — add a terminal profile…
+              </button>
               <div class="run-mode-sep"></div>
               <button class="run-mode-option" data-mode="shell" onclick="app.setRunMode('shell')">
                 <span class="run-mode-dot shell"></span>Terminal / Shell
@@ -641,6 +654,13 @@
               <div class="run-mode-webviews" id="runModeWebviews"></div>
               <button class="run-mode-option run-mode-option--add" onclick="app.showWebviewModal()">
                 <span class="run-mode-dot web"></span>Add URL&hellip;
+              </button>
+              <!-- The DeepSeek Harness browser UI is the vendor's OWN interactive
+                   surface (the terminal one is third-party), so it gets a shortcut:
+                   this starts `dsh web` in a shell session and opens it as a tab.
+                   Shown only when dsh is installed. -->
+              <button class="run-mode-option run-mode-option--web" id="runModeDeepSeekWeb" style="display: none;" onclick="app.runDeepSeekWeb()">
+                <span class="run-mode-dot deepseek"></span>DeepSeek web UI&hellip;
               </button>
               <div class="run-mode-sep"></div>
               <div class="run-mode-header">Recent Sessions</div>
@@ -908,6 +928,7 @@
                 <option value="antigravity">Antigravity</option>
                 <option value="pi">Pi</option>
                 <option value="grok">Grok</option>
+                <option value="deepseek">DeepSeek</option>
               </select>
             </div>
             <div class="form-row"><label>Working Directory</label><input type="text" id="schWorkingDir" placeholder="/absolute/path"></div>
@@ -2676,6 +2697,7 @@
                 <option value="antigravity" data-cli="antigravity">Antigravity</option>
                 <option value="pi" data-cli="pi">Pi</option>
                 <option value="grok" data-cli="grok">Grok</option>
+                <option value="deepseek" data-cli="deepseek">DeepSeek</option>
                 <option value="shell">Shell (no agent)</option>
               </select>
               <span class="form-hint">Which CLI to point the Run button at once the clone finishes. Changeable any time from the Run dropdown.</span>
@@ -2816,7 +2838,7 @@
             <div class="form-row">
               <label>Image</label>
               <input type="text" id="dockerImage" placeholder="codeman/agent:base" autocomplete="off" autocapitalize="off" spellcheck="false">
-              <span class="form-hint">Build it once with <code>node scripts/build-agent-image.mjs</code>. Contains node + claude/codex/gemini/opencode/agy/pi/grok + tmux.</span>
+              <span class="form-hint">Build it once with <code>node scripts/build-agent-image.mjs</code>. Contains node + claude/codex/gemini/opencode/agy/pi/grok/dsh + tmux.</span>
             </div>
             <div class="form-row">
               <label>Network</label>

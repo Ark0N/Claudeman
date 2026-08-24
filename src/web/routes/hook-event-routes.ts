@@ -24,8 +24,17 @@ const APPROVAL_KIND_BY_EVENT: Record<string, ApprovalKind> = {
   idle_prompt: 'idle',
 };
 
-/** Hook events that close a session's pending item without an inbox answer. */
-const APPROVAL_RESOLVING_EVENTS = new Set(['stop', 'elicitation_complete', 'elicitation_response']);
+/**
+ * Hook events that close a session's pending item without an inbox answer.
+ *
+ * `agent_working` is here because it is the DeepSeek status bridge's report that
+ * a turn STARTED, and a harness turn cannot be running while one of its own
+ * modal approvals is on screen — so the agent moving means the dialog was
+ * answered, in the terminal, by the user. That is the same conclusion the claude
+ * path reaches through pane capture, which cannot help here because its frame
+ * parser is Claude-dialog-shaped.
+ */
+const APPROVAL_RESOLVING_EVENTS = new Set(['stop', 'elicitation_complete', 'elicitation_response', 'agent_working']);
 
 export function registerHookEventRoutes(
   app: FastifyInstance,

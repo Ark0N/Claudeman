@@ -125,6 +125,14 @@ PI_SEARCH_PATHS=(
     "$HOME/bin/pi"
 )
 
+# DeepSeek Harness search paths (from src/utils/deepseek-cli-resolver.ts)
+DSH_SEARCH_PATHS=(
+    "$HOME/.local/bin/dsh"
+    "/usr/local/bin/dsh"
+    "$HOME/.npm-global/bin/dsh"
+    "$HOME/bin/dsh"
+)
+
 # Grok CLI search paths (from src/utils/grok-cli-resolver.ts)
 GROK_SEARCH_PATHS=(
     "$HOME/.grok/bin/grok"
@@ -592,6 +600,46 @@ check_grok() {
     done
 
     return 1
+}
+
+# `dsh` is the hardest name of the lot: Debian ships an unrelated `dsh`
+# (dancer's shell). The server-side resolver settles it by demanding the
+# harness's own help banner; detection here only feeds the "you have no AI CLI"
+# hint, so the same cheap banner grep is enough and costs one exec.
+check_dsh() {
+    local candidate
+    if command -v dsh &>/dev/null; then
+        candidate="$(command -v dsh)"
+        if "$candidate" --help 2>/dev/null | grep -qi "DeepSeek Harness"; then
+            return 0
+        fi
+    fi
+
+    for path in "${DSH_SEARCH_PATHS[@]}"; do
+        if [[ -x "$path" ]] && "$path" --help 2>/dev/null | grep -qi "DeepSeek Harness"; then
+            return 0
+        fi
+    done
+
+    return 1
+}
+
+get_dsh_path() {
+    local candidate
+    if command -v dsh &>/dev/null; then
+        candidate="$(command -v dsh)"
+        if "$candidate" --help 2>/dev/null | grep -qi "DeepSeek Harness"; then
+            echo "$candidate"
+            return
+        fi
+    fi
+
+    for path in "${DSH_SEARCH_PATHS[@]}"; do
+        if [[ -x "$path" ]] && "$path" --help 2>/dev/null | grep -qi "DeepSeek Harness"; then
+            echo "$path"
+            return
+        fi
+    done
 }
 
 get_grok_path() {
@@ -2123,6 +2171,7 @@ main() {
     local has_antigravity=false
     local has_pi=false
     local has_grok=false
+    local has_dsh=false
 
     info "Checking AI CLI tools..."
     if check_claude; then
@@ -2153,10 +2202,14 @@ main() {
         has_grok=true
         success "Grok CLI found at $(get_grok_path)"
     fi
+    if check_dsh; then
+        has_dsh=true
+        success "DeepSeek Harness found at $(get_dsh_path)"
+    fi
 
-    if [[ "$has_claude" == "false" && "$has_opencode" == "false" && "$has_codex" == "false" && "$has_gemini" == "false" && "$has_antigravity" == "false" && "$has_pi" == "false" && "$has_grok" == "false" ]]; then
+    if [[ "$has_claude" == "false" && "$has_opencode" == "false" && "$has_codex" == "false" && "$has_gemini" == "false" && "$has_antigravity" == "false" && "$has_pi" == "false" && "$has_grok" == "false" && "$has_dsh" == "false" ]]; then
         echo ""
-        warn "No AI CLI found. Codeman needs at least one: Claude Code, OpenCode, Codex, Antigravity, Gemini, Pi, or Grok."
+        warn "No AI CLI found. Codeman needs at least one: Claude Code, OpenCode, Codex, Antigravity, Gemini, Pi, Grok, or DeepSeek Harness."
         headless_guard "install an AI CLI (curl | bash from its vendor)"
         echo ""
         echo -e "  ${BOLD}Which AI CLI would you like to install?${NC}"
@@ -2512,7 +2565,7 @@ main() {
     echo -e "    https://github.com/Ark0N/Codeman"
     echo ""
 
-    if ! check_claude && ! check_opencode && ! check_codex && ! check_gemini && ! check_antigravity && ! check_pi && ! check_grok; then
+    if ! check_claude && ! check_opencode && ! check_codex && ! check_gemini && ! check_antigravity && ! check_pi && ! check_grok && ! check_dsh; then
         echo -e "  ${YELLOW}${BOLD}Reminder:${NC} Install at least one AI CLI to start using Codeman:"
         echo -e "    ${CYAN}curl -fsSL https://claude.ai/install.sh | bash${NC}                # Claude Code"
         echo -e "    ${CYAN}curl -fsSL https://opencode.ai/install | bash${NC}                 # OpenCode"

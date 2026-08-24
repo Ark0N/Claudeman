@@ -1436,6 +1436,7 @@ export class WebServer extends EventEmitter {
         { isAntigravityAvailable },
         { isPiAvailable },
         { isGrokAvailable },
+        { isDeepSeekRunnable, isDeepSeekAvailable },
         { isCloudflaredAvailable },
         { isGitAvailable },
       ] = await Promise.all([
@@ -1446,6 +1447,7 @@ export class WebServer extends EventEmitter {
         import('../utils/antigravity-cli-resolver.js'),
         import('../utils/pi-cli-resolver.js'),
         import('../utils/grok-cli-resolver.js'),
+        import('../utils/deepseek-cli-resolver.js'),
         import('../utils/cloudflared-resolver.js'),
         import('../git-clone.js'),
       ]);
@@ -1457,6 +1459,13 @@ export class WebServer extends EventEmitter {
         antigravity: isAntigravityAvailable(),
         pi: isPiAvailable(),
         grok: isGrokAvailable(),
+        // RUNNABLE, not merely installed: `dsh` is a profile launcher, and a dsh
+        // with no pane-capable profile would offer a Run button that spawns a
+        // pane which dies on arrival. The Add-Profile affordance in the run menu
+        // keys off `deepseekBinary` instead, so a user who has the binary but no
+        // profile is offered the fix rather than a greyed-out entry.
+        deepseek: isDeepSeekRunnable(),
+        deepseekBinary: isDeepSeekAvailable(),
         cloudflared: isCloudflaredAvailable(),
         // Not a run mode: the Add Case → Clone tab is an offer this box cannot
         // keep without git (issue #236), same reasoning as cloudflared above.
@@ -2738,6 +2747,7 @@ export class WebServer extends EventEmitter {
               antigravityConfig: muxSession.mode === 'antigravity' ? savedState?.antigravityConfig : undefined,
               piConfig: muxSession.mode === 'pi' ? savedState?.piConfig : undefined,
               grokConfig: muxSession.mode === 'grok' ? savedState?.grokConfig : undefined,
+              deepSeekConfig: muxSession.mode === 'deepseek' ? savedState?.deepSeekConfig : undefined,
               envOverrides: savedEnvOverrides,
               effort: savedState?.effort,
               attachmentHistory: savedAttachmentHistory,

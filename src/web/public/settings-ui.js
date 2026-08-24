@@ -67,6 +67,19 @@ Object.assign(CodemanApp.prototype, {
     this._notifySession(data.sessionId, 'info', 'hook-stop', 'Response Complete', data.reason || 'Claude has finished responding');
   },
 
+  _onHookAgentWorking(data) {
+    // The agent started a turn, so whatever it was blocked on is gone. Reported
+    // by the DeepSeek status bridge; a harness turn cannot run while one of its
+    // own modal approvals is on screen, so this means the dialog was answered in
+    // the terminal. Same clearing as _onHookElicitationComplete, and notably NOT
+    // a notification: a turn STARTING is not news.
+    if (data.sessionId) {
+      this.clearPendingHooks(data.sessionId, 'elicitation_dialog');
+      this.clearPendingHooks(data.sessionId, 'permission_prompt');
+      this.clearPendingHooks(data.sessionId, 'idle_prompt');
+    }
+  },
+
   _onHookTeammateIdle(data) {
     const session = this.sessions.get(data.sessionId);
     this._notifySession(data.sessionId, 'warning', 'hook-teammate-idle', 'Teammate Idle', `A teammate is idle in ${session?.name || data.sessionId}`);
@@ -1211,6 +1224,7 @@ Object.assign(CodemanApp.prototype, {
       ['welcomeGeminiBtn', 'gemini'],
       ['welcomePiBtn', 'pi'],
       ['welcomeGrokBtn', 'grok'],
+      ['welcomeDeepSeekBtn', 'deepseek'],
       // Not a run mode, same reasoning: offering a Cloudflare Tunnel on a box
       // without cloudflared can only ever produce "cloudflared not found".
       ['welcomeTunnelBtn', 'cloudflared'],

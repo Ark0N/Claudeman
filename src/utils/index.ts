@@ -46,5 +46,18 @@ export {
 } from './antigravity-cli-resolver.js';
 export { resolvePiDir, isPiAvailable, getPiCliVersion, getPiNotFoundMessage } from './pi-cli-resolver.js';
 export { resolveGrokDir, isGrokAvailable, getGrokCliVersion, getGrokNotFoundMessage } from './grok-cli-resolver.js';
+export {
+  resolveDeepSeekDir,
+  isDeepSeekAvailable,
+  isDeepSeekRunnable,
+  getDeepSeekCliVersion,
+  getDeepSeekNotFoundMessage,
+  listDeepSeekProfiles,
+  resolveDefaultDeepSeekProfile,
+  isLaunchableProfile,
+  resolveDshHome,
+  profileExists,
+} from './deepseek-cli-resolver.js';
+export type { DeepSeekProfile, DeepSeekProfileKind } from './deepseek-cli-resolver.js';
 export { compileFileQuery, matchFileQuery } from './file-query.js';
 export type { FileQueryMatcher } from './file-query.js';
