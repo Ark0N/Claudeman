@@ -2753,7 +2753,15 @@ Object.assign(CodemanApp.prototype, {
     const prevTall = this._tallTabsEnabled;
     if (changed) this.applyTabWrapSettings?.();
     if (changed) {
-      if (prevTall === this._tallTabsEnabled) this._fullRenderSessionTabs?.();
+      // Mirror of applyTabWrapSettings()'s OWN render condition, which is
+      // `prevTallTabs !== undefined && prevTallTabs !== showFolder`: its first
+      // call ever only establishes the baseline and deliberately renders
+      // nothing. Reading an undefined previous value as "it rendered" skips
+      // BOTH renders and leaves the rows stale — reachable whenever this is the
+      // first call, i.e. when the pre-paint script threw and left the
+      // attributes on their fallbacks for applyTabOrientation() to correct.
+      const wrapRendered = prevTall !== undefined && prevTall !== this._tallTabsEnabled;
+      if (!wrapRendered) this._fullRenderSessionTabs?.();
       this._updateConnectionLinesImmediate?.();
       this._refreshHomeSessionsIfVisible?.();
     }

@@ -4202,7 +4202,21 @@ class CodemanApp {
       parts.push(stamp(row.since.key, row.since.at, 'for', 'tab-meta-since'));
     }
     parts.push(`<span class="tab-pill tab-pill--${escapeHtml(row.state)}">${escapeHtml(row.pill)}</span>`);
-    return `<span class="tab-meta" data-i18n-skip>${parts.join('')}</span>`;
+    // Both absolute stamps ALSO on the line itself, not only on the two items.
+    // Below 288px the rail hides `.tab-meta-created` (the `tab-rail-tight`
+    // rule), and a tooltip on a `display: none` element has no hover target —
+    // so without this the created stamp is not merely shrunk, it is gone with
+    // no way to ask for it. The pill and the gaps around the stamps are the
+    // hover targets that remain; an item's own title still wins over this one
+    // where the item is visible.
+    const lineTitle = [
+      row.createdAt ? `First created: ${new Date(row.createdAt).toLocaleString()}` : '',
+      row.since && row.since.at ? `${row.since.key}: ${new Date(row.since.at).toLocaleString()}` : '',
+    ]
+      .filter(Boolean)
+      .join('  \u00B7  ');
+    const lineTitleAttr = lineTitle ? ` title="${escapeHtml(lineTitle)}"` : '';
+    return `<span class="tab-meta"${lineTitleAttr} data-i18n-skip>${parts.join('')}</span>`;
   }
 
   /** Same formatter as both home screens, so a duration is written the same way everywhere. */

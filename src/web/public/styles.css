@@ -17285,7 +17285,10 @@ html[data-tab-orientation='vertical'][data-tab-rail-detail='rich']:not(.tab-rail
 
 /* Narrower than the detailed default (the .tab-rail-tight class,
    _setTabRailWidth): the created stamp is dropped rather than shown as
-   "CREA…". Its value survives in the row's title attribute either way. */
+   "CREA…". Its value stays reachable as the tooltip on the meta LINE
+   (`.tab-meta` carries both absolute stamps, _sidebarRichMetaHTML) — the title
+   on the hidden `.tab-meta-created` itself goes away with it, since a
+   `display: none` element has no hover target. */
 html.tab-rail-tight[data-tab-orientation='vertical'][data-tab-rail-detail='rich']:not(.tab-rail-compact) .tab-rail .tab-meta-created,
 html.tab-rail-tight[data-tab-orientation='vertical'][data-tab-rail-detail='rich']:not(.tab-rail-compact) .tab-rail .tab-meta-sep {
   display: none;

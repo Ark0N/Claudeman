@@ -711,6 +711,22 @@ describe('rich session sidebar', () => {
     expect(html).toContain('data-i18n-skip');
   });
 
+  it('carries both absolute stamps on the LINE, not only on the two items', () => {
+    // Below 288px the rail hides `.tab-meta-created` (tab-rail-tight), and a
+    // title on a `display: none` element has no hover target — so a tooltip
+    // living only there means the created stamp is gone, not shrunk. The line
+    // itself has to carry it for the CSS rule's "still reachable" to be true.
+    const { app } = boot({ stored: { sessionListLayout: 'sidebar-rich' } });
+    stubOverview(app);
+    const html = app._sidebarRichMetaHTML(app._sidebarRichRow('s1', SESSION));
+
+    const line = html.slice(0, html.indexOf('>'));
+    expect(line).toContain('class="tab-meta"');
+    expect(line).toContain('title="');
+    expect(line).toContain('First created');
+    expect(line).toContain('working');
+  });
+
   it('drops the second stamp when the session has never been active', () => {
     const { app } = boot({ stored: { sessionListLayout: 'sidebar-rich' } });
     stubOverview(app);
@@ -904,6 +920,45 @@ describe('detailed rows in the vertical tab rail', () => {
     expect(win.document.documentElement.dataset.tabRailDetail).toBe('rich');
     expect(app._fullRenderSessionTabs).toHaveBeenCalled();
     expect(app._sidebarRichClock).toBeTruthy();
+  });
+
+  it('still renders on the first call, when applyTabWrapSettings only sets its baseline', () => {
+    // The pre-paint script stamps the layout attributes; if it THREW it leaves
+    // them on the catch-branch fallbacks and applyTabOrientation() is the first
+    // thing to correct them, with `_tallTabsEnabled` still undefined.
+    // applyTabWrapSettings() renders only when it has a previous value to
+    // compare, so reading "the value changed" as "it rendered" skipped BOTH
+    // renders and left the rows stale.
+    const { win, app } = boot({ stored: { sessionListLayout: 'header', tabOrientation: 'vertical' } });
+    expect(app._tallTabsEnabled).toBeUndefined();
+    expect(win.document.documentElement.getAttribute('data-tab-orientation')).toBeNull();
+
+    app.applyTabOrientation();
+
+    expect(win.document.documentElement.dataset.tabOrientation).toBe('vertical');
+    // The folder row turned on in the same pass, so this is exactly the case
+    // where the two guards could point at each other and neither fires.
+    expect(app._tallTabsEnabled).toBe(true);
+    expect(app._fullRenderSessionTabs).toHaveBeenCalled();
+  });
+
+  it('does not render twice when applyTabWrapSettings already did', () => {
+    // The mirror case: a detail flip that turns the folder row off makes
+    // applyTabWrapSettings() re-render, and applyTabOrientation() must not
+    // stack a second full rebuild of the strip on top of it.
+    const { win, app } = railBoot({ tabOrientation: 'vertical', tabRailDetail: 'rich' });
+    expect(app._tallTabsEnabled).toBe(true);
+    (app._fullRenderSessionTabs as unknown as { mockClear(): void }).mockClear();
+
+    win.localStorage.setItem(
+      'codeman-app-settings',
+      JSON.stringify({ sessionListLayout: 'header', tabOrientation: 'vertical', tabRailDetail: 'simple' })
+    );
+    delete (app as unknown as { _cachedAppSettings?: unknown })._cachedAppSettings;
+    app.applyTabOrientation();
+
+    expect(app._tallTabsEnabled).toBe(false);
+    expect(app._fullRenderSessionTabs).toHaveBeenCalledTimes(1);
   });
 
   it('plumbs the rail detail through the settings UI, the schema and the pre-paint script', () => {
