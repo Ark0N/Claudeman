@@ -3002,6 +3002,81 @@ Object.assign(CodemanApp.prototype, {
     return this._fileBrowserState;
   },
 
+  _activateFileBrowserSession(sessionId) {
+    if (!sessionId) return;
+
+    const state = this._ensureFileBrowserState();
+    if (state.inFlight?.timer !== undefined && state.inFlight?.timer !== null) {
+      clearTimeout(state.inFlight.timer);
+    }
+    state.searchEpoch++;
+    state.treeEpoch++;
+    state.ownerSessionId = sessionId;
+    state.treeInFlight = null;
+    state.inFlight = null;
+    state.normalState = null;
+    state.matches = [];
+    state.deferredDirectoryTarget = null;
+    state.filter = '';
+    state.view = 'normal';
+    this.fileBrowserData = null;
+    this.fileBrowserFilter = '';
+    this.fileBrowserExpandedDirs?.clear?.();
+    this.fileBrowserAllExpanded = false;
+
+    const searchInput = this.$?.('fileBrowserSearch');
+    if (searchInput) searchInput.value = '';
+    this._setFileBrowserExpandDisabled(false);
+    const expandBtn = this.$?.('fileBrowserExpandBtn');
+    if (expandBtn) expandBtn.innerHTML = '\u229E';
+
+    const panel = this.$?.('fileBrowserPanel');
+    const treeEl = this.$?.('fileBrowserTree');
+    const statusEl = this.$?.('fileBrowserStatus');
+    const visible = panel?.classList.contains('visible') === true;
+    if (treeEl) {
+      treeEl.innerHTML = visible
+        ? `<div class="file-browser-loading">${escapeHtml('Loading files...')}</div>`
+        : '';
+    }
+    if (statusEl) statusEl.textContent = visible ? 'Loading files...' : '';
+
+    if (visible) {
+      const load = this.loadFileBrowser?.(sessionId);
+      load?.catch?.(() => {});
+    }
+  },
+
+  _resetFileBrowserForHide() {
+    const state = this._ensureFileBrowserState();
+    if (state.inFlight?.timer !== undefined && state.inFlight?.timer !== null) {
+      clearTimeout(state.inFlight.timer);
+    }
+    state.searchEpoch++;
+    state.treeEpoch++;
+    state.treeInFlight = null;
+    state.inFlight = null;
+    state.normalState = null;
+    state.matches = [];
+    state.deferredDirectoryTarget = null;
+    state.filter = '';
+    state.view = 'normal';
+    this.fileBrowserData = null;
+    this.fileBrowserFilter = '';
+    this.fileBrowserExpandedDirs?.clear?.();
+    this.fileBrowserAllExpanded = false;
+
+    const searchInput = this.$?.('fileBrowserSearch');
+    if (searchInput) searchInput.value = '';
+    this._setFileBrowserExpandDisabled(false);
+    const expandBtn = this.$?.('fileBrowserExpandBtn');
+    if (expandBtn) expandBtn.innerHTML = '\u229E';
+    const treeEl = this.$?.('fileBrowserTree');
+    if (treeEl) treeEl.innerHTML = '';
+    const statusEl = this.$?.('fileBrowserStatus');
+    if (statusEl) statusEl.textContent = '';
+  },
+
   _setFileBrowserExpandDisabled(disabled) {
     const btn = this.$('fileBrowserExpandBtn');
     if (btn) btn.disabled = disabled;
@@ -3561,6 +3636,7 @@ Object.assign(CodemanApp.prototype, {
 
   closeFileBrowserPanel() {
     const panel = this.$('fileBrowserPanel');
+    this._resetFileBrowserForHide();
     if (panel) {
       panel.classList.remove('visible');
       // Reset position so it reopens at default location
