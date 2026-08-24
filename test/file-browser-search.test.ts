@@ -13,6 +13,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 
 const PUBLIC = resolve(import.meta.dirname, '../src/web/public');
 const appJs = readFileSync(resolve(PUBLIC, 'app.js'), 'utf8');
+const constantsJs = readFileSync(resolve(PUBLIC, 'constants.js'), 'utf8');
 const panelsJs = readFileSync(resolve(PUBLIC, 'panels-ui.js'), 'utf8');
 const settingsJs = readFileSync(resolve(PUBLIC, 'settings-ui.js'), 'utf8');
 
@@ -193,6 +194,126 @@ function loadPanel(options: { sessionId?: string | null; showHidden?: boolean } 
   app.saveAppSettingsToStorage = vi.fn();
 
   return { app, elements, pending };
+}
+
+function loadRealSelectSessionHarness(options: { terminalFailure?: boolean } = {}) {
+  const elements: Record<string, FakeElement> = {
+    fileBrowserPanel: fakeElement(['visible']),
+    fileBrowserTree: fakeElement(),
+    fileBrowserStatus: fakeElement(),
+    fileBrowserSearch: fakeElement(),
+    fileBrowserExpandBtn: fakeElement(),
+    fileBrowserHiddenBtn: fakeElement(),
+  };
+  const filePending: Array<{ url: string; reply: ReturnType<typeof deferred<FakeResponse>> }> = [];
+  const idleCallbacks: Array<() => void> = [];
+  const context = vm.createContext({
+    console: { ...console, log: vi.fn(), warn: vi.fn(), error: vi.fn(), info: vi.fn() },
+    performance,
+    setInterval: vi.fn(),
+    clearInterval: vi.fn(),
+    setTimeout,
+    clearTimeout,
+    requestAnimationFrame: vi.fn(),
+    requestIdleCallback: (callback: () => void) => {
+      idleCallbacks.push(callback);
+      return idleCallbacks.length;
+    },
+    HTMLCanvasElement: class HTMLCanvasElement {},
+    WebSocket: { OPEN: 1 },
+    MobileDetection: { isTouchDevice: () => false },
+    localStorage: { length: 0, key: vi.fn(), getItem: vi.fn(), setItem: vi.fn(), removeItem: vi.fn() },
+    document: {
+      addEventListener: vi.fn(),
+      removeEventListener: vi.fn(),
+      getElementById: (id: string) => elements[id] ?? null,
+      querySelector: vi.fn(() => null),
+    },
+    window: { addEventListener: vi.fn(), removeEventListener: vi.fn() },
+    fetch: (url: string) => {
+      if (url.includes('/files?')) {
+        const reply = deferred<FakeResponse>();
+        filePending.push({ url, reply });
+        return reply.promise;
+      }
+      if (url.includes('/terminal?')) {
+        if (options.terminalFailure) return Promise.reject(new Error('terminal replay failed'));
+        return Promise.resolve({
+          ok: true,
+          headers: { get: () => '' },
+          json: async () => ({ data: { terminalBuffer: '', truncated: false, source: 'test' } }),
+        });
+      }
+      return Promise.reject(new Error(`Unexpected fetch: ${url}`));
+    },
+  });
+  vm.runInContext(`${constantsJs}\n${appJs}\n${panelsJs}\nglobalThis.__CodemanApp = CodemanApp;`, context);
+
+  const CodemanApp = (context as { __CodemanApp: new () => unknown }).__CodemanApp;
+  const app = Object.create(CodemanApp.prototype) as Record<string, any>;
+  const terminalBoundary = deferred<boolean>();
+  let resizeCalls = 0;
+  app.activeSessionId = 'session/A';
+  app.detachedSessions = new Set();
+  app.isSoloWindow = false;
+  app._selectGeneration = 0;
+  app.sessions = new Map([
+    ['session/B', { id: 'session/B', name: 'B', pid: 1, status: 'idle', mode: 'shell', workingDir: '/tmp/B' }],
+  ]);
+  app.fileBrowserData = successfulTree('old-A.ts').data;
+  app.fileBrowserExpandedDirs = new Set<string>();
+  app.fileBrowserFilter = '';
+  app.fileBrowserAllExpanded = false;
+  app.fileBrowserShowHidden = false;
+  app.fileBrowserDragListeners = null;
+  app.$ = (id: string) => elements[id] ?? null;
+  app._shouldFocusTerminalForTabSwitch = () => false;
+  app._setTerminalLoadState = vi.fn();
+  app._clearTerminalLoadState = vi.fn();
+  app._cleanupPreviousSession = vi.fn();
+  app._renderHistoryTruncationBanner = vi.fn();
+  app._updateSseSubscription = vi.fn();
+  app.hideWelcome = vi.fn();
+  app.markIdleAlertSeen = vi.fn();
+  app._updateActiveTabImmediate = vi.fn();
+  app.closeSessionSidebarOnHandheld = vi.fn();
+  app.renderSessionTabs = vi.fn();
+  app.updateAttachmentHistoryBadge = vi.fn();
+  app.attachmentHistoryDrawerOpen = false;
+  app._updateLocalEchoState = vi.fn();
+  app._flushedOffsets = new Map();
+  app._flushedTexts = new Map();
+  app._localEchoOverlay = null;
+  app._beginBufferLoad = vi.fn(() => 1);
+  app._isLoadingBuffer = false;
+  app.fitAddon = { fit: vi.fn() };
+  app.sendResize = vi.fn(() => {
+    resizeCalls++;
+    return resizeCalls === 1 ? terminalBoundary.promise : Promise.resolve(false);
+  });
+  app.terminalBufferCache = new Map();
+  app._xtermSnapshots = new Map();
+  app._fullHistoryLoaded = new Set();
+  app._resetTerminalForReplay = vi.fn();
+  app._connectWs = vi.fn();
+  app.scrollToLastNonEmptyLine = vi.fn();
+  app._recordTerminalLoadTiming = vi.fn();
+  app.respawnStatus = {};
+  app.respawnCountdownTimers = {};
+  app.hideRespawnBanner = vi.fn();
+  app.stopCountdownInterval = vi.fn();
+  app.renderRalphStatePanel = vi.fn();
+  app.updateCliInfoDisplay = vi.fn();
+  app.renderProjectInsightsPanel = vi.fn();
+  app.updateSubagentWindowVisibility = vi.fn();
+  app.loadAppSettingsFromStorage = () => ({ showFileBrowser: true });
+
+  const activateImplementation = app._activateFileBrowserSession.bind(app);
+  app._activateFileBrowserSession = vi.fn(activateImplementation);
+  const loadImplementation = app.loadFileBrowser.bind(app);
+  app.loadFileBrowser = vi.fn(loadImplementation);
+
+  return { app, elements, filePending, idleCallbacks, terminalBoundary };
 }
 
 async function startSearch(app: Record<string, any>, query = 'widget') {
@@ -889,6 +1010,75 @@ describe('File Viewer server search', () => {
       expect(activeAssignment).toBeLessThan(activation);
       expect(activation).toBeLessThan(firstTerminalAwait);
       expect(firstTerminalAwait).toBeLessThan(retainedIdleLoad);
+    });
+
+    it('executes real selectSession activation before a pending terminal boundary and keeps the B load on failure', async () => {
+      const { app, filePending, terminalBoundary } = loadRealSelectSessionHarness({ terminalFailure: true });
+
+      const selection = app.selectSession('session/B');
+      const immediateState = {
+        activationCalls: app._activateFileBrowserSession.mock.calls.length,
+        activeSessionId: app.activeSessionId,
+        ownerSessionId: app._fileBrowserState?.ownerSessionId,
+        resizeCalls: app.sendResize.mock.calls.length,
+        fileUrls: filePending.map(({ url }) => url),
+      };
+
+      terminalBoundary.reject(new Error('resize failed'));
+      await selection;
+
+      expect(immediateState.activationCalls).toBe(1);
+      expect(app._activateFileBrowserSession).toHaveBeenCalledWith('session/B');
+      expect(immediateState.activeSessionId).toBe('session/B');
+      expect(immediateState.ownerSessionId).toBe('session/B');
+      expect(immediateState.resizeCalls).toBe(1);
+      expect(immediateState.fileUrls).toEqual(['/api/sessions/session%2FB/files?depth=5&showHidden=false']);
+
+      expect(filePending).toHaveLength(1);
+      expect(app._fileBrowserState.ownerSessionId).toBe('session/B');
+      filePending[0].reply.resolve(response(successfulTree('B-after-terminal-failure.ts')));
+      await app._fileBrowserState.treeInFlight.promise;
+      expect(app.fileBrowserData.tree[0].name).toBe('B-after-terminal-failure.ts');
+    });
+
+    it.each([
+      ['in-flight request', false],
+      ['settled ready state', true],
+    ])('the real selectSession idle callback reuses the immediate B %s', async (_case, settleBeforeIdle) => {
+      const { app, elements, filePending, idleCallbacks, terminalBoundary } = loadRealSelectSessionHarness();
+
+      const selection = app.selectSession('session/B');
+      const immediateActivationCalls = app._activateFileBrowserSession.mock.calls.length;
+      const immediateLoadCalls = app.loadFileBrowser.mock.calls.length;
+      const immediateLoad = app.loadFileBrowser.mock.results[0]?.value;
+      const immediateRequestCount = filePending.length;
+
+      if (settleBeforeIdle && filePending[0]) {
+        filePending[0].reply.resolve(response(successfulTree('ready-B.ts')));
+        await immediateLoad;
+        expect(elements.fileBrowserTree.innerHTML).toContain('ready-B.ts');
+      }
+
+      terminalBoundary.resolve(false);
+      await selection;
+      expect(idleCallbacks).toHaveLength(1);
+      idleCallbacks[0]();
+
+      expect(immediateActivationCalls).toBe(1);
+      expect(immediateLoadCalls).toBe(1);
+      expect(immediateRequestCount).toBe(1);
+      expect(app.loadFileBrowser).toHaveBeenCalledTimes(2);
+      expect(app.loadFileBrowser).toHaveBeenLastCalledWith('session/B');
+      expect(filePending).toHaveLength(1);
+      const idleLoad = app.loadFileBrowser.mock.results[1].value;
+      if (settleBeforeIdle) {
+        await idleLoad;
+        expect(app._fileBrowserState.normalState.phase).toBe('ready');
+      } else {
+        expect(idleLoad).toBe(immediateLoad);
+        filePending[0].reply.resolve(response(successfulTree('in-flight-B.ts')));
+        await idleLoad;
+      }
     });
 
     it('synchronously resets A state, owns B, and starts one visible B tree load', async () => {
