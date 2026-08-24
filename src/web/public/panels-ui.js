@@ -2990,8 +2990,9 @@ Object.assign(CodemanApp.prototype, {
         ownerSessionId,
         view: 'normal',
         normalState: this.fileBrowserData
-          ? { ownerSessionId, showHidden, data: this.fileBrowserData }
+          ? { sessionId: ownerSessionId, showHidden, treeEpoch: 0, phase: 'ready', data: this.fileBrowserData }
           : null,
+        treeInFlight: null,
         inFlight: null,
         matches: [],
         deferredDirectoryTarget: null,
@@ -3011,6 +3012,104 @@ Object.assign(CodemanApp.prototype, {
     if (!statusEl || !data) return;
     const { totalFiles, totalDirectories, truncated } = data;
     statusEl.textContent = `${totalFiles} files, ${totalDirectories} dirs${truncated ? ' (truncated)' : ''}${showHidden ? ' · hidden shown' : ''}`;
+  },
+
+  _isFileBrowserNormalCompatible(candidate, sessionId, showHidden, treeEpoch) {
+    return (
+      candidate?.sessionId === sessionId &&
+      candidate.showHidden === showHidden &&
+      candidate.treeEpoch === treeEpoch
+    );
+  },
+
+  _isFileBrowserTreeContextCurrent(request, requireCurrentRecord = false) {
+    const state = this._ensureFileBrowserState();
+    return (
+      (!requireCurrentRecord || state.treeInFlight === request) &&
+      state.ownerSessionId === request.sessionId &&
+      state.treeEpoch === request.treeEpoch &&
+      (this.fileBrowserShowHidden === true) === request.showHidden
+    );
+  },
+
+  _canRenderFileBrowserNormal(normalState) {
+    const state = this._ensureFileBrowserState();
+    return (
+      state.view === 'normal' &&
+      this.activeSessionId === normalState?.sessionId &&
+      this._isFileBrowserNormalCompatible(
+        normalState,
+        state.ownerSessionId,
+        this.fileBrowserShowHidden === true,
+        state.treeEpoch,
+      ) &&
+      this.$('fileBrowserPanel')?.classList.contains('visible') === true
+    );
+  },
+
+  _renderFileBrowserNormalState(normalState) {
+    if (!normalState || !this._canRenderFileBrowserNormal(normalState)) return;
+    const treeEl = this.$('fileBrowserTree');
+    const statusEl = this.$('fileBrowserStatus');
+    if (!treeEl) return;
+
+    if (normalState.phase === 'loading') {
+      this.fileBrowserData = null;
+      treeEl.innerHTML = `<div class="file-browser-loading">${escapeHtml('Loading files...')}</div>`;
+      if (statusEl) statusEl.textContent = 'Loading files...';
+      return;
+    }
+
+    if (normalState.phase === 'error') {
+      this.fileBrowserData = null;
+      const detail = normalState.error && normalState.error !== 'Failed to load files'
+        ? `: ${normalState.error}`
+        : '';
+      const message = `Failed to load files${detail}`;
+      treeEl.innerHTML = `<div class="file-browser-empty">${escapeHtml(message)}</div>`;
+      if (statusEl) statusEl.textContent = message;
+      return;
+    }
+
+    if (normalState.phase !== 'ready') return;
+    this.fileBrowserData = normalState.data;
+    this._setFileBrowserExpandDisabled(false);
+    this.renderFileBrowserTree(normalState.sessionId);
+    this._renderFileBrowserNormalStatus(normalState.data, normalState.showHidden);
+  },
+
+  _validateFileBrowserTreeEnvelope(result) {
+    if (!result || typeof result !== 'object' || result.success !== true) return null;
+    const data = result.data;
+    if (!data || typeof data !== 'object' || !Array.isArray(data.tree)) return null;
+    if (data.mode === 'search') return null;
+    if (
+      typeof data.totalFiles !== 'number' ||
+      !Number.isFinite(data.totalFiles) ||
+      data.totalFiles < 0 ||
+      typeof data.totalDirectories !== 'number' ||
+      !Number.isFinite(data.totalDirectories) ||
+      data.totalDirectories < 0 ||
+      typeof data.truncated !== 'boolean'
+    ) {
+      return null;
+    }
+
+    const validNodes = nodes => nodes.every(node => {
+      if (!node || typeof node !== 'object') return false;
+      if (typeof node.name !== 'string' || typeof node.path !== 'string') return false;
+      if (node.type !== 'file' && node.type !== 'directory') return false;
+      if (node.size !== undefined && (typeof node.size !== 'number' || !Number.isFinite(node.size))) return false;
+      if (node.extension !== undefined && typeof node.extension !== 'string') return false;
+      if (node.children !== undefined && (!Array.isArray(node.children) || !validNodes(node.children))) return false;
+      return true;
+    });
+
+    return validNodes(data.tree) ? data : null;
+  },
+
+  _normalizeFileBrowserTreeError(error) {
+    return typeof error?.message === 'string' && error.message ? error.message : 'Failed to load files';
   },
 
   _validateFileBrowserSearchEnvelope(result) {
@@ -3039,7 +3138,6 @@ Object.assign(CodemanApp.prototype, {
     const panel = this.$('fileBrowserPanel');
     return (
       state.searchEpoch === request.epoch &&
-      state.treeEpoch === request.treeEpoch &&
       state.ownerSessionId === request.ownerSessionId &&
       this.activeSessionId === request.ownerSessionId &&
       (this.fileBrowserShowHidden === true) === request.showHidden &&
@@ -3064,46 +3162,89 @@ Object.assign(CodemanApp.prototype, {
     this._syncFileBrowserHiddenBtn();
     // Expanded-directory state is deliberately preserved so toggling does not
     // collapse the tree the user just navigated.
-    if (this.activeSessionId) await this.loadFileBrowser(this.activeSessionId);
+    if (this.activeSessionId) await this.loadFileBrowser(this.activeSessionId, { force: true });
   },
 
-  async loadFileBrowser(sessionId) {
-    if (!sessionId) return;
+  loadFileBrowser(sessionId, { force = false } = {}) {
+    if (!sessionId) return undefined;
 
     const state = this._ensureFileBrowserState();
-    state.treeEpoch++;
-    state.ownerSessionId = sessionId;
     const treeEl = this.$('fileBrowserTree');
-    const statusEl = this.$('fileBrowserStatus');
     this._syncFileBrowserHiddenBtn();
-    if (!treeEl) return;
+    if (!treeEl) return undefined;
+    if (!state.ownerSessionId) state.ownerSessionId = sessionId;
+    if (state.ownerSessionId !== sessionId) return undefined;
 
-    // Show loading state
-    treeEl.innerHTML = '<div class="file-browser-loading">Loading files...</div>';
-
-    try {
-      const showHidden = this.fileBrowserShowHidden === true;
-      const res = await fetch(`/api/sessions/${sessionId}/files?depth=5&showHidden=${showHidden}`);
-      if (!res.ok) throw new Error('Failed to load files');
-
-      const result = await res.json();
-      if (!result.success) throw new Error(result.error || 'Failed to load files');
-
-      this.fileBrowserData = result.data;
-      state.normalState = { ownerSessionId: sessionId, showHidden, data: result.data };
-      if (state.filter.trim() === '') {
-        state.view = 'normal';
-        state.matches = [];
-        this._setFileBrowserExpandDisabled(false);
-        this.renderFileBrowserTree(sessionId);
-      }
-
-      // Update status
-      if (statusEl && state.view === 'normal') this._renderFileBrowserNormalStatus(result.data, showHidden);
-    } catch (err) {
-      console.error('Failed to load file browser:', err);
-      treeEl.innerHTML = `<div class="file-browser-empty">Failed to load files: ${escapeHtml(err.message)}</div>`;
+    if (force) state.treeEpoch++;
+    const showHidden = this.fileBrowserShowHidden === true;
+    const treeEpoch = state.treeEpoch;
+    const inFlight = state.treeInFlight;
+    if (
+      !force &&
+      this._isFileBrowserNormalCompatible(inFlight, sessionId, showHidden, treeEpoch)
+    ) {
+      return inFlight.promise;
     }
+
+    const settled = state.normalState;
+    if (
+      !force &&
+      this._isFileBrowserNormalCompatible(settled, sessionId, showHidden, treeEpoch) &&
+      (settled.phase === 'ready' || settled.phase === 'error')
+    ) {
+      if (settled.phase === 'ready') this.fileBrowserData = settled.data;
+      this._renderFileBrowserNormalState(settled);
+      return Promise.resolve(settled);
+    }
+
+    const loadingState = { sessionId, showHidden, treeEpoch, phase: 'loading' };
+    state.normalState = loadingState;
+    this.fileBrowserData = null;
+    this._renderFileBrowserNormalState(loadingState);
+
+    const record = { sessionId, showHidden, treeEpoch, promise: null };
+    const request = (async () => {
+      try {
+        const res = await fetch(
+          `/api/sessions/${encodeURIComponent(sessionId)}/files?depth=5&showHidden=${showHidden}`,
+        );
+        if (!res.ok) throw new Error('Failed to load files');
+        const result = await res.json();
+        const data = this._validateFileBrowserTreeEnvelope(result);
+        if (!data) {
+          const detail = result && typeof result === 'object' && typeof result.error === 'string'
+            ? result.error
+            : 'Failed to load files';
+          throw new Error(detail);
+        }
+        if (!this._isFileBrowserTreeContextCurrent(record, true)) return;
+
+        const nextNormalState = { sessionId, showHidden, treeEpoch, phase: 'ready', data };
+        state.normalState = nextNormalState;
+        this.fileBrowserData = data;
+        this._completeDeferredFileBrowserDirectory?.(nextNormalState);
+        this._renderFileBrowserNormalState(nextNormalState);
+      } catch (error) {
+        if (!this._isFileBrowserTreeContextCurrent(record, true)) return;
+        const nextNormalState = {
+          sessionId,
+          showHidden,
+          treeEpoch,
+          phase: 'error',
+          error: this._normalizeFileBrowserTreeError(error),
+        };
+        state.normalState = nextNormalState;
+        this.fileBrowserData = null;
+        this._completeDeferredFileBrowserDirectory?.(nextNormalState);
+        console.error('Failed to load file browser:', error);
+        this._renderFileBrowserNormalState(nextNormalState);
+      }
+    })();
+    record.promise = request.finally(() => {
+      if (state.treeInFlight === record) state.treeInFlight = null;
+    });
+    state.treeInFlight = record;
+    return record.promise;
   },
 
   renderFileBrowserTree(ownerSessionId) {
@@ -3111,7 +3252,7 @@ Object.assign(CodemanApp.prototype, {
     if (!treeEl || !this.fileBrowserData) return;
 
     const state = this._ensureFileBrowserState();
-    const owner = ownerSessionId || state.normalState?.ownerSessionId || state.ownerSessionId || this.activeSessionId;
+    const owner = ownerSessionId || state.normalState?.sessionId || state.ownerSessionId || this.activeSessionId;
     if (!owner) return;
 
     const { tree } = this.fileBrowserData;
@@ -3216,12 +3357,14 @@ Object.assign(CodemanApp.prototype, {
       const normal = state.normalState;
       if (
         ownerSessionId &&
-        normal?.ownerSessionId === ownerSessionId &&
-        normal.showHidden === (this.fileBrowserShowHidden === true)
+        this._isFileBrowserNormalCompatible(
+          normal,
+          ownerSessionId,
+          this.fileBrowserShowHidden === true,
+          state.treeEpoch,
+        )
       ) {
-        this.fileBrowserData = normal.data;
-        this.renderFileBrowserTree(ownerSessionId);
-        this._renderFileBrowserNormalStatus(normal.data, normal.showHidden);
+        this._renderFileBrowserNormalState(normal);
       }
       return;
     }
@@ -3366,14 +3509,28 @@ Object.assign(CodemanApp.prototype, {
   },
 
   refreshFileBrowser() {
-    if (this.activeSessionId) {
-      this.fileBrowserExpandedDirs.clear();
-      this.fileBrowserFilter = '';
-      this.fileBrowserAllExpanded = false;
-      const searchInput = this.$('fileBrowserSearch');
-      if (searchInput) searchInput.value = '';
-      this.loadFileBrowser(this.activeSessionId);
+    const state = this._ensureFileBrowserState();
+    if (state.inFlight?.timer !== undefined && state.inFlight?.timer !== null) {
+      clearTimeout(state.inFlight.timer);
     }
+    state.inFlight = null;
+    state.searchEpoch++;
+    state.filter = '';
+    state.matches = [];
+    state.deferredDirectoryTarget = null;
+    state.view = 'normal';
+    this.fileBrowserFilter = '';
+    this.fileBrowserExpandedDirs.clear();
+    this.fileBrowserAllExpanded = false;
+    this._setFileBrowserExpandDisabled(false);
+    const expandBtn = this.$('fileBrowserExpandBtn');
+    if (expandBtn) expandBtn.innerHTML = '\u229E';
+    const searchInput = this.$('fileBrowserSearch');
+    if (searchInput) searchInput.value = '';
+
+    const ownerSessionId = state.ownerSessionId || this.activeSessionId;
+    if (!ownerSessionId || this.activeSessionId !== ownerSessionId) return undefined;
+    return this.loadFileBrowser(ownerSessionId, { force: true });
   },
 
   // Header "File Viewer" button (opt-in via App Settings → Header Displays →

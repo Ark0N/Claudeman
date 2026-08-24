@@ -207,6 +207,19 @@ function successfulData(overrides: Record<string, unknown> = {}) {
   };
 }
 
+function successfulTree(name: string, overrides: Record<string, unknown> = {}) {
+  return {
+    success: true,
+    data: {
+      tree: [{ name, path: name, type: 'file', size: 1, extension: 'ts' }],
+      totalFiles: 1,
+      totalDirectories: 0,
+      truncated: false,
+      ...overrides,
+    },
+  };
+}
+
 describe('File Viewer server search', () => {
   beforeEach(() => {
     vi.useFakeTimers();
@@ -354,12 +367,6 @@ describe('File Viewer server search', () => {
         name: 'search epoch',
         mutate: (app) => {
           app._fileBrowserState.searchEpoch++;
-        },
-      },
-      {
-        name: 'tree epoch',
-        mutate: (app) => {
-          app._fileBrowserState.treeEpoch++;
         },
       },
       {
@@ -583,5 +590,270 @@ describe('File Viewer server search', () => {
       'href="/api/sessions/session%2F%22%3C%26&#039;/file-raw?path=src%2F%22%3C%26&#039;%2Fevil.ts&amp;download=true"'
     );
     expect(html).not.toContain('<img src=x');
+  });
+
+  describe('normal tree loads', () => {
+    it('deduplicates compatible in-flight loads and reuses compatible ready and error states', async () => {
+      const ready = loadPanel();
+      ready.app._completeDeferredFileBrowserDirectory = vi.fn();
+      const first = ready.app.loadFileBrowser('session/A');
+      const duplicate = ready.app.loadFileBrowser('session/A');
+
+      expect(duplicate).toBe(first);
+      expect(ready.pending).toHaveLength(1);
+      ready.pending[0].reply.resolve(response(successfulTree('ready.ts')));
+      await first;
+      expect(ready.app._fileBrowserState.normalState.phase).toBe('ready');
+      expect(ready.elements.fileBrowserTree.innerHTML).toContain('ready.ts');
+      expect(ready.app._completeDeferredFileBrowserDirectory).toHaveBeenCalledWith(
+        ready.app._fileBrowserState.normalState
+      );
+
+      ready.elements.fileBrowserTree.innerHTML = '';
+      const reusedReady = ready.app.loadFileBrowser('session/A');
+      expect(ready.pending).toHaveLength(1);
+      expect(typeof reusedReady.then).toBe('function');
+      await reusedReady;
+      expect(ready.elements.fileBrowserTree.innerHTML).toContain('ready.ts');
+
+      const failed = loadPanel();
+      failed.app._completeDeferredFileBrowserDirectory = vi.fn();
+      const failedLoad = failed.app.loadFileBrowser('session/A');
+      failed.pending[0].reply.reject(new Error('<img src=x onerror=boom>'));
+      await failedLoad;
+      expect(failed.app._fileBrowserState.normalState.phase).toBe('error');
+      expect(failed.elements.fileBrowserTree.innerHTML).toContain('&lt;img src=x onerror=boom&gt;');
+      expect(failed.elements.fileBrowserTree.innerHTML).not.toContain('<img src=x');
+      expect(failed.elements.fileBrowserStatus.textContent).toContain('<img src=x onerror=boom>');
+      expect(failed.elements.fileBrowserStatus.innerHTML).toBe('');
+      expect(failed.app._completeDeferredFileBrowserDirectory).toHaveBeenCalledWith(
+        failed.app._fileBrowserState.normalState
+      );
+
+      failed.elements.fileBrowserTree.innerHTML = '';
+      await failed.app.loadFileBrowser('session/A');
+      expect(failed.pending).toHaveLength(1);
+      expect(failed.elements.fileBrowserTree.innerHTML).toContain('&lt;img src=x onerror=boom&gt;');
+    });
+
+    it('refresh invalidates both work classes, clears navigation state, and forces an epoch-safe replacement', async () => {
+      const { app, elements, pending } = loadPanel();
+      const stale = app.loadFileBrowser('session/A');
+      app.filterFileBrowser('old query');
+      app.fileBrowserExpandedDirs.add('src');
+      app.fileBrowserAllExpanded = true;
+      app._fileBrowserState.deferredDirectoryTarget = { ownerSessionId: 'session/A', path: 'src' };
+      const beforeSearchEpoch = app._fileBrowserState.searchEpoch;
+      const beforeTreeEpoch = app._fileBrowserState.treeEpoch;
+
+      const replacement = app.refreshFileBrowser();
+
+      expect(app._fileBrowserState.searchEpoch).toBe(beforeSearchEpoch + 1);
+      expect(app._fileBrowserState.treeEpoch).toBe(beforeTreeEpoch + 1);
+      expect(app._fileBrowserState.filter).toBe('');
+      expect(app._fileBrowserState.matches).toEqual([]);
+      expect(app._fileBrowserState.deferredDirectoryTarget).toBeNull();
+      expect(app._fileBrowserState.view).toBe('normal');
+      expect(app.fileBrowserExpandedDirs.size).toBe(0);
+      expect(app.fileBrowserAllExpanded).toBe(false);
+      expect(elements.fileBrowserExpandBtn.disabled).toBe(false);
+      expect(elements.fileBrowserSearch.value).toBe('');
+      expect(elements.fileBrowserTree.innerHTML).toContain('Loading files');
+      expect(pending).toHaveLength(2);
+
+      pending[0].reply.resolve(response(successfulTree('stale.ts')));
+      await stale;
+      expect(elements.fileBrowserTree.innerHTML).not.toContain('stale.ts');
+      expect(app._fileBrowserState.treeInFlight.promise).toBe(replacement);
+
+      pending[1].reply.resolve(response(successfulTree('fresh.ts')));
+      await replacement;
+      expect(elements.fileBrowserTree.innerHTML).toContain('fresh.ts');
+      expect(elements.fileBrowserTree.innerHTML).not.toContain('stale.ts');
+    });
+
+    it('ignores stale pre-refresh failures while the replacement remains loading', async () => {
+      const { app, elements, pending } = loadPanel();
+      const stale = app.loadFileBrowser('session/A');
+      const replacement = app.refreshFileBrowser();
+
+      pending[0].reply.reject(new Error('stale failure'));
+      await stale;
+      expect(elements.fileBrowserTree.innerHTML).toContain('Loading files');
+      expect(elements.fileBrowserTree.innerHTML).not.toContain('stale failure');
+
+      pending[1].reply.resolve(response(successfulTree('replacement.ts')));
+      await replacement;
+      expect(elements.fileBrowserTree.innerHTML).toContain('replacement.ts');
+    });
+
+    it('isolates overlapping owners and does not reuse an unresolved A request after A to B to A', async () => {
+      const { app, elements, pending } = loadPanel();
+      const firstA = app.loadFileBrowser('session/A');
+      app._fileBrowserState.ownerSessionId = 'session/B';
+      app.activeSessionId = 'session/B';
+      const loadB = app.loadFileBrowser('session/B');
+
+      app._fileBrowserState.ownerSessionId = 'session/A';
+      app.activeSessionId = 'session/A';
+      const secondA = app.loadFileBrowser('session/A');
+      expect(secondA).not.toBe(firstA);
+      expect(pending).toHaveLength(3);
+
+      pending[0].reply.resolve(response(successfulTree('stale-A.ts')));
+      await firstA;
+      expect(app.fileBrowserData).toBeNull();
+      expect(elements.fileBrowserTree.innerHTML).toContain('Loading files');
+      expect(elements.fileBrowserTree.innerHTML).not.toContain('stale-A.ts');
+
+      pending[1].reply.reject(new Error('late B failure'));
+      await loadB;
+      expect(elements.fileBrowserTree.innerHTML).not.toContain('late B failure');
+      pending[2].reply.resolve(response(successfulTree('current-A.ts')));
+      await secondA;
+      expect(elements.fileBrowserTree.innerHTML).toContain('current-A.ts');
+    });
+
+    it('shows B loading after clearing search while B is unsettled, never cached A data', async () => {
+      const { app, elements, pending } = loadPanel();
+      const firstA = app.loadFileBrowser('session/A');
+      pending[0].reply.resolve(response(successfulTree('cached-A.ts')));
+      await firstA;
+      expect(elements.fileBrowserTree.innerHTML).toContain('cached-A.ts');
+
+      app._fileBrowserState.ownerSessionId = 'session/B';
+      app.activeSessionId = 'session/B';
+      const loadB = app.loadFileBrowser('session/B');
+      app.filterFileBrowser('temporary');
+      app.filterFileBrowser('');
+
+      expect(elements.fileBrowserTree.innerHTML).toContain('Loading files');
+      expect(elements.fileBrowserTree.innerHTML).not.toContain('cached-A.ts');
+      pending[1].reply.resolve(response(successfulTree('current-B.ts')));
+      await loadB;
+      expect(elements.fileBrowserTree.innerHTML).toContain('current-B.ts');
+    });
+
+    it('settles a compatible tree behind search without repainting and keeps tree/search epochs independent', async () => {
+      const { app, elements, pending } = loadPanel();
+      const treeLoad = app.loadFileBrowser('session/A');
+      app.filterFileBrowser('query A');
+      await vi.advanceTimersByTimeAsync(250);
+      app.filterFileBrowser('query B');
+      await vi.advanceTimersByTimeAsync(250);
+      expect(pending).toHaveLength(3);
+
+      pending[0].reply.resolve(response(successfulTree('behind-search.ts')));
+      await treeLoad;
+      expect(app._fileBrowserState.normalState.phase).toBe('ready');
+      expect(app.fileBrowserData.tree[0].name).toBe('behind-search.ts');
+      expect(elements.fileBrowserTree.innerHTML).toContain('Searching');
+      expect(elements.fileBrowserTree.innerHTML).not.toContain('behind-search.ts');
+
+      app._fileBrowserState.treeEpoch++;
+      pending[2].reply.resolve(
+        response(successfulData({ matches: [{ name: 'query-B.ts', path: 'query-B.ts', type: 'file' }] }))
+      );
+      await vi.advanceTimersByTimeAsync(0);
+      expect(elements.fileBrowserTree.innerHTML).toContain('query-B.ts');
+
+      pending[1].reply.resolve(
+        response(successfulData({ matches: [{ name: 'query-A.ts', path: 'query-A.ts', type: 'file' }] }))
+      );
+      await vi.advanceTimersByTimeAsync(0);
+      expect(elements.fileBrowserTree.innerHTML).not.toContain('query-A.ts');
+    });
+
+    it('suppresses invalidated tree responses and hidden-panel repainting', async () => {
+      const scenarios = [
+        {
+          name: 'owner',
+          mutate(app: Record<string, any>) {
+            app._fileBrowserState.ownerSessionId = 'session/B';
+          },
+        },
+        {
+          name: 'tree epoch',
+          mutate(app: Record<string, any>) {
+            app._fileBrowserState.treeEpoch++;
+          },
+        },
+        {
+          name: 'hidden preference',
+          mutate(app: Record<string, any>) {
+            app.fileBrowserShowHidden = true;
+          },
+        },
+      ];
+
+      for (const scenario of scenarios) {
+        const { app, elements, pending } = loadPanel();
+        const load = app.loadFileBrowser('session/A');
+        scenario.mutate(app);
+        pending[0].reply.resolve(response(successfulTree(`late-${scenario.name}.ts`)));
+        await load;
+        expect(app.fileBrowserData, scenario.name).toBeNull();
+        expect(elements.fileBrowserTree.innerHTML, scenario.name).not.toContain(`late-${scenario.name}.ts`);
+      }
+
+      const hidden = loadPanel();
+      const hiddenLoad = hidden.app.loadFileBrowser('session/A');
+      hidden.elements.fileBrowserPanel.classList.remove('visible');
+      hidden.pending[0].reply.resolve(response(successfulTree('hidden-ready.ts')));
+      await hiddenLoad;
+      expect(hidden.app._fileBrowserState.normalState.phase).toBe('ready');
+      expect(hidden.elements.fileBrowserTree.innerHTML).toContain('Loading files');
+      expect(hidden.elements.fileBrowserTree.innerHTML).not.toContain('hidden-ready.ts');
+    });
+
+    it('compare-and-clears only the exact stale request and preserves replacement deduplication', async () => {
+      const { app, pending } = loadPanel();
+      const stale = app.loadFileBrowser('session/A');
+      const replacement = app.loadFileBrowser('session/A', { force: true });
+      const replacementRecord = app._fileBrowserState.treeInFlight;
+
+      pending[0].reply.resolve(response(successfulTree('stale.ts')));
+      await stale;
+      expect(app._fileBrowserState.treeInFlight).toBe(replacementRecord);
+
+      const reused = app.loadFileBrowser('session/A');
+      expect(reused).toBe(replacement);
+      expect(pending).toHaveLength(2);
+
+      pending[1].reply.resolve(response(successfulTree('replacement.ts')));
+      await replacement;
+    });
+
+    it.each([
+      ['tree is not an array', successfulTree('x.ts', { tree: {} })],
+      ['totalFiles is not finite', successfulTree('x.ts', { totalFiles: Number.POSITIVE_INFINITY })],
+      ['the envelope is search-discriminated', successfulTree('x.ts', { mode: 'search', matches: [], matchCount: 0 })],
+      [
+        'a nested node is malformed',
+        successfulTree('x.ts', { tree: [{ name: 'dir', path: 'dir', type: 'directory', children: [{}] }] }),
+      ],
+    ])('stores an escaped error instead of malformed tree data when %s', async (_case, body) => {
+      const { app, elements, pending } = loadPanel();
+      const load = app.loadFileBrowser('session/A');
+      pending[0].reply.resolve(response(body));
+      await load;
+
+      expect(app.fileBrowserData).toBeNull();
+      expect(app._fileBrowserState.normalState.phase).toBe('error');
+      expect(elements.fileBrowserTree.innerHTML).toContain('Failed to load files');
+    });
+
+    it('does not adopt a different owner or fetch without a usable tree surface', () => {
+      const wrongOwner = loadPanel();
+      wrongOwner.app._ensureFileBrowserState().ownerSessionId = 'session/B';
+      expect(wrongOwner.app.loadFileBrowser('session/A')).toBeUndefined();
+      expect(wrongOwner.pending).toHaveLength(0);
+      expect(wrongOwner.app._fileBrowserState.ownerSessionId).toBe('session/B');
+
+      const missingTree = loadPanel();
+      delete missingTree.elements.fileBrowserTree;
+      expect(missingTree.app.loadFileBrowser('session/A')).toBeUndefined();
+      expect(missingTree.pending).toHaveLength(0);
+    });
   });
 });

@@ -38,7 +38,7 @@ interface FakeElement {
   textContent: string;
   classes: Set<string>;
   attrs: Record<string, string>;
-  classList: { toggle: (name: string, on: boolean) => void };
+  classList: { toggle: (name: string, on: boolean) => void; contains: (name: string) => boolean };
   setAttribute: (name: string, value: string) => void;
 }
 
@@ -54,6 +54,9 @@ function fakeElement(): FakeElement {
       toggle(name: string, on: boolean) {
         if (on) classes.add(name);
         else classes.delete(name);
+      },
+      contains(name: string) {
+        return classes.has(name);
       },
     },
     setAttribute(name: string, value: string) {
@@ -92,10 +95,12 @@ function loadPanel(store: Map<string, string> | null) {
   vm.runInContext(panelsJs, context, { filename: 'panels-ui.js' });
 
   const elements: Record<string, FakeElement> = {
+    fileBrowserPanel: fakeElement(),
     fileBrowserTree: fakeElement(),
     fileBrowserStatus: fakeElement(),
     fileBrowserHiddenBtn: fakeElement(),
   };
+  elements.fileBrowserPanel.classList.toggle('visible', true);
   const requests: string[] = [];
   const app = new CodemanApp() as Record<string, any>;
   app.$ = (id: string) => elements[id] ?? null;
@@ -149,10 +154,12 @@ describe('File Viewer show-hidden toggle', () => {
     const { app, requests } = loadPanel(store);
     await app.loadFileBrowser('sess-1');
     expect(requests[0]).toContain('showHidden=false');
+    const previousTreeEpoch = app._fileBrowserState.treeEpoch;
 
     await app.toggleFileBrowserHidden();
 
     expect(app.fileBrowserShowHidden).toBe(true);
+    expect(app._fileBrowserState.treeEpoch).toBe(previousTreeEpoch + 1);
     expect(requests).toHaveLength(2);
     expect(requests[1]).toContain('showHidden=true');
     expect(store.get(STORAGE_KEY)).toBe('1');
