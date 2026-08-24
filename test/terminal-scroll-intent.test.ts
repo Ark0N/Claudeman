@@ -191,7 +191,7 @@ describe('backpressure refresh keeps a reader in place (issue #259)', () => {
 
   it('is wired into the refresh path instead of an unconditional scrollToBottom', () => {
     const app = readFileSync(resolve(PUBLIC, 'app.js'), 'utf8');
-    const start = app.indexOf('async _onSessionNeedsRefresh()');
+    const start = app.indexOf('async _onSessionNeedsRefresh(');
     expect(start).toBeGreaterThan(-1);
     const body = app.slice(start, app.indexOf('\n  async _onSessionClearTerminal', start));
     expect(body).toContain('computeRewriteScrollLine');
@@ -199,18 +199,16 @@ describe('backpressure refresh keeps a reader in place (issue #259)', () => {
     expect(body).toContain('this.terminal.scrollToLine(target)');
   });
 
-  it('recovers FULL history, guarded against a repaint-pane downgrade', () => {
-    // Measured before the fix: this path rewrote an 869-row buffer from a 1MB
-    // tail and left 158 rows, so the refresh meant to REPAIR the terminal was
-    // destroying most of its scrollback. It asks for full history now, and
-    // falls back to the tail only when the full capture would shrink the buffer
-    // (a repaint-mode pane keeps roughly one frame in tmux).
+  it('keeps shell recovery bounded and full TUI recovery downgrade-safe', () => {
+    // A shell's automatic recovery must not reset+replay a multi-megabyte tmux
+    // history on xterm's main thread. TUI modes still recover full history and
+    // fall back when a repaint-mode pane would shrink the browser buffer.
     const app = readFileSync(resolve(PUBLIC, 'app.js'), 'utf8');
-    const start = app.indexOf('async _onSessionNeedsRefresh()');
+    const start = app.indexOf('async _onSessionNeedsRefresh(');
     const body = app.slice(start, app.indexOf('\n  async _onSessionClearTerminal', start));
+    expect(body).toContain("const useFullHistory = this.sessions.get(sessionId)?.mode !== 'shell'");
     expect(body).toContain('terminal?full=1');
-    expect(body).toContain('this._replayWouldShrinkBuffer(data.terminalBuffer)');
-    // The tail must survive as the fallback, not vanish.
     expect(body).toContain('tail=${TERMINAL_TAIL_SIZE}');
+    expect(body).toContain('useFullHistory && data.terminalBuffer && this._replayWouldShrinkBuffer');
   });
 });

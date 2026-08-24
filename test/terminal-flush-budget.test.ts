@@ -38,7 +38,10 @@ function loadTerminalUiHarness(mode: string) {
   app._workerYield = () => {};
   app._chunkedWriteGen = 0;
   app.terminal = {
-    write: (data: string) => writes.push(data),
+    write: (data: string, callback?: () => void) => {
+      writes.push(data);
+      callback?.();
+    },
     scrollToBottom: () => {},
     scrollToLine: () => {},
   };
@@ -46,7 +49,90 @@ function loadTerminalUiHarness(mode: string) {
   return { app, writes };
 }
 
+function loadAppHarness() {
+  const dir = resolve(import.meta.dirname, '../src/web/public');
+  const fetchMock = vi.fn();
+  const context = vm.createContext({
+    console: { ...console, log: vi.fn(), warn: vi.fn(), error: vi.fn() },
+    performance: { now: () => 0 },
+    setInterval: vi.fn(),
+    clearInterval: vi.fn(),
+    setTimeout,
+    clearTimeout,
+    requestAnimationFrame: vi.fn(),
+    HTMLCanvasElement: class HTMLCanvasElement {},
+    WebSocket: { OPEN: 1 },
+    fetch: fetchMock,
+    document: { addEventListener: vi.fn(), getElementById: () => null, querySelector: () => null },
+    localStorage: { length: 0, key: vi.fn(), getItem: vi.fn(), setItem: vi.fn(), removeItem: vi.fn() },
+    window: { addEventListener: vi.fn(), removeEventListener: vi.fn() },
+    MobileDetection: { isTouchDevice: () => false },
+  });
+  const constants = readFileSync(resolve(dir, 'constants.js'), 'utf8');
+  const appSource = readFileSync(resolve(dir, 'app.js'), 'utf8');
+  vm.runInContext(`${constants}\n${appSource}\nglobalThis.__CodemanApp = CodemanApp;`, context);
+  const CodemanApp = (context as { __CodemanApp: { prototype: object } }).__CodemanApp;
+  return { CodemanApp, fetchMock };
+}
+
 describe('terminal flush budget', () => {
+  it('counts incoming, loading, and xterm in-flight bytes before accepting live output', () => {
+    const source = readFileSync(resolve(import.meta.dirname, '../src/web/public/app.js'), 'utf8');
+    const start = source.indexOf('_onSessionTerminal(data)');
+    const body = source.slice(start, source.indexOf('\n  // ═', start));
+
+    expect(body).toContain('this._loadBufferQueue?.reduce');
+    expect(body).toContain('this._terminalWriteInFlightBytes || 0');
+    expect(body).toContain('queued + data.data.length > 131072');
+  });
+
+  it('drops redundant SSE terminal events whenever WebSocket owns terminal I/O', () => {
+    const { CodemanApp } = loadAppHarness();
+    const app = Object.create(CodemanApp.prototype) as any;
+    app._wsReady = true;
+    app._onSessionTerminal = vi.fn();
+    app._onSessionNeedsRefresh = vi.fn();
+    app._onSessionClearTerminal = vi.fn();
+
+    app._onSSETerminal({ id: 'session-1', data: 'duplicate' });
+    app._onSSENeedsRefresh({});
+    app._onSSEClearTerminal({ id: 'session-1' });
+
+    expect(app._onSessionTerminal).not.toHaveBeenCalled();
+    expect(app._onSessionNeedsRefresh).not.toHaveBeenCalled();
+    expect(app._onSessionClearTerminal).not.toHaveBeenCalled();
+  });
+
+  it('runs at most one buffer recovery per session and ignores stale-session events', async () => {
+    const { CodemanApp, fetchMock } = loadAppHarness();
+    const app = Object.create(CodemanApp.prototype) as any;
+    app.activeSessionId = 'session-1';
+    app.sessions = new Map([['session-1', { mode: 'shell' }]]);
+    app.terminal = {};
+    app._isLoadingBuffer = false;
+    app._terminalRefreshOwner = null;
+
+    let releaseFetch!: () => void;
+    fetchMock.mockImplementation(
+      () =>
+        new Promise((resolveFetch) => {
+          releaseFetch = () => resolveFetch({ json: async () => ({ data: { terminalBuffer: '' } }) });
+        })
+    );
+
+    await app._onSessionNeedsRefresh({ id: 'stale-session' });
+    expect(fetchMock).not.toHaveBeenCalled();
+
+    const first = app._onSessionNeedsRefresh({ id: 'session-1' });
+    const duplicate = app._onSessionNeedsRefresh({ id: 'session-1' });
+    expect(fetchMock).toHaveBeenCalledOnce();
+    expect(fetchMock).toHaveBeenCalledWith('/api/sessions/session-1/terminal?tail=1048576');
+
+    releaseFetch();
+    await Promise.all([first, duplicate]);
+    expect(app._terminalRefreshOwner).toBe(null);
+  });
+
   it('drains a large final batch without waiting for unrelated terminal output', () => {
     const { app, writes } = loadTerminalUiHarness('codex');
     const scheduled: Array<() => void> = [];
@@ -87,6 +173,32 @@ describe('terminal flush budget', () => {
     expect(writes).toHaveLength(1);
     expect(writes[0]).toHaveLength(64 * 1024);
     expect(app.pendingWrites.join('')).toHaveLength(32 * 1024);
+  });
+
+  it('waits for xterm to parse a live chunk before submitting the next one', () => {
+    const { app, writes } = loadTerminalUiHarness('shell');
+    const scheduled: Array<() => void> = [];
+    let parsed: (() => void) | undefined;
+    app._safeYield = (callback: () => void) => scheduled.push(callback);
+    app.isTerminalAtBottom = () => true;
+    app.terminal.write = (data: string, callback?: () => void) => {
+      writes.push(data);
+      parsed = callback;
+    };
+
+    app.batchTerminalWrite('x'.repeat(96 * 1024));
+    scheduled.shift()?.();
+
+    expect(writes.map((write) => write.length)).toEqual([64 * 1024]);
+    expect(app.pendingWrites.join('')).toHaveLength(32 * 1024);
+    expect(scheduled).toHaveLength(0);
+    expect(app._terminalWriteInFlightBytes).toBe(64 * 1024);
+
+    parsed?.();
+
+    expect(scheduled).toHaveLength(1);
+    scheduled.shift()?.();
+    expect(writes.map((write) => write.length)).toEqual([64 * 1024, 32 * 1024]);
   });
 
   it('releases the live-output gate but waits for xterm to parse a small replay', async () => {
