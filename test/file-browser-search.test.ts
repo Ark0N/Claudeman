@@ -1183,14 +1183,17 @@ describe('File Viewer server search', () => {
         path: 'src/components/widgets',
         view: 'search-results',
       });
+      const renderNormalTree = vi.spyOn(app, 'renderFileBrowserTree');
 
       pending[0].reply.resolve(
         response(successfulTree('unused', { tree: unixTree, totalFiles: 1, totalDirectories: 3 }))
       );
       await treeLoad;
 
+      expect(renderNormalTree).toHaveBeenCalledTimes(1);
       expect(app._fileBrowserState.view).toBe('normal');
       expect(elements.fileBrowserTree.innerHTML).toContain('index.ts');
+      expect(elements.fileBrowserTree.querySelectorAll('.file-tree-item')).toHaveLength(4);
       expect(app.fileBrowserExpandedDirs.has('src/components/widgets')).toBe(true);
     });
 
@@ -1324,8 +1327,41 @@ describe('File Viewer server search', () => {
         expect(elements.fileBrowserSearch.value).toBe('widget');
         expect(elements.fileBrowserTree.innerHTML).toContain('widgets');
         expect(app.fileBrowserExpandedDirs.size).toBe(0);
+        expect(app._fileBrowserState.deferredDirectoryTarget).toBeNull();
       }
     );
+
+    it('does not clear a newer deferred replacement while compare-and-clearing an obsolete binding', () => {
+      const { app } = loadPanel();
+      const state = app._ensureFileBrowserState();
+      const obsolete = {
+        ownerSessionId: 'session/A',
+        showHidden: false,
+        treeEpoch: 0,
+        searchEpoch: 0,
+        rawInput: 'old',
+        query: 'old',
+        path: 'old/path',
+        view: 'search-results',
+      };
+      const replacement = { ...obsolete, searchEpoch: 1, rawInput: 'new', query: 'new', path: 'new/path' };
+      state.deferredDirectoryTarget = obsolete;
+      vi.spyOn(app, '_isFileBrowserDirectoryContextCurrent').mockImplementationOnce((target) => {
+        expect(target).toBe(obsolete);
+        state.deferredDirectoryTarget = replacement;
+        return false;
+      });
+
+      app._completeDeferredFileBrowserDirectory({
+        sessionId: 'session/A',
+        showHidden: false,
+        treeEpoch: 0,
+        phase: 'ready',
+        data: successfulTree('ready.ts').data,
+      });
+
+      expect(state.deferredDirectoryTarget).toBe(replacement);
+    });
   });
 
   describe('normal tree loads', () => {

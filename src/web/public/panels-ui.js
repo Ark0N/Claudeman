@@ -3364,8 +3364,8 @@ Object.assign(CodemanApp.prototype, {
         const nextNormalState = { sessionId, showHidden, treeEpoch, phase: 'ready', data };
         state.normalState = nextNormalState;
         this.fileBrowserData = data;
-        this._completeDeferredFileBrowserDirectory?.(nextNormalState);
-        this._renderFileBrowserNormalState(nextNormalState);
+        const deferredRendered = this._completeDeferredFileBrowserDirectory?.(nextNormalState) === true;
+        if (!deferredRendered) this._renderFileBrowserNormalState(nextNormalState);
       } catch (error) {
         if (!this._isFileBrowserTreeContextCurrent(record, true)) return;
         const nextNormalState = {
@@ -3708,7 +3708,11 @@ Object.assign(CodemanApp.prototype, {
   _completeDeferredFileBrowserDirectory(normalState) {
     const state = this._ensureFileBrowserState();
     const target = state.deferredDirectoryTarget;
-    if (!target || !this._isFileBrowserDirectoryContextCurrent(target)) return;
+    if (!target) return false;
+    if (!this._isFileBrowserDirectoryContextCurrent(target)) {
+      if (state.deferredDirectoryTarget === target) state.deferredDirectoryTarget = null;
+      return false;
+    }
     if (
       !this._isFileBrowserNormalCompatible(
         normalState,
@@ -3718,21 +3722,22 @@ Object.assign(CodemanApp.prototype, {
       ) ||
       (normalState.phase !== 'ready' && normalState.phase !== 'error')
     ) {
-      return;
+      return false;
     }
 
     state.deferredDirectoryTarget = null;
     if (normalState.phase === 'error') {
       this._promptFileBrowserDirectoryReload();
-      return;
+      return false;
     }
 
     const found = this._findFileBrowserDirectory(normalState.data?.tree, target.path);
     if (!found) {
       this._promptFileBrowserDirectoryReload();
-      return;
+      return false;
     }
     this._leaveFileBrowserSearchForDirectory([...found.ancestors, found.target.path], normalState);
+    return true;
   },
 
   _leaveFileBrowserSearchForDirectory(paths, normalState) {
