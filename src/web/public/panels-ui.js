@@ -3026,7 +3026,7 @@ Object.assign(CodemanApp.prototype, {
 
     const searchInput = this.$?.('fileBrowserSearch');
     if (searchInput) searchInput.value = '';
-    this._setFileBrowserExpandDisabled(false);
+    this._syncFileBrowserExpandBtn();
     const expandBtn = this.$?.('fileBrowserExpandBtn');
     if (expandBtn) expandBtn.innerHTML = '\u229E';
 
@@ -3068,7 +3068,7 @@ Object.assign(CodemanApp.prototype, {
 
     const searchInput = this.$?.('fileBrowserSearch');
     if (searchInput) searchInput.value = '';
-    this._setFileBrowserExpandDisabled(false);
+    this._syncFileBrowserExpandBtn();
     const expandBtn = this.$?.('fileBrowserExpandBtn');
     if (expandBtn) expandBtn.innerHTML = '\u229E';
     const treeEl = this.$?.('fileBrowserTree');
@@ -3080,6 +3080,18 @@ Object.assign(CodemanApp.prototype, {
   _setFileBrowserExpandDisabled(disabled) {
     const btn = this.$('fileBrowserExpandBtn');
     if (btn) btn.disabled = disabled;
+  },
+
+  _hasFileBrowserQuery() {
+    const state = this._ensureFileBrowserState();
+    const input = this.$?.('fileBrowserSearch');
+    const inputValue = typeof input?.value === 'string' ? input.value : '';
+    const filterValue = typeof state.filter === 'string' ? state.filter : '';
+    return inputValue.trim() !== '' || filterValue.trim() !== '';
+  },
+
+  _syncFileBrowserExpandBtn() {
+    this._setFileBrowserExpandDisabled(this._hasFileBrowserQuery());
   },
 
   _renderFileBrowserNormalStatus(data, showHidden) {
@@ -3148,7 +3160,7 @@ Object.assign(CodemanApp.prototype, {
 
     if (normalState.phase !== 'ready') return;
     this.fileBrowserData = normalState.data;
-    this._setFileBrowserExpandDisabled(false);
+    this._syncFileBrowserExpandBtn();
     this.renderFileBrowserTree(normalState.sessionId);
     this._renderFileBrowserNormalStatus(normalState.data, normalState.showHidden);
   },
@@ -3229,15 +3241,70 @@ Object.assign(CodemanApp.prototype, {
     if (statusEl) statusEl.textContent = message;
   },
 
+  _canContinueFileBrowserHiddenReload(continuation, normalState) {
+    const state = this._ensureFileBrowserState();
+    const input = this.$?.('fileBrowserSearch');
+    const currentInput = typeof input?.value === 'string' ? input.value : state.filter;
+    return (
+      state.view === 'normal' &&
+      state.searchEpoch === continuation.searchEpoch &&
+      state.treeEpoch === continuation.treeEpoch &&
+      state.ownerSessionId === continuation.ownerSessionId &&
+      this.activeSessionId === continuation.ownerSessionId &&
+      (this.fileBrowserShowHidden === true) === continuation.showHidden &&
+      state.filter === continuation.rawInput &&
+      currentInput === continuation.rawInput &&
+      currentInput.trim() === continuation.query &&
+      this.$?.('fileBrowserPanel')?.classList.contains('visible') === true &&
+      normalState?.phase === 'ready' &&
+      this._isFileBrowserNormalCompatible(
+        normalState,
+        continuation.ownerSessionId,
+        continuation.showHidden,
+        continuation.treeEpoch,
+      )
+    );
+  },
+
   async toggleFileBrowserHidden() {
+    const state = this._ensureFileBrowserState();
+    const rawInput = typeof state.filter === 'string' ? state.filter : '';
+    const query = rawInput.trim();
     this.fileBrowserShowHidden = !this.fileBrowserShowHidden;
     try {
       localStorage.setItem(FILE_BROWSER_SHOW_HIDDEN_KEY, this.fileBrowserShowHidden ? '1' : '0');
     } catch {}
     this._syncFileBrowserHiddenBtn();
+
+    if (state.inFlight?.timer !== undefined && state.inFlight?.timer !== null) {
+      clearTimeout(state.inFlight.timer);
+    }
+    state.searchEpoch++;
+    state.inFlight = null;
+    state.matches = [];
+    state.deferredDirectoryTarget = null;
+    state.normalState = null;
+    this.fileBrowserData = null;
+    if (query.length <= 256) state.view = 'normal';
+    this._syncFileBrowserExpandBtn();
+
     // Expanded-directory state is deliberately preserved so toggling does not
     // collapse the tree the user just navigated.
-    if (this.activeSessionId) await this.loadFileBrowser(this.activeSessionId, { force: true });
+    const ownerSessionId = state.ownerSessionId || this.activeSessionId;
+    if (!ownerSessionId || this.activeSessionId !== ownerSessionId) return;
+
+    const searchEpoch = state.searchEpoch;
+    const showHidden = this.fileBrowserShowHidden === true;
+    const load = this.loadFileBrowser(ownerSessionId, { force: true });
+    const treeEpoch = state.treeEpoch;
+    if (!load?.then) return;
+    await load;
+
+    if (!query || query.length > 256) return;
+    const continuation = { ownerSessionId, showHidden, treeEpoch, searchEpoch, rawInput, query };
+    if (this._canContinueFileBrowserHiddenReload(continuation, state.normalState)) {
+      this.filterFileBrowser(rawInput);
+    }
   },
 
   loadFileBrowser(sessionId, { force = false } = {}) {
@@ -3416,6 +3483,7 @@ Object.assign(CodemanApp.prototype, {
     state.filter = rawInput;
     state.deferredDirectoryTarget = null;
     this.fileBrowserFilter = rawInput;
+    this._syncFileBrowserExpandBtn();
 
     if (state.inFlight?.timer !== undefined && state.inFlight?.timer !== null) {
       clearTimeout(state.inFlight.timer);
@@ -3428,7 +3496,7 @@ Object.assign(CodemanApp.prototype, {
     if (!query) {
       state.view = 'normal';
       state.matches = [];
-      this._setFileBrowserExpandDisabled(false);
+      this._syncFileBrowserExpandBtn();
       const normal = state.normalState;
       if (
         ownerSessionId &&
@@ -3448,7 +3516,7 @@ Object.assign(CodemanApp.prototype, {
       const message = 'Search queries are limited to 256 characters';
       state.view = 'query-error';
       state.matches = [];
-      this._setFileBrowserExpandDisabled(true);
+      this._syncFileBrowserExpandBtn();
       const treeEl = this.$('fileBrowserTree');
       const statusEl = this.$('fileBrowserStatus');
       if (treeEl) treeEl.innerHTML = `<div class="file-browser-empty">${escapeHtml(message)}</div>`;
@@ -3472,7 +3540,7 @@ Object.assign(CodemanApp.prototype, {
     state.view = 'search-pending';
     state.matches = [];
     state.inFlight = request;
-    this._setFileBrowserExpandDisabled(true);
+    this._syncFileBrowserExpandBtn();
     treeEl.innerHTML = `<div class="file-browser-loading">${escapeHtml('Searching...')}</div>`;
     const statusEl = this.$('fileBrowserStatus');
     if (statusEl) statusEl.textContent = 'Searching...';
@@ -3508,6 +3576,16 @@ Object.assign(CodemanApp.prototype, {
   _renderFileBrowserSearchResults(matches, ownerSessionId, data) {
     const treeEl = this.$('fileBrowserTree');
     if (!treeEl || !ownerSessionId) return;
+    const state = this._ensureFileBrowserState();
+    const searchContext = {
+      ownerSessionId,
+      showHidden: this.fileBrowserShowHidden === true,
+      treeEpoch: state.treeEpoch,
+      searchEpoch: state.searchEpoch,
+      rawInput: state.filter,
+      query: state.filter.trim(),
+      view: state.view,
+    };
     if (matches.length === 0) {
       treeEl.innerHTML = `<div class="file-browser-empty">${escapeHtml('No matches')}</div>`;
     } else {
@@ -3540,7 +3618,7 @@ Object.assign(CodemanApp.prototype, {
       item.addEventListener('click', () => {
         const path = item.dataset.path;
         if (item.dataset.type === 'directory') {
-          this._ensureFileBrowserState().deferredDirectoryTarget = { ownerSessionId, path };
+          this._openFileBrowserSearchDirectory({ ...searchContext, path });
         } else {
           this.openFilePreview(path, ownerSessionId);
         }
@@ -3552,6 +3630,132 @@ Object.assign(CodemanApp.prototype, {
       const count = data.matchCount === undefined ? matches.length : data.matchCount;
       statusEl.textContent = `${count} ${count === 1 ? 'match' : 'matches'}${data.truncated ? ' (truncated)' : ''}`;
     }
+  },
+
+  _findFileBrowserDirectory(nodes, targetPath, ancestors = []) {
+    if (!Array.isArray(nodes)) return null;
+    for (const node of nodes) {
+      if (!node || typeof node !== 'object') continue;
+      if (node.type === 'directory' && node.path === targetPath) {
+        return { target: node, ancestors: [...ancestors] };
+      }
+      if (node.type !== 'directory' || !Array.isArray(node.children)) continue;
+      const found = this._findFileBrowserDirectory(node.children, targetPath, [...ancestors, node.path]);
+      if (found) return found;
+    }
+    return null;
+  },
+
+  _isFileBrowserDirectoryContextCurrent(target) {
+    const state = this._ensureFileBrowserState();
+    const input = this.$?.('fileBrowserSearch');
+    const currentInput = typeof input?.value === 'string' ? input.value : state.filter;
+    return (
+      target &&
+      state.ownerSessionId === target.ownerSessionId &&
+      this.activeSessionId === target.ownerSessionId &&
+      state.treeEpoch === target.treeEpoch &&
+      state.searchEpoch === target.searchEpoch &&
+      (this.fileBrowserShowHidden === true) === target.showHidden &&
+      state.filter === target.rawInput &&
+      currentInput === target.rawInput &&
+      currentInput.trim() === target.query &&
+      state.view === target.view &&
+      this.$?.('fileBrowserPanel')?.classList.contains('visible') === true
+    );
+  },
+
+  _promptFileBrowserDirectoryReload() {
+    this.showToast?.('Reload files before opening this folder', 'info');
+  },
+
+  _openFileBrowserSearchDirectory(target) {
+    if (!this._isFileBrowserDirectoryContextCurrent(target)) return;
+    const state = this._ensureFileBrowserState();
+    const normalState = state.normalState;
+    if (
+      !this._isFileBrowserNormalCompatible(
+        normalState,
+        target.ownerSessionId,
+        target.showHidden,
+        target.treeEpoch,
+      )
+    ) {
+      state.deferredDirectoryTarget = null;
+      this._promptFileBrowserDirectoryReload();
+      return;
+    }
+
+    if (normalState.phase === 'loading') {
+      state.deferredDirectoryTarget = { ...target };
+      return;
+    }
+
+    state.deferredDirectoryTarget = null;
+    if (normalState.phase !== 'ready') {
+      this._promptFileBrowserDirectoryReload();
+      return;
+    }
+
+    const found = this._findFileBrowserDirectory(normalState.data?.tree, target.path);
+    if (!found) {
+      this._promptFileBrowserDirectoryReload();
+      return;
+    }
+    this._leaveFileBrowserSearchForDirectory([...found.ancestors, found.target.path], normalState);
+  },
+
+  _completeDeferredFileBrowserDirectory(normalState) {
+    const state = this._ensureFileBrowserState();
+    const target = state.deferredDirectoryTarget;
+    if (!target || !this._isFileBrowserDirectoryContextCurrent(target)) return;
+    if (
+      !this._isFileBrowserNormalCompatible(
+        normalState,
+        target.ownerSessionId,
+        target.showHidden,
+        target.treeEpoch,
+      ) ||
+      (normalState.phase !== 'ready' && normalState.phase !== 'error')
+    ) {
+      return;
+    }
+
+    state.deferredDirectoryTarget = null;
+    if (normalState.phase === 'error') {
+      this._promptFileBrowserDirectoryReload();
+      return;
+    }
+
+    const found = this._findFileBrowserDirectory(normalState.data?.tree, target.path);
+    if (!found) {
+      this._promptFileBrowserDirectoryReload();
+      return;
+    }
+    this._leaveFileBrowserSearchForDirectory([...found.ancestors, found.target.path], normalState);
+  },
+
+  _leaveFileBrowserSearchForDirectory(paths, normalState) {
+    const state = this._ensureFileBrowserState();
+    if (state.inFlight?.timer !== undefined && state.inFlight?.timer !== null) {
+      clearTimeout(state.inFlight.timer);
+    }
+    state.searchEpoch++;
+    state.inFlight = null;
+    state.filter = '';
+    state.matches = [];
+    state.deferredDirectoryTarget = null;
+    state.view = 'normal';
+    this.fileBrowserFilter = '';
+
+    const input = this.$?.('fileBrowserSearch');
+    if (input) input.value = '';
+    this._syncFileBrowserExpandBtn();
+    for (const path of paths) {
+      if (typeof path === 'string') this.fileBrowserExpandedDirs?.add?.(path);
+    }
+    this.fileBrowserData = normalState.data;
+    this._renderFileBrowserNormalState(normalState);
   },
 
   expandAllDirectories(nodes) {
@@ -3570,6 +3774,10 @@ Object.assign(CodemanApp.prototype, {
   },
 
   toggleFileBrowserExpand() {
+    if (this._hasFileBrowserQuery()) {
+      this._syncFileBrowserExpandBtn();
+      return;
+    }
     this.fileBrowserAllExpanded = !this.fileBrowserAllExpanded;
     const btn = this.$('fileBrowserExpandBtn');
 
@@ -3597,11 +3805,11 @@ Object.assign(CodemanApp.prototype, {
     this.fileBrowserFilter = '';
     this.fileBrowserExpandedDirs.clear();
     this.fileBrowserAllExpanded = false;
-    this._setFileBrowserExpandDisabled(false);
     const expandBtn = this.$('fileBrowserExpandBtn');
     if (expandBtn) expandBtn.innerHTML = '\u229E';
     const searchInput = this.$('fileBrowserSearch');
     if (searchInput) searchInput.value = '';
+    this._syncFileBrowserExpandBtn();
 
     const ownerSessionId = state.ownerSessionId || this.activeSessionId;
     if (!ownerSessionId || this.activeSessionId !== ownerSessionId) return undefined;
