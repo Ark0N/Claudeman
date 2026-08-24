@@ -3827,6 +3827,38 @@ class CodemanApp {
   }
 
   /**
+   * True when the VERTICAL TAB RAIL (tabOrientation 'vertical') is showing the
+   * detailed rows: the same "created 3d ago · working 12m" line and status pill
+   * the rich sidebar and both home screens carry.
+   *
+   * A docked column is not a tab strip — that was the argument for the rich
+   * sidebar, and the rail is a docked column too, so it defaults to rich and
+   * `tabRailDetail: 'simple'` is the opt-out.
+   *
+   * The compact carve-out is not cosmetic: below 240px the rail already drops
+   * the row actions to a hover affordance, and three lines of stamps in a
+   * ~208px column ellipsize into noise. `_setTabRailWidth()` re-renders the
+   * tabs whenever that class flips, so this gate is re-read at the right moment.
+   */
+  isTabRailRich() {
+    const root = document.documentElement;
+    return (
+      root.getAttribute('data-tab-orientation') === 'vertical' &&
+      root.dataset.tabRailDetail === 'rich' &&
+      !root.classList.contains('tab-rail-compact')
+    );
+  }
+
+  /**
+   * The one gate the render paths ask: does THIS list draw detailed rows?
+   * Either vertical surface can, and neither can be on at once (the sidebar
+   * owns the tabs whenever it is active, which forces the rail off).
+   */
+  isRichTabRows() {
+    return this.isSessionSidebarRich() || this.isTabRailRich();
+  }
+
+  /**
    * True where the sidebar is a MODAL off-canvas drawer over the terminal
    * instead of a docked column.
    *
@@ -3999,7 +4031,7 @@ class CodemanApp {
       this.showHomeSessions?.();
     }
     // Only the rich rows carry stamps that go stale with no event behind them.
-    if (this.isSessionSidebarRich()) this._startSidebarRichClock();
+    if (this.isRichTabRows()) this._startSidebarRichClock();
     else this._stopSidebarRichClock();
   }
 
@@ -4116,13 +4148,14 @@ class CodemanApp {
   }
 
   /**
-   * The per-row model for a rich sidebar row: which state the session is in,
-   * when it was first created, and how long it has been in that state.
+   * The per-row model for a rich row (detailed sidebar or vertical tab rail):
+   * which state the session is in, when it was first created, and how long it
+   * has been in that state.
    *
    * Classification is `_mobileOverviewState()` and the state duration is
    * `_mobileOverviewSince()` (both mobile-overview.js), NOT re-derived here —
-   * the sidebar, the desktop home rail and the phone overview must never
-   * disagree about what "working" means or about which stamp measures it.
+   * the sidebar, the rail, the desktop home rail and the phone overview must
+   * never disagree about what "working" means or about which stamp measures it.
    *
    * Guarded like every other cross-file consumer in this app: a stale cached
    * mobile-overview.js must degrade to a row with no meta line, not throw and
@@ -4214,7 +4247,7 @@ class CodemanApp {
   _startSidebarRichClock() {
     if (this._sidebarRichClock) return;
     this._sidebarRichClock = setInterval(() => {
-      if (!this.isSessionSidebarRich()) {
+      if (!this.isRichTabRows()) {
         this._stopSidebarRichClock();
         return;
       }
@@ -4431,7 +4464,7 @@ class CodemanApp {
     if (canIncremental) {
       // Read once for the whole pass, like the full-rebuild path: this touches
       // the DOM and the loop below runs for every session on every SSE tick.
-      const richRows = this.isSessionSidebarRich();
+      const richRows = this.isRichTabRows();
       // Incremental update - only modify changed properties
       for (const [id, session] of this.sessions) {
         const tab = container.querySelector(`.session-tab[data-id="${id}"]`);
@@ -4740,9 +4773,9 @@ class CodemanApp {
     // into view replaces it.
     const parts = [];
     const tabOrder = this.sessionOrder;
-    // Read once, not per session: isSessionSidebarRich() touches the DOM and
+    // Read once, not per session: isRichTabRows() touches the DOM and
     // this loop runs for every tab on every full rebuild.
-    const richRows = this.isSessionSidebarRich();
+    const richRows = this.isRichTabRows();
     let _tabIdx = 0;
     for (const id of tabOrder) {
       const session = this.sessions.get(id);
@@ -4786,9 +4819,10 @@ class CodemanApp {
         ? (session.workingDir ? `${parsedName.prefix} (${session.workingDir})` : parsedName.prefix)
         : (session.workingDir || '');
 
-      // Rich sidebar rows only: the home screen's created/state stamps and a
-      // status pill. richRow is null in every other layout, and both helpers
-      // below collapse to '' — the header strip's markup is unchanged.
+      // Rich rows only (the detailed sidebar OR the vertical tab rail): the home
+      // screen's created/state stamps and a status pill. richRow is null in every
+      // other layout, and both helpers below collapse to '' — the header strip's
+      // markup is unchanged.
       const richRow = richRows ? this._sidebarRichRow(id, session) : null;
       const richMeta = this._sidebarRichMetaHTML(richRow);
       const richClass = richRow ? ` tab-state-${richRow.state}` : '';

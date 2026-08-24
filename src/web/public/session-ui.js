@@ -1976,8 +1976,13 @@ Object.assign(CodemanApp.prototype, {
         e.preventDefault();
         input.blur();
       } else if (e.key === 'Escape') {
-        input.value = '';
-        input.blur();
+        // Cancel, never commit. This used to clear the field and blur, and the
+        // blur handler commits — so Escape RENAMED the session to an empty
+        // string (measured: the tab fell back to its folder name and the server
+        // stored ""), in every layout. cancelRename() marks the edit
+        // invalidated, so the blur that follows the input's removal is a no-op.
+        e.preventDefault();
+        cancelRename();
       }
     });
   },

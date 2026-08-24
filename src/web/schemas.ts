@@ -997,6 +997,7 @@ export const SettingsUpdateSchema = z
     tabTwoRows: z.boolean().optional(),
     tabOrientation: z.enum(['horizontal', 'vertical']).optional(),
     tabRailWidth: z.number().int().min(208).max(360).optional(),
+    tabRailDetail: z.enum(['simple', 'rich']).optional(),
     /**
      * Session list layout. Display key (per-device).
      * 'header'       = horizontal tab strip

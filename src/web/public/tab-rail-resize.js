@@ -70,6 +70,12 @@ Object.assign(CodemanApp.prototype, {
     const wasCompact = root.classList.contains('tab-rail-compact');
     const compact = resolved < 240;
     root.classList.toggle('tab-rail-compact', compact);
+    // Second, softer threshold, CSS-only: a detailed row carries two stamps and
+    // below ~288px the created one ellipsizes to "CREA…", which says nothing.
+    // It is dropped there instead, leaving the state duration (the number the
+    // list is ordered by) and its pill intact. No re-render — unlike the rows
+    // themselves, this is a display toggle on markup that is already there.
+    root.classList.toggle('tab-rail-tight', resolved < 288);
     if (wasCompact !== compact) this._fullRenderSessionTabs?.();
     const handle = document.getElementById('tabRailResizeHandle');
     if (handle) {
@@ -144,9 +150,28 @@ Object.assign(CodemanApp.prototype, {
     }, 150);
   },
 
+  /**
+   * The width a rail gets when the user has never picked one.
+   *
+   * Detailed rows carry a third line ("created 3d ago · working 12m" plus a
+   * status pill) and at 256px that line ellipsizes before it is finished — the
+   * same reason the rich SIDEBAR is 300px and the simple one 260px. 320px is
+   * the existing Wide preset, so a fresh detailed rail lands on a named choice
+   * rather than reading "Custom" in the settings select.
+   *
+   * Only the DEFAULT moves: a width the user has actually chosen (stored) is
+   * never overridden, and dragging the rail narrower is never fought — below
+   * 240px the rows drop back to simple ones on their own.
+   */
+  _defaultTabRailWidth() {
+    const rich = document.documentElement.dataset.tabRailDetail !== 'simple';
+    if (rich) return window.CodemanTabRail?.RICH_DEFAULT_WIDTH ?? 320;
+    return window.CodemanTabRail?.DEFAULT_WIDTH ?? 256;
+  },
+
   applyTabRailWidth(options = {}) {
     const settings = this.loadAppSettingsFromStorage();
-    const requested = settings.tabRailWidth ?? window.CodemanTabRail?.DEFAULT_WIDTH ?? 256;
+    const requested = settings.tabRailWidth ?? this._defaultTabRailWidth();
     const preferred = window.CodemanTabRail?.resolveWidth({ width: requested }) ?? 256;
     if (options.settle) this._claimTabRailResize();
     const resolved = this._setTabRailWidth(preferred);

@@ -164,6 +164,9 @@ function resolveTabOrientation(input) {
 
 const TAB_RAIL_MIN_WIDTH = 208;
 const TAB_RAIL_DEFAULT_WIDTH = 256;
+/** Detailed rows carry a third line, and it ellipsizes at 256px — see the
+    rich sidebar's own 300px column. 320px is the existing Wide preset. */
+const TAB_RAIL_RICH_DEFAULT_WIDTH = 320;
 const TAB_RAIL_MAX_WIDTH = 360;
 
 function resolveTabRailWidth(input = {}) {
@@ -686,6 +689,7 @@ if (typeof window !== 'undefined') {
   };
   window.CodemanTabRail = {
     DEFAULT_WIDTH: TAB_RAIL_DEFAULT_WIDTH,
+    RICH_DEFAULT_WIDTH: TAB_RAIL_RICH_DEFAULT_WIDTH,
     MIN_WIDTH: TAB_RAIL_MIN_WIDTH,
     MAX_WIDTH: TAB_RAIL_MAX_WIDTH,
     resolveWidth: resolveTabRailWidth,

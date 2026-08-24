@@ -403,9 +403,14 @@ Object.assign(CodemanApp.prototype, {
     document.getElementById('appSettingsTabOrientation').value =
       settings.tabOrientation ?? defaults.tabOrientation ?? 'horizontal';
     const tabRailWidth = window.CodemanTabRail?.resolveWidth({
-      width: settings.tabRailWidth ?? defaults.tabRailWidth ?? 256,
+      // Same default resolution as applyTabRailWidth(): a rail that has never
+      // been sized shows the width it is actually rendering at, which for
+      // detailed rows is the Wide preset rather than 256.
+      width: settings.tabRailWidth ?? defaults.tabRailWidth ?? this._defaultTabRailWidth?.() ?? 256,
     }) ?? 256;
     this.syncTabRailWidthSetting?.(tabRailWidth);
+    document.getElementById('appSettingsTabRailDetail').value =
+      settings.tabRailDetail ?? defaults.tabRailDetail ?? 'rich';
     document.getElementById('appSettingsShowTabDetachButton').checked = settings.showTabDetachButton ?? defaults.showTabDetachButton ?? false;
     document.getElementById('appSettingsSessionListLayout').value =
       settings.sessionListLayout ?? defaults.sessionListLayout ?? 'header';
@@ -2041,6 +2046,7 @@ Object.assign(CodemanApp.prototype, {
       tabTwoRows: document.getElementById('appSettingsTabTwoRows').checked,
       tabOrientation: document.getElementById('appSettingsTabOrientation').value,
       tabRailWidth: this.readTabRailWidthSetting?.() ?? 256,
+      tabRailDetail: document.getElementById('appSettingsTabRailDetail').value,
       showTabDetachButton: document.getElementById('appSettingsShowTabDetachButton').checked,
       sessionListLayout: document.getElementById('appSettingsSessionListLayout').value,
       sessionSidebarFontSize: this.resolveSessionSidebarFontSize(
@@ -2443,6 +2449,7 @@ Object.assign(CodemanApp.prototype, {
         tabTwoRows: false,
         tabOrientation: 'horizontal',
         tabRailWidth: 256,
+        tabRailDetail: 'rich',
         sessionListLayout: 'header',
         sessionSidebarFontSize: 12,
         cjkInputEnabled: false,
@@ -2701,6 +2708,14 @@ Object.assign(CodemanApp.prototype, {
     const previous = root.getAttribute('data-tab-orientation') || 'horizontal';
     root.setAttribute('data-tab-orientation', orientation);
 
+    // Row detail rides on its OWN attribute, exactly like the sidebar's
+    // data-sidebar-detail: every html[data-tab-orientation='vertical'] rule in
+    // styles.css keeps matching both variants untouched, and the gate in app.js
+    // reads one attribute instead of re-parsing localStorage per tab.
+    const previousDetail = root.dataset.tabRailDetail || 'rich';
+    const detail = (settings.tabRailDetail ?? defaults.tabRailDetail ?? 'rich') === 'simple' ? 'simple' : 'rich';
+    root.dataset.tabRailDetail = detail;
+
     const tabsEl = document.getElementById('sessionTabs');
     const rail = document.getElementById('tabRail');
     const headerHost = document.getElementById('sessionTabsHost');
@@ -2718,13 +2733,35 @@ Object.assign(CodemanApp.prototype, {
     const settleRailWidth =
       options.settleRailWidth === true && (orientation === 'vertical' || previous !== orientation);
     this.applyTabRailWidth?.({ settle: settleRailWidth });
-    if (previous !== orientation) {
+    const orientationChanged = previous !== orientation;
+    // A detail flip counts as a change on its own: simple ⟷ detailed leaves the
+    // orientation on 'vertical' both times, and the stamps line is emitted by
+    // the row template, not toggled by CSS — same reasoning as the sidebar's
+    // detail half in applySessionListLayout(). Taller rows also move every
+    // connector anchored to a tab rect.
+    const changed = orientationChanged || previousDetail !== detail;
+    if (orientationChanged) {
       this.updateTabOverflowMode?.();
       if (!settleRailWidth) this.fitAddon?.fit();
-      this._fullRenderSessionTabs?.();
+    }
+    // applyTabWrapSettings() is the ONE owner of tabs-show-folder and is
+    // rail-aware, so it has to run AFTER the two attributes above — the
+    // applySessionListLayout() call that precedes this one on the settings-save
+    // path ran while data-tab-rail-detail still held the old value. It
+    // re-renders by itself when the folder row appears or disappears, which is
+    // why the render below is skipped in that case rather than doubled.
+    const prevTall = this._tallTabsEnabled;
+    if (changed) this.applyTabWrapSettings?.();
+    if (changed) {
+      if (prevTall === this._tallTabsEnabled) this._fullRenderSessionTabs?.();
       this._updateConnectionLinesImmediate?.();
       this._refreshHomeSessionsIfVisible?.();
     }
+    // Only detailed rows carry stamps that go stale with no event behind them.
+    // _fullRenderSessionTabs() settles this too, but applyTabOrientation() runs
+    // on paths where nothing re-rendered (boot with the layout already applied).
+    if (this.isRichTabRows?.()) this._startSidebarRichClock?.();
+    else this._stopSidebarRichClock?.();
   },
 
   applyTabWrapSettings() {
@@ -2746,7 +2783,13 @@ Object.assign(CodemanApp.prototype, {
     const twoRows = !sidebar && deviceType === 'desktop'
       ? (settings.tabTwoRows ?? defaults.tabTwoRows ?? false)
       : false;
-    const showFolder = sidebar || twoRows;
+    // The DETAILED vertical rail is the third tall-row surface, for the same
+    // reason as the sidebar: it is a docked column with a row per session, and
+    // the stamps line below the name says nothing about WHICH project the
+    // session is in. Read from the applied attribute, which applyTabOrientation()
+    // has already written (app.js calls it before this).
+    const railRich = this.isTabRailRich?.() === true;
+    const showFolder = sidebar || twoRows || railRich;
     const prevTallTabs = this._tallTabsEnabled;
     this._tallTabsEnabled = showFolder;
     const tabsEl = document.getElementById('sessionTabs');
@@ -2960,7 +3003,7 @@ Object.assign(CodemanApp.prototype, {
           'showFontControls', 'showSystemStats', 'showTokenCount', 'showCost',
           'showLifecycleLog', 'showResponseViewer', 'showRedrawButton',
           'showMonitor', 'showProjectInsights', 'showFileBrowser', 'showSubagents',
-          'subagentActiveTabOnly', 'tabTwoRows', 'tabOrientation', 'tabRailWidth', 'sessionListLayout', 'sessionSidebarFontSize', 'localEchoEnabled', 'cjkInputEnabled', 'extendedKeyboardBar',
+          'subagentActiveTabOnly', 'tabTwoRows', 'tabOrientation', 'tabRailWidth', 'tabRailDetail', 'sessionListLayout', 'sessionSidebarFontSize', 'localEchoEnabled', 'cjkInputEnabled', 'extendedKeyboardBar',
           'skin', 'showPlanUsageLimits', 'showAttachmentsButton', 'showFileViewerButton', 'webglRendererEnabled',
           'terminalFontFamily',
           'language',

@@ -17217,19 +17217,31 @@ html[data-session-list="sidebar"] .session-tab.tab-filtered-out {
   display: none !important;
 }
 
-/* --- Rich rows (sessionListLayout 'sidebar-rich') ----------------------- */
+/* --- Rich rows (sessionListLayout 'sidebar-rich' + tabRailDetail 'rich') --- */
 /* The detailed variant of the SAME sidebar: identical column, identical
    re-parented #sessionTabs, identical filter and Alt+B toggle. The only
    difference is that each row also carries the line the desktop home rail and
    the phone overview carry — when the session was first created, how long it
    has been in the state it is in, and a status pill.
 
-   Everything here is scoped to html[data-sidebar-detail="rich"], which
+   The VERTICAL TAB RAIL is the second surface that draws those rows (it is a
+   docked column too, and #sessionTabs is the same element re-parented into it),
+   so every rule below carries a rail twin as an extra COMMA-GROUPED selector.
+   Deliberately not :is(): an :is() list takes its most specific argument's
+   specificity, which would silently raise the sidebar arm from (0,3,1) to the
+   rail arm's (0,5,1) and let these paint rules outrank things they never used
+   to. Grouped selectors each keep their own weight.
+
+   Sidebar rules are scoped to html[data-sidebar-detail="rich"], which
    applySessionListLayout() only ever sets to 'rich' while data-session-list is
-   'sidebar'. `.tab-meta` is emitted by the row template exclusively in that
-   mode, so these rules have nothing to match anywhere else — the display:none
-   below is the second lock, not the mechanism. */
-html[data-sidebar-detail="rich"] .session-sidebar .tab-meta {
+   'sidebar'; rail rules to html[data-tab-orientation='vertical']
+   [data-tab-rail-detail='rich']:not(.tab-rail-compact), so a rail dragged below
+   240px drops back to simple rows the same way the collapsed sidebar does.
+   `.tab-meta` is emitted by the row template exclusively in those modes, so
+   these rules have nothing to match anywhere else — the display:none below is
+   the second lock, not the mechanism. */
+html[data-sidebar-detail="rich"] .session-sidebar .tab-meta,
+html[data-tab-orientation='vertical'][data-tab-rail-detail='rich']:not(.tab-rail-compact) .tab-rail .tab-meta {
   display: flex;
   align-items: center;
   gap: 0.35em;
@@ -17251,33 +17263,53 @@ html[data-sidebar-detail="rich"] .session-sidebar .tab-meta {
   display: none;
 }
 
-html[data-sidebar-detail="rich"] .session-sidebar .tab-meta-item {
+html[data-sidebar-detail="rich"] .session-sidebar .tab-meta-item,
+html[data-tab-orientation='vertical'][data-tab-rail-detail='rich']:not(.tab-rail-compact) .tab-rail .tab-meta-item {
   min-width: 0;
   overflow: hidden;
   text-overflow: ellipsis;
 }
 
-html[data-sidebar-detail="rich"] .session-sidebar .tab-meta-key {
+html[data-sidebar-detail="rich"] .session-sidebar .tab-meta-key,
+html[data-tab-orientation='vertical'][data-tab-rail-detail='rich']:not(.tab-rail-compact) .tab-rail .tab-meta-key {
   margin-right: 0.35em;
   opacity: 0.7;
   text-transform: uppercase;
   letter-spacing: 0.06em;
 }
 
-html[data-sidebar-detail="rich"] .session-sidebar .tab-meta-sep {
+html[data-sidebar-detail="rich"] .session-sidebar .tab-meta-sep,
+html[data-tab-orientation='vertical'][data-tab-rail-detail='rich']:not(.tab-rail-compact) .tab-rail .tab-meta-sep {
   opacity: 0.45;
+}
+
+/* Narrower than the detailed default (the .tab-rail-tight class,
+   _setTabRailWidth): the created stamp is dropped rather than shown as
+   "CREA…". Its value survives in the row's title attribute either way. */
+html.tab-rail-tight[data-tab-orientation='vertical'][data-tab-rail-detail='rich']:not(.tab-rail-compact) .tab-rail .tab-meta-created,
+html.tab-rail-tight[data-tab-orientation='vertical'][data-tab-rail-detail='rich']:not(.tab-rail-compact) .tab-rail .tab-meta-sep {
+  display: none;
+}
+
+/* On a rail narrower than the detailed default, the state duration is the last
+   thing that should go: it is the number the row is sorted by, and the pill
+   next to it is only a word. The created stamp ellipsizes instead. */
+html[data-tab-orientation='vertical'][data-tab-rail-detail='rich']:not(.tab-rail-compact) .tab-rail .tab-meta-since {
+  flex-shrink: 0;
 }
 
 /* While a session is actually doing something, how long it has been doing it is
    what the eye should land on — same emphasis the home rail gives it. */
-html[data-sidebar-detail="rich"] .session-sidebar .session-tab.tab-state-working .tab-meta-since {
+html[data-sidebar-detail="rich"] .session-sidebar .session-tab.tab-state-working .tab-meta-since,
+html[data-tab-orientation='vertical'][data-tab-rail-detail='rich']:not(.tab-rail-compact) .tab-rail .session-tab.tab-state-working .tab-meta-since {
   color: var(--green);
   opacity: 0.95;
 }
 
 /* Pushed hard right and never shrinking, so the stamps ellipsize before the
    status word does. */
-html[data-sidebar-detail="rich"] .session-sidebar .tab-pill {
+html[data-sidebar-detail="rich"] .session-sidebar .tab-pill,
+html[data-tab-orientation='vertical'][data-tab-rail-detail='rich']:not(.tab-rail-compact) .tab-rail .tab-pill {
   flex-shrink: 0;
   margin-left: auto;
   padding: 0.1em 0.5em;
@@ -17294,19 +17326,23 @@ html[data-sidebar-detail="rich"] .session-sidebar .tab-pill {
 /* Same three colors as every other session surface: red means a question is
    pending, yellow means it wants input, green means work is happening. */
 html[data-sidebar-detail="rich"] .session-sidebar .tab-pill--needs,
-html[data-sidebar-detail="rich"] .session-sidebar .tab-pill--error {
+html[data-sidebar-detail="rich"] .session-sidebar .tab-pill--error,
+html[data-tab-orientation='vertical'][data-tab-rail-detail='rich']:not(.tab-rail-compact) .tab-rail .tab-pill--needs,
+html[data-tab-orientation='vertical'][data-tab-rail-detail='rich']:not(.tab-rail-compact) .tab-rail .tab-pill--error {
   background: color-mix(in srgb, var(--red) 18%, transparent);
   border-color: color-mix(in srgb, var(--red) 45%, transparent);
   color: var(--red);
 }
 
-html[data-sidebar-detail="rich"] .session-sidebar .tab-pill--waiting {
+html[data-sidebar-detail="rich"] .session-sidebar .tab-pill--waiting,
+html[data-tab-orientation='vertical'][data-tab-rail-detail='rich']:not(.tab-rail-compact) .tab-rail .tab-pill--waiting {
   background: color-mix(in srgb, var(--yellow) 18%, transparent);
   border-color: color-mix(in srgb, var(--yellow) 45%, transparent);
   color: var(--yellow);
 }
 
-html[data-sidebar-detail="rich"] .session-sidebar .tab-pill--working {
+html[data-sidebar-detail="rich"] .session-sidebar .tab-pill--working,
+html[data-tab-orientation='vertical'][data-tab-rail-detail='rich']:not(.tab-rail-compact) .tab-rail .tab-pill--working {
   background: color-mix(in srgb, var(--green) 15%, transparent);
   border-color: color-mix(in srgb, var(--green) 40%, transparent);
   color: var(--green);
@@ -17314,7 +17350,8 @@ html[data-sidebar-detail="rich"] .session-sidebar .tab-pill--working {
 
 /* Muted one step further than the idle dot: the pill is a block of color, so it
    reads louder than a 9px dot at the same mix. */
-html[data-sidebar-detail="rich"] .session-sidebar .tab-pill--idle {
+html[data-sidebar-detail="rich"] .session-sidebar .tab-pill--idle,
+html[data-tab-orientation='vertical'][data-tab-rail-detail='rich']:not(.tab-rail-compact) .tab-rail .tab-pill--idle {
   background: color-mix(in srgb, var(--green) 7%, transparent);
   border-color: color-mix(in srgb, var(--green) 18%, var(--border));
   color: color-mix(in srgb, var(--green) 45%, var(--text-muted));
@@ -17329,7 +17366,8 @@ html[data-sidebar-detail="rich"] .session-sidebar .tab-pill--idle {
    then just a status dot and its badges. Without the guard, `align-items:
    flex-start` and a 0.15rem top margin on .tab-status would push that dot off
    the centre line of every row in the rail. */
-html[data-sidebar-detail="rich"]:not([data-sidebar="collapsed"]) .session-sidebar .session-tab {
+html[data-sidebar-detail="rich"]:not([data-sidebar="collapsed"]) .session-sidebar .session-tab,
+html[data-tab-orientation='vertical'][data-tab-rail-detail='rich']:not(.tab-rail-compact) .tab-rail .session-tab {
   align-items: flex-start;
   padding: 0.45rem 0.5rem;
 }
@@ -17338,7 +17376,10 @@ html[data-sidebar-detail="rich"]:not([data-sidebar="collapsed"]) .session-sideba
    three-line one it drifts low, so pin it to the name it acts on. */
 html[data-sidebar-detail="rich"]:not([data-sidebar="collapsed"]) .session-sidebar .session-tab .tab-actions,
 html[data-sidebar-detail="rich"]:not([data-sidebar="collapsed"]) .session-sidebar .session-tab .tab-number,
-html[data-sidebar-detail="rich"]:not([data-sidebar="collapsed"]) .session-sidebar .session-tab .tab-status {
+html[data-sidebar-detail="rich"]:not([data-sidebar="collapsed"]) .session-sidebar .session-tab .tab-status,
+html[data-tab-orientation='vertical'][data-tab-rail-detail='rich']:not(.tab-rail-compact) .tab-rail .session-tab .tab-name-row > .tab-actions,
+html[data-tab-orientation='vertical'][data-tab-rail-detail='rich']:not(.tab-rail-compact) .tab-rail .session-tab .tab-number,
+html[data-tab-orientation='vertical'][data-tab-rail-detail='rich']:not(.tab-rail-compact) .tab-rail .session-tab .tab-status {
   margin-top: 0.15rem;
 }
 

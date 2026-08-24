@@ -54,6 +54,8 @@ interface LayoutApp {
   _fullRenderSessionTabs(): void;
   updateConnectionLines(): void;
   isSessionSidebarRich(): boolean;
+  isTabRailRich(): boolean;
+  isRichTabRows(): boolean;
   _sidebarRichRow(id: string, session: Record<string, unknown>): RichRow | null;
   _sidebarRichMetaHTML(row: RichRow | null): string;
   _updateSidebarRichRow(tab: Element, id: string, session: Record<string, unknown>): void;
@@ -795,7 +797,7 @@ describe('rich session sidebar', () => {
     // .tab-info is already a flex column, so the line needs no row-level
     // wrapping — and the collapsed 44px rail hides .tab-info wholesale, which is
     // what keeps the stamps out of it for free.
-    expect(APP).toContain('const richRows = this.isSessionSidebarRich();');
+    expect(APP).toContain('const richRows = this.isRichTabRows();');
     expect(APP).toContain('const richMeta = this._sidebarRichMetaHTML(richRow);');
     expect(APP).toContain('${richMeta}\n          </span>');
   });
@@ -817,5 +819,113 @@ describe('rich session sidebar', () => {
     expect(STYLES_CSS).toContain('--sidebar-width-rich');
     expect(STYLES_CSS).toContain('html[data-session-list="sidebar"][data-sidebar-detail="rich"] .session-sidebar {');
     expect(MOBILE_CSS).toContain('html[data-session-list="sidebar"][data-sidebar-detail="rich"] .session-sidebar {');
+  });
+});
+
+describe('detailed rows in the vertical tab rail', () => {
+  /**
+   * The rail is the SECOND surface that draws rich rows. Everything about the
+   * row itself (model, markup, clock) is shared with the sidebar and covered
+   * above; what is new here is only the gate — which attribute turns it on,
+   * and the three ways it must turn back off.
+   */
+  const railBoot = (stored: Record<string, unknown>) => {
+    const booted = boot({ stored: { sessionListLayout: 'header', ...stored } });
+    booted.app.applySessionListLayout();
+    booted.app.applyTabOrientation();
+    return booted;
+  };
+
+  it('defaults the rail to detailed rows, since a docked column is not a tab strip', () => {
+    const { win, app } = railBoot({ tabOrientation: 'vertical' });
+    expect(win.document.documentElement.dataset.tabOrientation).toBe('vertical');
+    expect(win.document.documentElement.dataset.tabRailDetail).toBe('rich');
+    expect(app.isTabRailRich()).toBe(true);
+    expect(app.isRichTabRows()).toBe(true);
+    // The stamps go stale with no event behind them, so the clock has to run.
+    expect(app._sidebarRichClock).toBeTruthy();
+  });
+
+  it("honors the 'simple' opt-out", () => {
+    const { win, app } = railBoot({ tabOrientation: 'vertical', tabRailDetail: 'simple' });
+    expect(win.document.documentElement.dataset.tabRailDetail).toBe('simple');
+    expect(app.isTabRailRich()).toBe(false);
+    expect(app.isRichTabRows()).toBe(false);
+    // Falsy rather than null: _stopSidebarRichClock() returns early when there
+    // is no interval to clear, which is the state a rail that never armed one is in.
+    expect(app._sidebarRichClock).toBeFalsy();
+  });
+
+  it('drops back to simple rows once the rail is dragged into compact width', () => {
+    // Below 240px the rail already hides the row actions; three lines of stamps
+    // in a ~208px column ellipsize into noise. _setTabRailWidth() re-renders
+    // whenever this class flips, so the gate is re-read at the right moment.
+    const { win, app } = railBoot({ tabOrientation: 'vertical' });
+    expect(app.isTabRailRich()).toBe(true);
+    win.document.documentElement.classList.add('tab-rail-compact');
+    expect(app.isTabRailRich()).toBe(false);
+    expect(app.isRichTabRows()).toBe(false);
+  });
+
+  it('never draws stamps in the horizontal header strip', () => {
+    // tabRailDetail stays 'rich' in storage while the orientation is horizontal:
+    // the gate has to read BOTH, or the header strip inherits a meta line that
+    // has nowhere to go.
+    const { win, app } = railBoot({ tabOrientation: 'horizontal', tabRailDetail: 'rich' });
+    expect(win.document.documentElement.dataset.tabRailDetail).toBe('rich');
+    expect(app.isTabRailRich()).toBe(false);
+    expect(app.isRichTabRows()).toBe(false);
+  });
+
+  it('leaves the simple sidebar simple even with the rail set to detailed', () => {
+    // The sidebar owns the tabs whenever it is active, which forces the
+    // orientation back to horizontal — so a rail preference must not leak a
+    // meta line into a list the user asked to keep compact.
+    const { app } = railBoot({ sessionListLayout: 'sidebar', tabOrientation: 'vertical', tabRailDetail: 'rich' });
+    expect(app.isSessionSidebarActive()).toBe(true);
+    expect(app.isSessionSidebarRich()).toBe(false);
+    expect(app.isTabRailRich()).toBe(false);
+    expect(app.isRichTabRows()).toBe(false);
+  });
+
+  it('re-renders when only the DETAIL changes, orientation untouched', () => {
+    const { win, app } = railBoot({ tabOrientation: 'vertical', tabRailDetail: 'simple' });
+    (app._fullRenderSessionTabs as unknown as { mockClear(): void }).mockClear();
+
+    win.localStorage.setItem(
+      'codeman-app-settings',
+      JSON.stringify({ sessionListLayout: 'header', tabOrientation: 'vertical', tabRailDetail: 'rich' })
+    );
+    delete (app as unknown as { _cachedAppSettings?: unknown })._cachedAppSettings;
+    app.applyTabOrientation();
+
+    // The stamps line is emitted by the row template, not toggled by CSS: a
+    // missed render here means the setting repaints nothing until the next tick.
+    expect(win.document.documentElement.dataset.tabRailDetail).toBe('rich');
+    expect(app._fullRenderSessionTabs).toHaveBeenCalled();
+    expect(app._sidebarRichClock).toBeTruthy();
+  });
+
+  it('plumbs the rail detail through the settings UI, the schema and the pre-paint script', () => {
+    expect(INDEX_HTML).toContain('id="appSettingsTabRailDetail"');
+    expect(INDEX_HTML).toContain('<option value="rich">Detailed</option>');
+    // Pre-paint stamps it with the rest of the layout keys, or a detailed rail
+    // paints as a simple one for the first frame and then jumps a row taller.
+    expect(INDEX_HTML).toContain("dataset.tabRailDetail=(A.tabRailDetail==='simple')?'simple':'rich'");
+    expect(SETTINGS_UI).toContain("document.getElementById('appSettingsTabRailDetail').value");
+    const displayKeys = SETTINGS_UI.slice(SETTINGS_UI.indexOf('const displayKeys = new Set(['));
+    expect(displayKeys.slice(0, 1800)).toContain("'tabRailDetail'");
+    expect(SCHEMAS).toMatch(/tabRailDetail:\s*z\.enum\(\['simple',\s*'rich'\]\)\.optional\(\)/);
+  });
+
+  it('gives every rich paint rule a rail twin without raising the sidebar arm', () => {
+    // Comma-grouped, never :is() — an :is() list takes its most specific
+    // argument, which would lift the sidebar selectors from (0,3,1) to the
+    // rail's (0,5,1) and let them outrank rules they never used to.
+    const rail = "html[data-tab-orientation='vertical'][data-tab-rail-detail='rich']:not(.tab-rail-compact) .tab-rail";
+    for (const suffix of ['.tab-meta', '.tab-meta-key', '.tab-pill', '.tab-pill--working']) {
+      expect(STYLES_CSS).toContain(`${rail} ${suffix}`);
+    }
+    expect(STYLES_CSS).not.toContain(':is(html[data-sidebar-detail="rich"]');
   });
 });
