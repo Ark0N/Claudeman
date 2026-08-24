@@ -13,7 +13,7 @@ import { HookEventSchema, isValidWorkingDir } from '../schemas.js';
 import { sanitizeHookData, parseBody } from '../route-helpers.js';
 import { persistDockerCaseClaudeSessionId } from '../../docker-hosts.js';
 import { getDataDir } from '../../config/instance.js';
-import { sessionWaits, hooksAvailableForMode } from '../session-wait-registry.js';
+import { sessionWaits, hooksAvailableForMode, sessionHookOptions } from '../session-wait-registry.js';
 import { approvalInbox, type ApprovalKind } from '../approval-inbox.js';
 import type { SessionPort, EventPort, RespawnPort, ConfigPort, InfraPort } from '../ports/index.js';
 
@@ -59,7 +59,7 @@ export function registerHookEventRoutes(
     // could never legitimately emit one is now dropped instead of steering another
     // agent's control flow.
     const waitSession = ctx.sessions.get(sessionId);
-    if (waitSession && hooksAvailableForMode(waitSession.mode)) {
+    if (waitSession && hooksAvailableForMode(waitSession.mode, sessionHookOptions(waitSession))) {
       if (event === 'stop') {
         sessionWaits.notifySignal(sessionId, 'stop');
       } else if (event === 'permission_prompt' || event === 'elicitation_dialog') {
@@ -120,7 +120,7 @@ export function registerHookEventRoutes(
     // session that can never show one must not create an answerable item).
     let approvalId: string | undefined;
     const approvalKind = APPROVAL_KIND_BY_EVENT[event];
-    if (session && hooksAvailableForMode(session.mode)) {
+    if (session && hooksAvailableForMode(session.mode, sessionHookOptions(session))) {
       if (approvalKind) {
         const toolInput =
           safeData.tool_input && typeof safeData.tool_input === 'object'

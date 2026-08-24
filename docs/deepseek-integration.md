@@ -62,7 +62,9 @@ curl -sX POST localhost:3000/api/deepseek/install-profile \
 
 Installing a plugin is arbitrary code execution on the host, so in multi-user
 mode this endpoint requires the can-bypass-permissions grant (the same bar as a
-`shell` session).
+`shell` session). The request is held open while the package manager runs and is
+bounded at five minutes; the install runs in its own process group, so hitting
+that bound kills the whole tree rather than just the launcher.
 
 > **`dsh` is also a Debian program.** `apt install dsh` gives you "dancer's
 > shell", a distributed shell, which would answer `--version` convincingly.
@@ -92,6 +94,23 @@ which is why the multi-user clamp only needs to force a *sent* value down. A
 non-granted owner's `danger-full-access` becomes `workspace-write`, not
 `read-only`: the clamp removes privilege without breaking the session's ability
 to edit its own workspace.
+
+Because the switch is an env var rather than a flag, that clamp has a second half
+no other CLI needs. `DSH_*` is an allowlisted `envOverrides` prefix (it has to be:
+that is also how you set the harness's ordinary knobs), and env overrides are
+applied *after* the permission export, so in multi-user mode a non-granted owner
+sending
+
+```json
+{ "mode": "deepseek", "envOverrides": { "DSH_PERMISSION_MODE": "danger-full-access" } }
+```
+
+would otherwise hand back the privilege the config clamp just removed. For a
+non-granted owner Codeman therefore **drops `DSH_PERMISSION_MODE` and `DSH_HOME`
+from `envOverrides`**; dropping them falls through to the clamped config and the
+server's own `DSH_HOME`. `DSH_HOME` is in that list because it points the
+launcher at a profile tree, and a profile's plugin code runs at boot, before any
+approval row can apply. Single-user installs and granted owners are unaffected.
 
 ## 3. Real idle detection (the interesting part)
 
@@ -124,6 +143,18 @@ report to `POST /api/hook-event`. The mapping:
 So a DeepSeek session gets Claude-grade signals: `GET /api/sessions/:id/wait`
 really can block on `stop` and `blocked` for it, and it is the only non-Claude
 mode for which that is true (`hooksAvailableForMode`).
+
+That is a per-*session* answer, not a per-mode one. Turning the bridge off with
+`deepSeekConfig.statusReporting: false` means nothing will ever post a hook event
+for that session, so an explicit `until=stop` is refused up front (with a message
+naming the setting) rather than blocking for your whole timeout. Omitting `until`
+never fails: the hook-only signals are dropped from the default set and you still
+get `idle` and `exit`.
+
+One limit worth knowing: whether the *profile* implements the contract cannot be
+known at request time (Codeman deliberately treats an unrecognized profile as
+launchable). A dsh session running a non-conforming TUI therefore still accepts
+`until=stop` and will time out on it. `idle`/`exit` are the reliable pair there.
 
 This is an interface implementation, not an impersonation — nothing on your
 machine executes a real `herdr` binary. If you use a terminal profile that does

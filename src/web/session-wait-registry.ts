@@ -170,25 +170,72 @@ export function signalForStatus(status: SessionStatus): WaitSignal | null {
 /** Signals that arrive only via Claude Code hooks, so only `claude` mode can emit them. */
 const HOOK_ONLY_SIGNALS: readonly WaitSignal[] = ['stop', 'blocked'];
 
+/** Per-session facts that can turn a mode's hook capability OFF for one session. */
+export interface HookCapabilityOptions {
+  /**
+   * `deepSeekConfig.statusReporting`, verbatim (so `undefined` means "not sent",
+   * i.e. ON). `false` is the per-session opt-out that stops `_configureDeepSeek()`
+   * exporting the `HERDR_*` triple, which is the ONLY thing that makes a dsh
+   * session emit hook events at all.
+   */
+  deepSeekStatusReporting?: boolean;
+}
+
 /**
- * Whether a session in this mode ever POSTs Codeman hook events, and therefore
- * whether `stop` / `blocked` can ever fire for it.
+ * Whether this session ever POSTs Codeman hook events, and therefore whether
+ * `stop` / `blocked` can ever fire for it.
  *
- * True for `claude` and nothing else. The tempting predicate is
+ * `claude` always (Claude Code fires the hooks itself), `deepseek` when its
+ * status bridge is armed, nothing else. The tempting predicate is
  * `!isExternalCliMode(mode)`, and it is WRONG: that helper covers only
  * opencode/codex/gemini/antigravity, so `shell` falls through it — and a shell session
  * is a plain bash PTY with no Claude Code and no hooks installed. `until=stop` on one
  * was accepted and then blocked for the caller's whole timeout, which is precisely the
  * infinite-wait-dressed-as-a-timeout this guard exists to prevent.
+ *
+ * ⚠️ `deepseek` is a per-SESSION answer, not a per-mode one, which is why the
+ * options argument exists: `deepSeekConfig.statusReporting: false` disarms the
+ * bridge for one session, and answering from the mode alone re-creates the exact
+ * infinite-wait this guard is for. Every call site therefore passes the session's
+ * own flag; the default stays permissive so a forgotten one degrades to the old
+ * behavior rather than 400ing a session that works.
+ *
+ * ⚠️ It is also the LIMIT of what can be known at request time. Whether the
+ * installed profile actually implements the supervisor contract is only
+ * observable once it reports, and `resolveDefaultDeepSeekProfile()` deliberately
+ * treats an unrecognized profile as launchable, so a dsh session running a
+ * non-conforming TUI still answers true here and still times out on an explicit
+ * `until=stop`. The default signal set keeps `idle`/`exit` for exactly that case.
+ *
+ * ⚠️ NOT a stand-in for "is this a claude session". It reads like one and it was
+ * used as one (Read My Mind, intent capture) until `deepseek` joined and silently
+ * widened both. Those sites compare `mode === 'claude'` directly now; ask this
+ * function only about hook SIGNALS.
  */
-export function hooksAvailableForMode(mode: SessionMode): boolean {
+export function hooksAvailableForMode(mode: SessionMode, options: HookCapabilityOptions = {}): boolean {
+  if (mode === 'claude') return true;
   // `deepseek` earns this the same way `claude` does — by emitting DEFINITIVE
   // signals rather than having them inferred. The DeepSeek Harness terminal
   // front door reports idle/working/blocked to its supervisor, and Codeman is
   // that supervisor (see deepseek-status-shim.ts), so a dsh session really can
-  // deliver `stop` and `blocked`. Every other mode is output-stabilization
-  // guesswork and must keep failing the ask.
-  return mode === 'claude' || mode === 'deepseek';
+  // deliver `stop` and `blocked` — unless the user turned the bridge off, in
+  // which case nothing on the box will ever post one. Every other mode is
+  // output-stabilization guesswork and must keep failing the ask.
+  if (mode === 'deepseek') return options.deepSeekStatusReporting !== false;
+  return false;
+}
+
+/**
+ * Lift the per-session hook facts off a live session.
+ *
+ * Structurally typed on purpose: this module is pure and deliberately imports no
+ * `Session` (importing it would drag node-pty and the session layer into every
+ * consumer). One helper rather than an inline object literal at each of the four
+ * call sites, so a future per-session fact is added in one place instead of
+ * being forgotten at three of them.
+ */
+export function sessionHookOptions(session: { deepSeekStatusReporting?: boolean }): HookCapabilityOptions {
+  return { deepSeekStatusReporting: session.deepSeekStatusReporting };
 }
 
 /** Outcome of resolving a caller-supplied wait target against a session's mode. */
@@ -212,10 +259,15 @@ export interface ResolvedWaitSignals {
  * not drift; the second-guessing that produces is worse than the duplication.
  *
  * @param raw - the caller's value (comma string, array, `true` for "the default")
- * @param options - `mode` decides whether the hook-only signals are available, and
- *                  names the mode in the error message so the caller can see why
+ * @param options - `mode` plus the per-session facts `hooksAvailableForMode()` needs
+ *                  (a dsh session with its status bridge disarmed emits no hooks even
+ *                  though the mode can). The mode also names itself in the error
+ *                  message so the caller can see why.
  */
-export function resolveWaitSignals(raw: unknown, options: { mode: SessionMode }): ResolvedWaitSignals {
+export function resolveWaitSignals(
+  raw: unknown,
+  options: { mode: SessionMode } & HookCapabilityOptions
+): ResolvedWaitSignals {
   const parsed = parseWaitSignals(raw);
   if (parsed.invalid.length > 0) {
     return {
@@ -224,7 +276,7 @@ export function resolveWaitSignals(raw: unknown, options: { mode: SessionMode })
     };
   }
 
-  const unsupported = new Set<WaitSignal>(hooksAvailableForMode(options.mode) ? [] : HOOK_ONLY_SIGNALS);
+  const unsupported = new Set<WaitSignal>(hooksAvailableForMode(options.mode, options) ? [] : HOOK_ONLY_SIGNALS);
 
   if (parsed.signals.length === 0) {
     return { until: DEFAULT_WAIT_SIGNALS.filter((signal) => !unsupported.has(signal)), error: null };
@@ -234,7 +286,14 @@ export function resolveWaitSignals(raw: unknown, options: { mode: SessionMode })
   if (rejected.length > 0) {
     return {
       until: [],
-      error: `Signal(s) ${rejected.join(', ')} never fire for ${options.mode} sessions (no Claude Code hooks). Use idle or exit.`,
+      // A dsh session is the one case where the mode is capable and THIS session
+      // is not, so saying "never fire for deepseek sessions" would send the
+      // caller looking for a bug that is really a setting they chose.
+      error:
+        options.mode === 'deepseek'
+          ? `Signal(s) ${rejected.join(', ')} never fire for this deepseek session: its status bridge is off ` +
+            `(deepSeekConfig.statusReporting: false), so nothing posts hook events. Use idle or exit.`
+          : `Signal(s) ${rejected.join(', ')} never fire for ${options.mode} sessions (no Claude Code hooks). Use idle or exit.`,
     };
   }
   return { until: parsed.signals, error: null };

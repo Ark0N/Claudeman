@@ -91,7 +91,7 @@ import {
   attachSessionListeners,
   detachSessionListeners,
 } from './session-listener-wiring.js';
-import { sessionWaits, hooksAvailableForMode } from './session-wait-registry.js';
+import { sessionWaits } from './session-wait-registry.js';
 import { intentStore } from '../intent-store.js';
 import { AI_CHECK_MODEL } from '../config/ai-defaults.js';
 import { approvalInbox } from './approval-inbox.js';
@@ -1093,7 +1093,10 @@ export class WebServer extends EventEmitter {
    */
   private async captureIntentPrompt(sessionId: string, text: string): Promise<void> {
     const session = this.sessions.get(sessionId);
-    if (!session || !hooksAvailableForMode(session.mode)) return;
+    // `mode === 'claude'` directly: the intent profile is fed from Claude's own
+    // transcript, so this is a claude question, not a hooks-available one (which
+    // `deepseek` now answers yes to).
+    if (!session || session.mode !== 'claude') return;
     try {
       const settings = await this.readSettings();
       if (settings.readMyMindEnabled !== true) return;

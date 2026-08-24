@@ -23,7 +23,7 @@ import { ApiErrorCode, createErrorResponse } from '../../types.js';
 import { ApprovalAnswerSchema } from '../schemas.js';
 import { parseBody, getAuthUser, canAccessOwned, findSessionOrFail } from '../route-helpers.js';
 import { approvalInbox, type ApprovalItem } from '../approval-inbox.js';
-import { hooksAvailableForMode } from '../session-wait-registry.js';
+import { hooksAvailableForMode, sessionHookOptions } from '../session-wait-registry.js';
 import type { SessionPort } from '../ports/index.js';
 
 /**
@@ -99,7 +99,7 @@ export function registerApprovalRoutes(app: FastifyInstance, ctx: SessionPort): 
     // Throws 404 (not 403) for sessions the caller does not own, same
     // no-existence-leak rule as every other session route.
     const session = findSessionOrFail(ctx, item.sessionId, req);
-    if (!hooksAvailableForMode(session.mode)) {
+    if (!hooksAvailableForMode(session.mode, sessionHookOptions(session))) {
       return createErrorResponse(ApiErrorCode.CONFLICT, 'Session mode cannot have pending approvals');
     }
 

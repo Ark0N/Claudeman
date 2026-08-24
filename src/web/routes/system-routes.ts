@@ -530,7 +530,10 @@ export function registerSystemRoutes(
   //     second command;
   //   - the request is held open with a bounded timeout, mirroring the
   //     synchronous-clone precedent in `POST /api/cases/clone` rather than
-  //     introducing a job store for a once-per-install action.
+  //     introducing a job store for a once-per-install action — and the bound is
+  //     real, because the install runs in its own process GROUP and the timeout
+  //     kills the whole tree (see the spawn below for why the built-in one is
+  //     not enough).
   app.post('/api/deepseek/install-profile', async (req) => {
     const body = parseBody(DeepSeekInstallProfileSchema, req.body);
     if (isMultiUserMode() && !(await canUsernameRunPrivilegedCommands(getAuthUser(req).username))) {
@@ -546,29 +549,87 @@ export function registerSystemRoutes(
 
     const profile = body.profile || DEEPSEEK_DEFAULT_PROFILE;
     const pkg = body.package || DEEPSEEK_DEFAULT_TUI_PACKAGE;
-    const result = await new Promise<{ code: number | null; output: string }>((resolve) => {
-      const child = spawn(join(dir, 'dsh'), ['plugin', '--profile', profile, 'add', pkg], {
-        stdio: ['ignore', 'pipe', 'pipe'],
-        timeout: DEEPSEEK_INSTALL_TIMEOUT_MS,
-        // dsh bundles its own package manager, so no system pnpm is required —
-        // but it still needs a HOME to resolve $DSH_HOME against.
-        env: process.env,
-      });
+    const result = await new Promise<{ code: number | null; output: string; timedOut: boolean }>((resolve) => {
+      let child: ReturnType<typeof spawn>;
+      try {
+        child = spawn(join(dir, 'dsh'), ['plugin', '--profile', profile, 'add', pkg], {
+          stdio: ['ignore', 'pipe', 'pipe'],
+          // Own process group, and the timeout enforced by hand rather than by
+          // spawn's `timeout` option. A plugin install fans out into
+          // package-manager resolver/build children, and spawn's own timeout
+          // signals ONLY the direct child: the survivors keep the inherited stdio
+          // pipes open, `close` never fires, and this request hangs forever with
+          // no route-level deadline behind it. Same fan-out, same escalation and
+          // same negative-pid signal as runGit() in git-clone.ts, which is the
+          // synchronous-spawn precedent this endpoint is modelled on.
+          detached: true,
+          // dsh bundles its own package manager, so no system pnpm is required —
+          // but it still needs a HOME to resolve $DSH_HOME against.
+          env: process.env,
+        });
+      } catch (err) {
+        resolve({ code: null, output: `spawn failed: ${getErrorMessage(err)}`, timedOut: false });
+        return;
+      }
+
       let output = '';
+      let timedOut = false;
+      let settled = false;
+      let killTimer: NodeJS.Timeout | undefined;
+      let reapTimer: NodeJS.Timeout | undefined;
+
       const capture = (chunk: Buffer) => {
         // Bounded: a package manager can emit megabytes of progress.
         if (output.length < 16_384) output += chunk.toString('utf-8');
       };
       child.stdout?.on('data', capture);
       child.stderr?.on('data', capture);
-      child.on('error', (err) => resolve({ code: null, output: `${output}\n${err.message}` }));
-      child.on('close', (code) => resolve({ code, output }));
+
+      const killTree = (signal: NodeJS.Signals) => {
+        try {
+          if (child.pid) process.kill(-child.pid, signal);
+        } catch {
+          try {
+            child.kill(signal);
+          } catch {
+            /* already gone */
+          }
+        }
+      };
+
+      const finish = (code: number | null) => {
+        if (settled) return;
+        settled = true;
+        clearTimeout(timer);
+        if (killTimer) clearTimeout(killTimer);
+        if (reapTimer) clearTimeout(reapTimer);
+        resolve({ code, output, timedOut });
+      };
+
+      const timer = setTimeout(() => {
+        timedOut = true;
+        killTree('SIGTERM');
+        killTimer = setTimeout(() => killTree('SIGKILL'), 3_000);
+        // Last resort: a grandchild that escaped the group (double-fork/setsid)
+        // can hold the pipes open past SIGKILL, and `close` would still never
+        // arrive. Answer the caller anyway rather than leaking the request.
+        reapTimer = setTimeout(() => finish(null), 8_000);
+      }, DEEPSEEK_INSTALL_TIMEOUT_MS);
+
+      child.on('error', (err) => {
+        output = `${output}\n${err.message}`;
+        finish(null);
+      });
+      child.on('close', (code) => finish(code));
     });
 
     if (result.code !== 0) {
+      const detail = result.timedOut
+        ? `timed out after ${Math.round(DEEPSEEK_INSTALL_TIMEOUT_MS / 1000)}s`
+        : result.output.slice(-1000).trim() || 'no output';
       return createErrorResponse(
         ApiErrorCode.OPERATION_FAILED,
-        `Installing ${pkg} into profile "${profile}" failed: ${result.output.slice(-1000).trim() || 'no output'}`
+        `Installing ${pkg} into profile "${profile}" failed: ${detail}`
       );
     }
     const { listDeepSeekProfiles, resolveDefaultDeepSeekProfile, isDeepSeekRunnable } =

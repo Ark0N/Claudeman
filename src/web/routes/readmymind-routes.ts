@@ -38,7 +38,6 @@ import { IntentGoalsSchema, ReadMyMindPredictSchema } from '../schemas.js';
 import { parseBody, findSessionOrFail } from '../route-helpers.js';
 import { intentStore } from '../../intent-store.js';
 import { approvalInbox } from '../approval-inbox.js';
-import { hooksAvailableForMode } from '../session-wait-registry.js';
 import { buildPredictionContext, type PredictionContextInputs } from '../../readmymind-context.js';
 import { collectWorkspaceSignals, readTranscriptSignals } from '../../readmymind-collectors.js';
 import { readMyMindPredictor } from '../../readmymind-predictor.js';
@@ -72,7 +71,11 @@ export function registerReadMyMindRoutes(app: FastifyInstance, ctx: SessionPort 
     const body = parseBody(ReadMyMindPredictSchema, req.body ?? {});
     const session = findSessionOrFail(ctx, id, req);
 
-    if (!hooksAvailableForMode(session.mode)) {
+    // `mode === 'claude'` directly, NOT hooksAvailableForMode(): that predicate
+    // answers "can this session deliver stop/blocked", and once `deepseek` earned
+    // a yes it silently widened this gate to a mode whose sessions have no Claude
+    // transcript for readTranscriptSignals() to read.
+    if (session.mode !== 'claude') {
       reply.code(400);
       return createErrorResponse(ApiErrorCode.INVALID_INPUT, 'Read My Mind predicts claude-mode sessions only');
     }

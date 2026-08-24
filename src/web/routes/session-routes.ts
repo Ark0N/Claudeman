@@ -54,6 +54,7 @@ import { TabLayoutValidationError } from '../../tab-layout.js';
 import {
   sessionWaits,
   resolveWaitSignals,
+  sessionHookOptions,
   signalForStatus,
   WaitCapacityError,
   type WaitSignal,
@@ -390,6 +391,55 @@ async function clampExternalCliBypassForOwner(
 
 /** Test hook: the clamp is the multi-user safety gate for the external CLIs' privileged flags. */
 export const _clampExternalCliBypassForOwner = clampExternalCliBypassForOwner;
+
+/**
+ * Env-var keys a non-granted owner must not be able to set, because each one
+ * hands back privilege the config clamp above just removed.
+ *
+ * Both are DeepSeek's, and both are reachable because `DSH_*` is an allowlisted
+ * `envOverrides` prefix (schemas.ts) — which it has to be, since that is also how
+ * a user configures the harness's non-privileged knobs.
+ *
+ * - `DSH_PERMISSION_MODE` IS the harness's permission switch. Every other CLI's
+ *   bypass is a command-line FLAG, reachable only through the per-CLI config the
+ *   clamp already owns; this one is an env var, so the config clamp alone is
+ *   half a gate.
+ * - `DSH_HOME` points the launcher at a profile tree, and a profile's plugin code
+ *   executes at BOOT, before any approval row can apply. A user who can write a
+ *   workspace can put a profile in it, so this is the wider of the two.
+ */
+const OWNER_CLAMPED_ENV_KEYS = ['DSH_PERMISSION_MODE', 'DSH_HOME'] as const;
+
+/**
+ * Env-var half of the multi-user bypass clamp.
+ *
+ * `clampExternalCliBypassForOwner()` clamps the per-CLI CONFIG, and for every CLI
+ * but DeepSeek that is the whole story. Here it is not: `applyEnvOverrides()` runs
+ * AFTER `_configureDeepSeek()` in tmux-manager, so an override sent on the SAME
+ * request lands last and wins, and a non-granted owner could restore
+ * `danger-full-access` on the very request the config clamp downgraded.
+ *
+ * Keys are DROPPED rather than rewritten: dropping falls through to what
+ * `_configureDeepSeek()` exports, which is the clamped config and the server's own
+ * `DSH_HOME`, i.e. exactly the intended state. No-op in single-user mode and for a
+ * granted owner, like every other clamp here
+ * (`canUsernameRunPrivilegedCommands()` returns true when `!isMultiUserMode()`),
+ * and it returns the caller's own object untouched when there is nothing to strip.
+ */
+async function clampEnvOverridesForOwner(
+  owner: string | undefined,
+  envOverrides: Record<string, string> | undefined
+): Promise<Record<string, string> | undefined> {
+  if (!envOverrides) return envOverrides;
+  if (!OWNER_CLAMPED_ENV_KEYS.some((key) => key in envOverrides)) return envOverrides;
+  if (await canUsernameRunPrivilegedCommands(owner)) return envOverrides;
+  const clamped = { ...envOverrides };
+  for (const key of OWNER_CLAMPED_ENV_KEYS) delete clamped[key];
+  return clamped;
+}
+
+/** Test hook: the env-var half of the same multi-user safety gate. */
+export const _clampEnvOverridesForOwner = clampEnvOverridesForOwner;
 
 /**
  * Why a DeepSeek session cannot start, or null when it can.
@@ -1018,7 +1068,7 @@ export function registerSessionRoutes(
       grokConfig: mode === 'grok' ? gatedGrokConfig : undefined,
       deepSeekConfig: mode === 'deepseek' ? gatedDeepSeekConfig : undefined,
       resumeSessionId: validatedResumeId,
-      envOverrides: body.envOverrides,
+      envOverrides: await clampEnvOverridesForOwner(owner, body.envOverrides),
       effort: body.effort,
       tmuxHistoryLimit: terminalHistoryConfig.tmuxHistoryLimit,
       remote,
@@ -1344,7 +1394,10 @@ export function registerSessionRoutes(
       wait === true || (typeof wait === 'string' && wait.trim().length > 0) || (Array.isArray(wait) && wait.length > 0);
     let until: readonly WaitSignal[] = [];
     if (wantsWait) {
-      const resolved = resolveWaitSignals(wait === true ? undefined : wait, { mode: session.mode });
+      const resolved = resolveWaitSignals(wait === true ? undefined : wait, {
+        mode: session.mode,
+        ...sessionHookOptions(session),
+      });
       if (resolved.error) return createErrorResponse(ApiErrorCode.INVALID_INPUT, resolved.error);
       until = resolved.until;
     }
@@ -1521,7 +1574,7 @@ export function registerSessionRoutes(
 
     // Shared with the `wait` field on POST .../input: unknown token is a 400,
     // hook-only signals are rejected explicitly but dropped from the default.
-    const { until, error } = resolveWaitSignals(query.until, { mode: session.mode });
+    const { until, error } = resolveWaitSignals(query.until, { mode: session.mode, ...sessionHookOptions(session) });
     if (error) return createErrorResponse(ApiErrorCode.INVALID_INPUT, error);
 
     // The value actually applied after clamping, echoed below: a caller that asked
@@ -3160,6 +3213,7 @@ export function registerSessionRoutes(
       deepSeekConfig
     );
     const qsTerminalHistoryConfig = await ctx.getTerminalHistoryConfig();
+    const qsGatedEnvOverrides = await clampEnvOverridesForOwner(owner, envOverrides);
     const session = new Session({
       workingDir: resolvedCasePath,
       name: sessionName ? sessionName.slice(0, MAX_SESSION_NAME_LENGTH) : '',
@@ -3178,7 +3232,7 @@ export function registerSessionRoutes(
       piConfig: mode === 'pi' ? qsGatedPiConfig : undefined,
       grokConfig: mode === 'grok' ? qsGatedGrokConfig : undefined,
       deepSeekConfig: mode === 'deepseek' ? qsGatedDeepSeekConfig : undefined,
-      envOverrides,
+      envOverrides: qsGatedEnvOverrides,
       effort,
       remote,
       docker,

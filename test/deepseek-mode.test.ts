@@ -16,9 +16,11 @@ import { buildSpawnCommand } from '../src/tmux-manager.js';
 import { defaultDockerCommandForMode } from '../src/docker-hosts.js';
 import { defaultRemoteCommandForMode } from '../src/remote-hosts.js';
 import { isExternalCliMode, isAltScreenStripMode } from '../src/session.js';
-import { hooksAvailableForMode } from '../src/web/session-wait-registry.js';
-import { _clampExternalCliBypassForOwner } from '../src/web/routes/session-routes.js';
+import { hooksAvailableForMode, resolveWaitSignals } from '../src/web/session-wait-registry.js';
+import { _clampExternalCliBypassForOwner, _clampEnvOverridesForOwner } from '../src/web/routes/session-routes.js';
 import { DEEPSEEK_STATE_TO_HOOK_EVENT } from '../src/deepseek-status-shim.js';
+import { readFileSync } from 'node:fs';
+import { join } from 'node:path';
 
 vi.mock('../src/utils/deepseek-cli-resolver.js', async (importOriginal) => {
   const actual = await importOriginal<typeof import('../src/utils/deepseek-cli-resolver.js')>();
@@ -191,6 +193,62 @@ describe('DeepSeek status bridge', () => {
     }
   });
 
+  it('is a per-SESSION answer for deepseek: a disarmed status bridge emits nothing', () => {
+    // `statusReporting: false` is what stops _configureDeepSeek() exporting the
+    // HERDR_* triple, and the triple is the ONLY reason a dsh session posts hook
+    // events. Answering from the mode alone would accept `until=stop` on a
+    // session where nothing can ever send one, which is the exact
+    // infinite-wait-dressed-as-a-timeout this predicate exists to prevent.
+    expect(hooksAvailableForMode('deepseek', { deepSeekStatusReporting: false })).toBe(false);
+    expect(hooksAvailableForMode('deepseek', { deepSeekStatusReporting: true })).toBe(true);
+    // Not sent = ON, so an ordinary session is unaffected.
+    expect(hooksAvailableForMode('deepseek', {})).toBe(true);
+    expect(hooksAvailableForMode('deepseek', { deepSeekStatusReporting: undefined })).toBe(true);
+    // The flag is meaningless for every other mode and must not move them.
+    expect(hooksAvailableForMode('claude', { deepSeekStatusReporting: false })).toBe(true);
+    expect(hooksAvailableForMode('codex', { deepSeekStatusReporting: true })).toBe(false);
+  });
+
+  it('refuses an explicit stop/blocked on a dsh session whose bridge is off, and says why', () => {
+    const off = { mode: 'deepseek' as const, deepSeekStatusReporting: false };
+    const on = { mode: 'deepseek' as const };
+
+    expect(resolveWaitSignals('stop', on)).toEqual({ until: ['stop'], error: null });
+
+    const rejected = resolveWaitSignals('stop', off);
+    expect(rejected.until).toEqual([]);
+    // The generic "no Claude Code hooks" wording would send the caller hunting a
+    // bug that is really a setting they chose, so this arm names the setting.
+    expect(rejected.error).toContain('statusReporting');
+    expect(rejected.error).not.toContain('no Claude Code hooks');
+
+    // An OMITTED `until` must never 400: the hook-only signals are dropped from
+    // the default set instead, leaving the two that still work.
+    expect(resolveWaitSignals(undefined, off)).toEqual({ until: ['idle', 'exit'], error: null });
+    expect(resolveWaitSignals(undefined, on).until).toContain('stop');
+  });
+
+  it('keeps the hook predicate out of the two gates that mean "is this claude"', () => {
+    // Read My Mind and intent capture read Claude's own transcript, so they mean
+    // mode === 'claude'. They used to ask hooksAvailableForMode(), which was the
+    // same question until `deepseek` earned a yes and silently widened both to a
+    // mode with no transcript to read. Static, because the alternative is
+    // standing up a predictor and a transcript watcher to observe one `if`.
+    const rmm = readFileSync(join(process.cwd(), 'src/web/routes/readmymind-routes.ts'), 'utf-8');
+    expect(rmm).toContain("session.mode !== 'claude'");
+    // Comment lines dropped first: the comment above that `if` names the
+    // predicate in order to explain why it is NOT the one being called there.
+    const uncommented = (src: string) =>
+      src
+        .split('\n')
+        .filter((line) => !/^\s*(\/\/|\*|\/\*)/.test(line))
+        .join('\n');
+    expect(uncommented(rmm)).not.toMatch(/hooksAvailableForMode\(/);
+
+    const server = readFileSync(join(process.cwd(), 'src/web/server.ts'), 'utf-8');
+    expect(server).toContain("if (!session || session.mode !== 'claude') return;");
+  });
+
   it('maps the harness lifecycle states onto real hook events', () => {
     expect(DEEPSEEK_STATE_TO_HOOK_EVENT.idle).toBe('stop');
     expect(DEEPSEEK_STATE_TO_HOOK_EVENT.blocked).toBe('permission_prompt');
@@ -236,5 +294,66 @@ describe('DeepSeek multi-user clamp', () => {
       undefined
     );
     expect(out.deepSeekConfig).toBeUndefined();
+  });
+});
+
+describe('DeepSeek multi-user clamp: the env-var half', () => {
+  const ORIGINAL = process.env.CODEMAN_MULTIUSER;
+  beforeEach(() => {
+    process.env.CODEMAN_MULTIUSER = '1';
+  });
+  afterEach(() => {
+    if (ORIGINAL === undefined) delete process.env.CODEMAN_MULTIUSER;
+    else process.env.CODEMAN_MULTIUSER = ORIGINAL;
+  });
+
+  it('strips DSH_PERMISSION_MODE, which would otherwise undo the config clamp on the same request', async () => {
+    // applyEnvOverrides() runs AFTER _configureDeepSeek() in tmux-manager, so an
+    // override sent alongside the config lands last and WINS. Clamping the config
+    // alone is therefore half a gate: this is the other half.
+    const out = await _clampEnvOverridesForOwner('nobody', {
+      DSH_PERMISSION_MODE: 'danger-full-access',
+      DSH_TELEMETRY_MODE: 'off',
+    });
+    expect(out).toEqual({ DSH_TELEMETRY_MODE: 'off' });
+  });
+
+  it('strips DSH_HOME, which points the launcher at a profile tree that executes at boot', async () => {
+    const out = await _clampEnvOverridesForOwner('nobody', { DSH_HOME: '/home/attacker/evil-dsh' });
+    expect(out).toEqual({});
+  });
+
+  it('leaves unrelated overrides alone, and returns the same object when there is nothing to strip', async () => {
+    const input = { DEEPSEEK_API_KEY: 'sk-test', CODEX_HOME: '/tmp/cx' };
+    const out = await _clampEnvOverridesForOwner('nobody', input);
+    expect(out).toBe(input);
+    expect(await _clampEnvOverridesForOwner('nobody', undefined)).toBeUndefined();
+  });
+
+  it('is a no-op in single-user mode', async () => {
+    delete process.env.CODEMAN_MULTIUSER;
+    const input = { DSH_PERMISSION_MODE: 'danger-full-access', DSH_HOME: '/opt/dsh' };
+    // canUsernameRunPrivilegedCommands() returns true when !isMultiUserMode(), so
+    // the single-user behaviour has to be byte-identical to before this clamp.
+    expect(await _clampEnvOverridesForOwner(undefined, input)).toBe(input);
+  });
+});
+
+describe('DeepSeek profile install is bounded for real', () => {
+  it('runs in its own process group and escalates the kill to the whole tree', () => {
+    // `dsh plugin add` fans out into package-manager resolver/build children, and
+    // spawn's own `timeout` signals only the direct child: survivors hold the
+    // inherited stdio pipes open, `close` never fires, and the held-open request
+    // leaks forever. Same failure and same fix as runGit() in git-clone.ts.
+    // Static, because reproducing it needs a real package manager that hangs.
+    const src = readFileSync(join(process.cwd(), 'src/web/routes/system-routes.ts'), 'utf-8');
+    const handler = src.slice(src.indexOf("app.post('/api/deepseek/install-profile'"));
+    const body = handler.slice(0, handler.indexOf('app.post(', 1) + 1 || handler.length);
+    expect(body).toContain('detached: true');
+    expect(body).toContain('process.kill(-child.pid, signal)');
+    expect(body).toContain("killTree('SIGTERM')");
+    expect(body).toContain("killTree('SIGKILL')");
+    // The built-in option is the thing that did NOT work here; it must not come back.
+    expect(body).not.toContain('timeout: DEEPSEEK_INSTALL_TIMEOUT_MS');
   });
 });

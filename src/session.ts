@@ -893,6 +893,20 @@ export class Session extends EventEmitter {
     return this._remote;
   }
 
+  /**
+   * `deepSeekConfig.statusReporting` verbatim: `undefined` when the caller sent
+   * none (i.e. ON), `false` when the user disarmed the status bridge for this
+   * session.
+   *
+   * Exposed because whether a dsh session can deliver `stop`/`blocked` is a
+   * per-SESSION fact, not a per-mode one, and `hooksAvailableForMode()` is pure
+   * and holds no `Session` reference by design. Undefined for every other mode,
+   * where the flag is meaningless.
+   */
+  get deepSeekStatusReporting(): boolean | undefined {
+    return this._deepSeekConfig?.statusReporting;
+  }
+
   /** Owning username in multi-user mode, else undefined. */
   get owner(): string | undefined {
     return this._owner;
