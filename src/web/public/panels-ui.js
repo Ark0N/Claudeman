@@ -3039,6 +3039,7 @@ Object.assign(CodemanApp.prototype, {
     const panel = this.$('fileBrowserPanel');
     return (
       state.searchEpoch === request.epoch &&
+      state.treeEpoch === request.treeEpoch &&
       state.ownerSessionId === request.ownerSessionId &&
       this.activeSessionId === request.ownerSessionId &&
       (this.fileBrowserShowHidden === true) === request.showHidden &&
@@ -3207,6 +3208,7 @@ Object.assign(CodemanApp.prototype, {
 
     if (!state.ownerSessionId && this.activeSessionId) state.ownerSessionId = this.activeSessionId;
     const ownerSessionId = state.ownerSessionId || null;
+    if (!this.activeSessionId || !ownerSessionId || this.activeSessionId !== ownerSessionId) return;
     if (!query) {
       state.view = 'normal';
       state.matches = [];
@@ -3242,6 +3244,7 @@ Object.assign(CodemanApp.prototype, {
 
     const request = {
       epoch: state.searchEpoch,
+      treeEpoch: state.treeEpoch,
       ownerSessionId,
       showHidden: this.fileBrowserShowHidden === true,
       rawInput,

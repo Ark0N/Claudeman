@@ -249,6 +249,49 @@ describe('File Viewer server search', () => {
     expect(pending).toHaveLength(1);
   });
 
+  it('does not schedule when the active session is missing or differs from the retained owner', async () => {
+    const { app, elements, pending } = loadPanel();
+    app._ensureFileBrowserState();
+
+    app.activeSessionId = null;
+    app.filterFileBrowser('missing-active');
+    await vi.advanceTimersByTimeAsync(250);
+    expect(pending).toHaveLength(0);
+    expect(elements.fileBrowserTree.innerHTML).toBe('');
+    expect(app._fileBrowserState.inFlight).toBeNull();
+
+    app.activeSessionId = 'session/B';
+    app.filterFileBrowser('wrong-active');
+    await vi.advanceTimersByTimeAsync(250);
+    expect(pending).toHaveLength(0);
+    expect(elements.fileBrowserTree.innerHTML).toBe('');
+    expect(app._fileBrowserState.inFlight).toBeNull();
+  });
+
+  it('cancels the prior debounce and clears a deferred directory target on every input', async () => {
+    const { app, pending } = loadPanel();
+    app._ensureFileBrowserState().deferredDirectoryTarget = {
+      ownerSessionId: 'session/A',
+      path: 'old-directory',
+    };
+
+    app.filterFileBrowser('first query');
+    await vi.advanceTimersByTimeAsync(200);
+    app._fileBrowserState.deferredDirectoryTarget = {
+      ownerSessionId: 'session/A',
+      path: 'another-directory',
+    };
+    app.filterFileBrowser('second query');
+
+    expect(app._fileBrowserState.deferredDirectoryTarget).toBeNull();
+    await vi.advanceTimersByTimeAsync(249);
+    expect(pending).toHaveLength(0);
+    await vi.advanceTimersByTimeAsync(1);
+    expect(pending.map(({ url }) => url)).toEqual([
+      '/api/sessions/session%2FA/files?depth=5&showHidden=false&q=second%20query',
+    ]);
+  });
+
   it('renders flat file and directory matches with captured-owner actions and status', async () => {
     const { app, elements, pending } = loadPanel();
     await settleSearch(
@@ -295,19 +338,75 @@ describe('File Viewer server search', () => {
     expect(elements.fileBrowserStatus.textContent).toBe('0 matches');
   });
 
-  it('does not render a completion after the panel is hidden and releases its in-flight pointer', async () => {
-    const { app, elements, pending } = loadPanel();
-    await startSearch(app);
-    elements.fileBrowserPanel.classList.remove('visible');
+  it('rejects deferred results after any captured search context changes', async () => {
+    const scenarios: Array<{
+      name: string;
+      mutate: (app: Record<string, any>, elements: Record<string, FakeElement>) => void;
+    }> = [
+      {
+        name: 'raw input',
+        mutate: (app) => {
+          app._fileBrowserState.filter = 'changed raw input';
+        },
+      },
+      {
+        name: 'search epoch',
+        mutate: (app) => {
+          app._fileBrowserState.searchEpoch++;
+        },
+      },
+      {
+        name: 'tree epoch',
+        mutate: (app) => {
+          app._fileBrowserState.treeEpoch++;
+        },
+      },
+      {
+        name: 'owner',
+        mutate: (app) => {
+          app._fileBrowserState.ownerSessionId = 'another-owner';
+        },
+      },
+      {
+        name: 'active session',
+        mutate: (app) => {
+          app.activeSessionId = 'another-active-session';
+        },
+      },
+      {
+        name: 'hidden preference',
+        mutate: (app) => {
+          app.fileBrowserShowHidden = true;
+        },
+      },
+      {
+        name: 'panel visibility',
+        mutate: (_app, elements) => {
+          elements.fileBrowserPanel.classList.remove('visible');
+        },
+      },
+    ];
 
-    pending[0].reply.resolve(
-      response(successfulData({ matches: [{ name: 'late.ts', path: 'late.ts', type: 'file' }], matchCount: 1 }))
-    );
-    await vi.advanceTimersByTimeAsync(0);
+    for (const scenario of scenarios) {
+      const { app, elements, pending } = loadPanel();
+      await startSearch(app);
+      expect(app._fileBrowserState.inFlight.treeEpoch, scenario.name).toBe(0);
+      scenario.mutate(app, elements);
 
-    expect(elements.fileBrowserTree.innerHTML).toContain('Searching');
-    expect(elements.fileBrowserTree.innerHTML).not.toContain('late.ts');
-    expect(app._fileBrowserState.inFlight).toBeNull();
+      pending[0].reply.resolve(
+        response(
+          successfulData({
+            matches: [{ name: `late-${scenario.name}.ts`, path: 'late.ts', type: 'file' }],
+            matchCount: 1,
+          })
+        )
+      );
+      await vi.advanceTimersByTimeAsync(0);
+
+      expect(elements.fileBrowserTree.innerHTML, scenario.name).toContain('Searching');
+      expect(elements.fileBrowserTree.innerHTML, scenario.name).not.toContain(`late-${scenario.name}.ts`);
+      expect(app._fileBrowserState.inFlight, scenario.name).toBeNull();
+    }
   });
 
   it('clears a blank query and restores the compatible cached tree immediately without fetching', () => {
@@ -327,6 +426,32 @@ describe('File Viewer server search', () => {
     expect(elements.fileBrowserTree.innerHTML).toContain('cached.ts');
     expect(elements.fileBrowserStatus.textContent).toBe('1 files, 0 dirs');
     expect(elements.fileBrowserExpandBtn.disabled).toBe(false);
+  });
+
+  it('binds normal-tree previews and encoded downloads to the captured owner', () => {
+    const { app, elements } = loadPanel();
+    app.fileBrowserData = {
+      tree: [
+        {
+          name: 'normal & safe.ts',
+          path: 'src/normal & safe.ts',
+          type: 'file',
+          size: 7,
+          extension: 'ts',
+        },
+      ],
+      totalFiles: 1,
+      totalDirectories: 0,
+      truncated: false,
+    };
+    app.renderFileBrowserTree();
+
+    expect(elements.fileBrowserTree.innerHTML).toContain(
+      'href="/api/sessions/session%2FA/file-raw?path=src%2Fnormal%20%26%20safe.ts&amp;download=true"'
+    );
+    app.activeSessionId = 'later-session';
+    elements.fileBrowserTree.querySelectorAll('.file-tree-item')[0].click();
+    expect(app.openFilePreview).toHaveBeenCalledWith('src/normal & safe.ts', 'session/A');
   });
 
   it('accepts 256 trimmed characters', async () => {
