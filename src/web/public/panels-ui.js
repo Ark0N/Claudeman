@@ -3310,7 +3310,6 @@ Object.assign(CodemanApp.prototype, {
               <span class="file-tree-expand"></span>
               <span class="file-tree-icon">${icon}</span>
               <span class="${nameClass}">${escapeHtml(match.name)}</span>
-              <span class="file-tree-path" title="${escapeHtml(match.path)}">${escapeHtml(match.path)}</span>
               ${sizeStr}
               ${downloadBtn}
             </div>

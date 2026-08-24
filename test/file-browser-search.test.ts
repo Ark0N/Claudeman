@@ -312,7 +312,8 @@ describe('File Viewer server search', () => {
     expect(elements.fileBrowserTree.innerHTML).toContain('class="file-tree-size">1.5 KB</span>');
     expect(elements.fileBrowserTree.innerHTML).toContain('📘');
     expect(elements.fileBrowserTree.innerHTML).toContain('📁');
-    expect(elements.fileBrowserTree.innerHTML).toContain('src/widget.ts');
+    expect(elements.fileBrowserTree.innerHTML).toContain('data-path="src/widget.ts"');
+    expect(elements.fileBrowserTree.innerHTML).not.toContain('class="file-tree-path"');
     expect(elements.fileBrowserTree.innerHTML).toContain(
       'href="/api/sessions/session%2FA/file-raw?path=src%2Fwidget.ts&amp;download=true"'
     );
@@ -407,6 +408,40 @@ describe('File Viewer server search', () => {
       expect(elements.fileBrowserTree.innerHTML, scenario.name).not.toContain(`late-${scenario.name}.ts`);
       expect(app._fileBrowserState.inFlight, scenario.name).toBeNull();
     }
+  });
+
+  it('keeps query B rendered when its response beats an already-launched query A', async () => {
+    const { app, elements, pending } = loadPanel();
+    app.filterFileBrowser('query A');
+    await vi.advanceTimersByTimeAsync(250);
+    app.filterFileBrowser('query B');
+    await vi.advanceTimersByTimeAsync(250);
+    expect(pending).toHaveLength(2);
+
+    pending[1].reply.resolve(
+      response(
+        successfulData({
+          matches: [{ name: 'result-B.ts', path: 'result-B.ts', type: 'file' }],
+          matchCount: 1,
+        })
+      )
+    );
+    await vi.advanceTimersByTimeAsync(0);
+    expect(elements.fileBrowserTree.innerHTML).toContain('result-B.ts');
+
+    pending[0].reply.resolve(
+      response(
+        successfulData({
+          matches: [{ name: 'result-A.ts', path: 'result-A.ts', type: 'file' }],
+          matchCount: 1,
+        })
+      )
+    );
+    await vi.advanceTimersByTimeAsync(0);
+
+    expect(elements.fileBrowserTree.innerHTML).toContain('result-B.ts');
+    expect(elements.fileBrowserTree.innerHTML).not.toContain('result-A.ts');
+    expect(app._fileBrowserState.matches[0].name).toBe('result-B.ts');
   });
 
   it('clears a blank query and restores the compatible cached tree immediately without fetching', () => {
