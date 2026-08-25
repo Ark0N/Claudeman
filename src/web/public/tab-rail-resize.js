@@ -76,7 +76,21 @@ Object.assign(CodemanApp.prototype, {
     // list is ordered by) and its pill intact. No re-render — unlike the rows
     // themselves, this is a display toggle on markup that is already there.
     root.classList.toggle('tab-rail-tight', resolved < 288);
-    if (wasCompact !== compact) this._fullRenderSessionTabs?.();
+    if (wasCompact !== compact) {
+      // The folder line is owned by applyTabWrapSettings(), whose railRich
+      // input reads the compact class this function just toggled — without
+      // re-running it, a rich rail dragged below 240px kept emitting folder
+      // rows (and, for a stored width < 240, kept them across reloads: the
+      // boot-time wrap pass runs before this function first applies the
+      // class). It re-renders only when the folder flag actually flipped, so
+      // cover the flip-without-folder-change case (a simple-detail rail
+      // crossing 240px still changes the row-action affordance) without
+      // rendering twice.
+      const prevTall = this._tallTabsEnabled;
+      this.applyTabWrapSettings?.();
+      const wrapRendered = prevTall !== undefined && this._tallTabsEnabled !== prevTall;
+      if (!wrapRendered) this._fullRenderSessionTabs?.();
+    }
     const handle = document.getElementById('tabRailResizeHandle');
     if (handle) {
       handle.setAttribute('aria-valuemax', String(effectiveMax));
@@ -223,6 +237,7 @@ Object.assign(CodemanApp.prototype, {
       key: event.key,
       shiftKey: event.shiftKey,
       currentWidth: this._getCurrentTabRailWidth(),
+      defaultWidth: this._defaultTabRailWidth?.(),
       ...this._getTabRailBounds(),
     });
     if (width === null || width === undefined) return;
@@ -265,7 +280,9 @@ Object.assign(CodemanApp.prototype, {
     handle.addEventListener('dblclick', (event) => {
       event.preventDefault();
       this._claimTabRailResize();
-      const preferred = window.CodemanTabRail?.DEFAULT_WIDTH || 256;
+      // Rich-aware: resetting a detailed rail to 256 would land it below the
+      // 288px tight threshold and silently drop the created stamp.
+      const preferred = this._defaultTabRailWidth?.() ?? (window.CodemanTabRail?.DEFAULT_WIDTH || 256);
       const effective = this._setTabRailWidth(preferred);
       this._scheduleTabRailSettle(effective, preferred);
     });

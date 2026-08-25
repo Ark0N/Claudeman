@@ -53,6 +53,10 @@ describe('tab rail width policy', () => {
     expect(policy.resolveKeyboardWidth({ ...base, key: 'Home' })).toBe(208);
     expect(policy.resolveKeyboardWidth({ ...base, key: 'End' })).toBe(360);
     expect(policy.resolveKeyboardWidth({ ...base, key: 'Enter' })).toBe(256);
+    // Enter resets to the CALLER's effective default: a rich rail passes 320
+    // (its unsized rendering width), so the reset cannot land it below the
+    // 288px tight threshold the way a hardcoded 256 did.
+    expect(policy.resolveKeyboardWidth({ ...base, key: 'Enter', defaultWidth: 320 })).toBe(320);
     expect(policy.resolveKeyboardWidth({ ...base, key: 'Escape' })).toBeNull();
   });
 });
@@ -121,6 +125,61 @@ describe('tab rail resize wiring', () => {
     expect(app._persistTabRailWidth).toHaveBeenCalledWith(360);
     expect(app.sendResize).toHaveBeenCalledOnce();
     expect(app._tabRailResizeOwnsObserver).toBe(false);
+  });
+
+  it('re-runs the wrap pass when the compact threshold flips, without double-rendering', () => {
+    const controller = readPublic('tab-rail-resize.js');
+    class FakeCodemanApp {}
+    const classes = new Set<string>();
+    const context = vm.createContext({
+      CodemanApp: FakeCodemanApp,
+      window: { CodemanTabRail: loadRailPolicy() },
+      document: {
+        documentElement: {
+          style: { setProperty: () => {} },
+          classList: {
+            contains: (c: string) => classes.has(c),
+            toggle: (c: string, force: boolean) => {
+              if (force) classes.add(c);
+              else classes.delete(c);
+              return force;
+            },
+          },
+        },
+        getElementById: () => null,
+        querySelector: () => null,
+      },
+      console,
+      clearTimeout,
+      setTimeout,
+    });
+    vm.runInContext(controller, context, { filename: 'tab-rail-resize.js' });
+    const app = new FakeCodemanApp() as FakeCodemanApp & Record<string, any>;
+    app._getTabRailBounds = () => ({});
+    app.syncTabRailWidthSetting = vi.fn();
+    app._fullRenderSessionTabs = vi.fn();
+
+    // Rich rail dragged below 240px: applyTabWrapSettings() owns the folder
+    // line and reads the compact class this call just toggled, so it must be
+    // re-consulted on the flip — and when its own conditional render fires
+    // (the folder flag changed), the explicit render must not double it.
+    app._tallTabsEnabled = true;
+    app.applyTabWrapSettings = vi.fn(() => {
+      app._tallTabsEnabled = false;
+      app._fullRenderSessionTabs();
+    });
+    app._setTabRailWidth(210);
+    expect(app.applyTabWrapSettings).toHaveBeenCalledOnce();
+    expect(app._fullRenderSessionTabs).toHaveBeenCalledOnce();
+
+    // Flip back up with an unchanged folder flag (simple-detail rail): the
+    // explicit render must still fire — the compact row-action affordance
+    // changed even though the wrap pass rendered nothing.
+    app.applyTabWrapSettings = vi.fn();
+    app._fullRenderSessionTabs = vi.fn();
+    app._setTabRailWidth(300);
+    expect(app.applyTabWrapSettings).toHaveBeenCalledOnce();
+    expect(app._fullRenderSessionTabs).toHaveBeenCalledOnce();
   });
 
   it('keeps resize-observer ownership for pointer drags longer than the watchdog', async () => {

@@ -405,8 +405,12 @@ Object.assign(CodemanApp.prototype, {
     const tabRailWidth = window.CodemanTabRail?.resolveWidth({
       // Same default resolution as applyTabRailWidth(): a rail that has never
       // been sized shows the width it is actually rendering at, which for
-      // detailed rows is the Wide preset rather than 256.
-      width: settings.tabRailWidth ?? defaults.tabRailWidth ?? this._defaultTabRailWidth?.() ?? 256,
+      // detailed rows is the Wide preset rather than 256. The rich-aware
+      // default must come BEFORE the per-device defaults blob: the handheld
+      // blob carries tabRailWidth: 256, which applyTabRailWidth() never reads,
+      // so consulting it first showed a tablet's unsized rich rail as 256 while
+      // it rendered at 320 — and a routine Save then PERSISTED the 256.
+      width: settings.tabRailWidth ?? this._defaultTabRailWidth?.() ?? defaults.tabRailWidth ?? 256,
     }) ?? 256;
     this.syncTabRailWidthSetting?.(tabRailWidth);
     document.getElementById('appSettingsTabRailDetail').value =

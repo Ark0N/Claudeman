@@ -188,7 +188,9 @@ function resolveTabRailKeyboardWidth(input = {}) {
   let width;
   if (input.key === 'Home') width = TAB_RAIL_MIN_WIDTH;
   else if (input.key === 'End') width = TAB_RAIL_MAX_WIDTH;
-  else if (input.key === 'Enter') width = TAB_RAIL_DEFAULT_WIDTH;
+  // Enter resets to the caller's effective default (the rich rail's is the
+  // Wide preset, not 256 — see _defaultTabRailWidth); absent, the base default.
+  else if (input.key === 'Enter') width = Number(input.defaultWidth) || TAB_RAIL_DEFAULT_WIDTH;
   else if (input.key === 'ArrowLeft' || input.key === 'ArrowRight') {
     const direction = input.key === 'ArrowLeft' ? -1 : 1;
     width = (Number(input.currentWidth) || TAB_RAIL_DEFAULT_WIDTH) + direction * (input.shiftKey ? 32 : 8);
