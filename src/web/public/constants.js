@@ -164,6 +164,9 @@ function resolveTabOrientation(input) {
 
 const TAB_RAIL_MIN_WIDTH = 208;
 const TAB_RAIL_DEFAULT_WIDTH = 256;
+/** Detailed rows carry a third line, and it ellipsizes at 256px — see the
+    rich sidebar's own 300px column. 320px is the existing Wide preset. */
+const TAB_RAIL_RICH_DEFAULT_WIDTH = 320;
 const TAB_RAIL_MAX_WIDTH = 360;
 
 function resolveTabRailWidth(input = {}) {
@@ -185,7 +188,9 @@ function resolveTabRailKeyboardWidth(input = {}) {
   let width;
   if (input.key === 'Home') width = TAB_RAIL_MIN_WIDTH;
   else if (input.key === 'End') width = TAB_RAIL_MAX_WIDTH;
-  else if (input.key === 'Enter') width = TAB_RAIL_DEFAULT_WIDTH;
+  // Enter resets to the caller's effective default (the rich rail's is the
+  // Wide preset, not 256 — see _defaultTabRailWidth); absent, the base default.
+  else if (input.key === 'Enter') width = Number(input.defaultWidth) || TAB_RAIL_DEFAULT_WIDTH;
   else if (input.key === 'ArrowLeft' || input.key === 'ArrowRight') {
     const direction = input.key === 'ArrowLeft' ? -1 : 1;
     width = (Number(input.currentWidth) || TAB_RAIL_DEFAULT_WIDTH) + direction * (input.shiftKey ? 32 : 8);
@@ -686,6 +691,7 @@ if (typeof window !== 'undefined') {
   };
   window.CodemanTabRail = {
     DEFAULT_WIDTH: TAB_RAIL_DEFAULT_WIDTH,
+    RICH_DEFAULT_WIDTH: TAB_RAIL_RICH_DEFAULT_WIDTH,
     MIN_WIDTH: TAB_RAIL_MIN_WIDTH,
     MAX_WIDTH: TAB_RAIL_MAX_WIDTH,
     resolveWidth: resolveTabRailWidth,
