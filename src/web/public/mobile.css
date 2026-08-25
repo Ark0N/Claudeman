@@ -986,6 +986,23 @@ html.mobile-init .file-browser-panel {
     border-color: rgba(212, 212, 216, 0.5) !important;
   }
 
+  /* DeepSeek mode colors on mobile. Same `!important` rationale as the pi and
+     grok blocks above: styles.css nests its skin rules inside
+     `html:not([data-skin="og"])`, so a bare `.btn-toolbar` rule there outranks a
+     `.btn-toolbar.btn-x` rule here regardless of load order. */
+  .btn-toolbar.btn-run.mode-deepseek,
+  .btn-toolbar.btn-run-gear.mode-deepseek {
+    background: #16225f !important;
+    border-color: rgba(124, 147, 255, 0.35) !important;
+    color: #eef2ff !important;
+  }
+
+  .btn-toolbar.btn-run.mode-deepseek:active,
+  .btn-toolbar.btn-run-gear.mode-deepseek:active {
+    background: #3350e6 !important;
+    border-color: rgba(150, 170, 255, 0.55) !important;
+  }
+
   /* Run mode dropdown menu — positioned above toolbar on mobile */
   .run-mode-menu {
     bottom: 100%;
@@ -3072,6 +3089,12 @@ html:is([data-skin="paper-gray"], [data-skin="solarized-light"], [data-skin="cat
 html:is([data-skin="paper-gray"], [data-skin="solarized-light"], [data-skin="catppuccin-latte"], [data-skin="rose-pine-dawn"]) :is(.btn-toolbar.btn-run.mode-grok, .btn-toolbar.btn-run-gear.mode-grok) {
   background: linear-gradient(135deg, #27272a, #52525b);
   border-color: #18181b;
+  color: #ffffff;
+}
+
+html:is([data-skin="paper-gray"], [data-skin="solarized-light"], [data-skin="catppuccin-latte"], [data-skin="rose-pine-dawn"]) :is(.btn-toolbar.btn-run.mode-deepseek, .btn-toolbar.btn-run-gear.mode-deepseek) {
+  background: linear-gradient(135deg, #2740c4, #4d6bfe);
+  border-color: #1b2a8f;
   color: #ffffff;
 }
 

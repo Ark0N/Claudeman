@@ -302,7 +302,10 @@ Object.assign(CodemanApp.prototype, {
   renderWebviewMenuItems() {
     const container = document.getElementById('runModeWebviews');
     if (!container) return;
-    const list = [...(this.webviews?.values() || [])];
+    // Managed records are maintained by their own menu entry (the DeepSeek web
+    // UI shortcut), so listing them here showed one dashboard twice: the
+    // shortcut that starts it, and the row it wrote on the previous click.
+    const list = [...(this.webviews?.values() || [])].filter((w) => !w.managed);
     if (list.length === 0) {
       container.innerHTML = '<div class="run-mode-empty">No URLs yet</div>';
       return;

@@ -949,6 +949,7 @@ const SSE_EVENTS = {
   HOOK_ELICITATION_COMPLETE: 'hook:elicitation_complete',
   HOOK_ELICITATION_RESPONSE: 'hook:elicitation_response',
   HOOK_STOP: 'hook:stop',
+  HOOK_AGENT_WORKING: 'hook:agent_working',
   HOOK_TEAMMATE_IDLE: 'hook:teammate_idle',
   HOOK_TASK_COMPLETED: 'hook:task_completed',
 

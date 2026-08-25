@@ -16,7 +16,7 @@ import { dataPath } from '../../config/instance.js';
 import { ApiErrorCode, createErrorResponse, getErrorMessage, type NiceConfig } from '../../types.js';
 import { isUnauthenticatedNetworkAcknowledged } from '../network-auth-policy.js';
 import { isMultiUserMode } from '../../config/multiuser.js';
-import { findUser } from '../../user-store.js';
+import { findUser, canUsernameRunPrivilegedCommands } from '../../user-store.js';
 import { getAuthUser, requireAdmin, canAccessOwned } from '../route-helpers.js';
 import {
   ConfigUpdateSchema,
@@ -26,6 +26,8 @@ import {
   SubagentWindowStatesSchema,
   SubagentParentMapSchema,
   RevokeSessionSchema,
+  DeepSeekInstallProfileSchema,
+  DeepSeekWebStartSchema,
 } from '../schemas.js';
 import { subagentWatcher } from '../../subagent-watcher.js';
 import { imageWatcher } from '../../image-watcher.js';
@@ -48,12 +50,28 @@ import {
 } from '../route-helpers.js';
 import { SseEvent } from '../sse-events.js';
 import { getInstallInfo, checkForUpdate, startUpdate, getUpdateStatusForApi } from '../self-update.js';
+
 import { getRepositoryStatus } from '../repo-status.js';
 import type { SessionPort, EventPort, ConfigPort, InfraPort, AuthPort, TabLayoutPort } from '../ports/index.js';
 import { AUTH_COOKIE_NAME } from '../middleware/auth.js';
 import { QR_AUTH_FAILURE_MAX } from '../../config/tunnel-config.js';
 import { AUTH_SESSION_TTL_MS } from '../../config/auth-config.js';
 import { resolveTerminalHistoryConfig } from '../../config/terminal-history.js';
+
+/**
+ * Defaults for `POST /api/deepseek/install-profile`.
+ *
+ * The package is the community terminal front door with by far the widest use
+ * (~27.5k weekly downloads at time of writing, roughly 4x the next), MIT, and
+ * the one whose supervisor-reporting contract Codeman's status bridge speaks.
+ * It is a DEFAULT, not a hardcoding: the endpoint accepts any npm name, and the
+ * resolver never assumes this profile exists.
+ */
+const DEEPSEEK_DEFAULT_TUI_PACKAGE = '@deepseek-harness-tui/dsh-tui';
+const DEEPSEEK_DEFAULT_PROFILE = 'dsh-tui';
+
+/** A plugin install compiles and links a dependency tree; npm-scale, not curl-scale. */
+const DEEPSEEK_INSTALL_TIMEOUT_MS = 300_000;
 
 // Maximum screenshot upload size (10MB)
 const MAX_SCREENSHOT_SIZE = 10 * 1024 * 1024;
@@ -458,6 +476,221 @@ export function registerSystemRoutes(
       available: isGrokAvailable(),
       path: resolveGrokDir(),
       version: getGrokCliVersion(),
+    };
+  });
+
+  // ========== DeepSeek Harness ==========
+
+  // The widest of the per-CLI status shapes, because this mode has the widest
+  // failure surface. Three fields beyond the sibling `available`/`path`:
+  //
+  // - `version`, like pi/grok, so a misresolution is diagnosable — and here the
+  //   stakes are higher, since `dsh` is also an existing Debian program
+  //   (dancer's shell) rather than merely a squattable npm name.
+  // - `profiles`, because `dsh` is a LAUNCHER: a perfectly installed binary with
+  //   no pane-capable profile cannot start a session, and the UI has to be able
+  //   to say which of the two halves is missing.
+  // - `runnable` + `defaultProfile`, the answer the Run button actually needs,
+  //   so no caller has to re-derive it from the parts and get it subtly wrong.
+  app.get('/api/deepseek/status', async () => {
+    const {
+      isDeepSeekAvailable,
+      isDeepSeekRunnable,
+      resolveDeepSeekDir,
+      getDeepSeekCliVersion,
+      listDeepSeekProfiles,
+      resolveDefaultDeepSeekProfile,
+      resolveDshHome,
+    } = await import('../../utils/deepseek-cli-resolver.js');
+    return {
+      available: isDeepSeekAvailable(),
+      runnable: isDeepSeekRunnable(),
+      path: resolveDeepSeekDir(),
+      version: getDeepSeekCliVersion(),
+      dshHome: resolveDshHome(),
+      defaultProfile: resolveDefaultDeepSeekProfile(),
+      profiles: listDeepSeekProfiles(),
+    };
+  });
+
+  // Start (or reuse) the background `dsh web` behind the Run menu shortcut.
+  //
+  // This runs as a plain child process rather than a shell SESSION on purpose.
+  // The session version worked, but it put a terminal tab on screen next to the
+  // web tab the user actually asked for, every single time. Nothing about a
+  // long-lived HTTP server needs to be a tab.
+  //
+  // Fenced at the same bar as the profile installer, and for the same reason:
+  // booting a dsh profile executes the plugin code in it, so this is a
+  // privileged action even though it reads as "open a page".
+  app.post('/api/deepseek/web', async (req) => {
+    const { authority } = parseBody(DeepSeekWebStartSchema, req.body);
+    if (isMultiUserMode() && !(await canUsernameRunPrivilegedCommands(getAuthUser(req).username))) {
+      return createErrorResponse(
+        ApiErrorCode.FORBIDDEN,
+        'Starting the DeepSeek web UI requires the can-bypass-permissions grant'
+      );
+    }
+
+    const { resolveDeepSeekDir, getDeepSeekNotFoundMessage } = await import('../../utils/deepseek-cli-resolver.js');
+    const dir = resolveDeepSeekDir();
+    if (!dir) return createErrorResponse(ApiErrorCode.OPERATION_FAILED, getDeepSeekNotFoundMessage());
+
+    const { startDeepSeekWeb } = await import('../../deepseek-web-server.js');
+    const result = await startDeepSeekWeb(dir, authority);
+    if (!result.ok) return createErrorResponse(ApiErrorCode.OPERATION_FAILED, result.error);
+    return { success: true, data: { port: result.port, url: result.url, reused: result.reused } };
+  });
+
+  app.get('/api/deepseek/web', async () => {
+    const { getDeepSeekWebStatus } = await import('../../deepseek-web-server.js');
+    return { success: true, data: getDeepSeekWebStatus() };
+  });
+
+  app.delete('/api/deepseek/web', async (req) => {
+    // Same bar as POST: the server is a single shared instance, so in
+    // multi-user mode stopping it out from under other users' tabs is a
+    // privileged act (single-user and granted owners are unaffected).
+    if (isMultiUserMode() && !(await canUsernameRunPrivilegedCommands(getAuthUser(req).username))) {
+      return createErrorResponse(
+        ApiErrorCode.FORBIDDEN,
+        'Stopping the DeepSeek web UI requires the can-bypass-permissions grant'
+      );
+    }
+    const { stopDeepSeekWeb } = await import('../../deepseek-web-server.js');
+    await stopDeepSeekWeb();
+    return { success: true, data: { stopped: true } };
+  });
+
+  // Bootstrap an interactive profile so the mode becomes usable.
+  //
+  // This exists because DeepSeek ships NO terminal front door: `dsh` on its own
+  // can only serve a browser UI or answer one headless task, and the agent a
+  // Codeman pane runs is always a plugin the user installed. Without this the
+  // mode's first-run experience is a dead Run button and a paragraph of shell
+  // instructions.
+  //
+  // It is the only endpoint in Codeman that installs third-party code, so it is
+  // fenced accordingly:
+  //   - the privileged grant is required in multi-user mode (same bar as a
+  //     `shell` session, which can already do strictly more);
+  //   - the specifier is regex-confined to an npm name at the schema boundary —
+  //     no path, URL, git spec, or leading dash;
+  //   - the spawn is an argv ARRAY through the resolved `dsh`, never a shell
+  //     string, so even a specifier that slipped the regex could not become a
+  //     second command;
+  //   - the request is held open with a bounded timeout, mirroring the
+  //     synchronous-clone precedent in `POST /api/cases/clone` rather than
+  //     introducing a job store for a once-per-install action — and the bound is
+  //     real, because the install runs in its own process GROUP and the timeout
+  //     kills the whole tree (see the spawn below for why the built-in one is
+  //     not enough).
+  app.post('/api/deepseek/install-profile', async (req) => {
+    const body = parseBody(DeepSeekInstallProfileSchema, req.body);
+    if (isMultiUserMode() && !(await canUsernameRunPrivilegedCommands(getAuthUser(req).username))) {
+      return createErrorResponse(
+        ApiErrorCode.FORBIDDEN,
+        'Installing a DeepSeek Harness profile requires the can-bypass-permissions grant'
+      );
+    }
+
+    const { resolveDeepSeekDir, getDeepSeekNotFoundMessage } = await import('../../utils/deepseek-cli-resolver.js');
+    const dir = resolveDeepSeekDir();
+    if (!dir) return createErrorResponse(ApiErrorCode.OPERATION_FAILED, getDeepSeekNotFoundMessage());
+
+    const profile = body.profile || DEEPSEEK_DEFAULT_PROFILE;
+    const pkg = body.package || DEEPSEEK_DEFAULT_TUI_PACKAGE;
+    const result = await new Promise<{ code: number | null; output: string; timedOut: boolean }>((resolve) => {
+      let child: ReturnType<typeof spawn>;
+      try {
+        child = spawn(join(dir, 'dsh'), ['plugin', '--profile', profile, 'add', pkg], {
+          stdio: ['ignore', 'pipe', 'pipe'],
+          // Own process group, and the timeout enforced by hand rather than by
+          // spawn's `timeout` option. A plugin install fans out into
+          // package-manager resolver/build children, and spawn's own timeout
+          // signals ONLY the direct child: the survivors keep the inherited stdio
+          // pipes open, `close` never fires, and this request hangs forever with
+          // no route-level deadline behind it. Same fan-out, same escalation and
+          // same negative-pid signal as runGit() in git-clone.ts, which is the
+          // synchronous-spawn precedent this endpoint is modelled on.
+          detached: true,
+          // dsh bundles its own package manager, so no system pnpm is required —
+          // but it still needs a HOME to resolve $DSH_HOME against.
+          env: process.env,
+        });
+      } catch (err) {
+        resolve({ code: null, output: `spawn failed: ${getErrorMessage(err)}`, timedOut: false });
+        return;
+      }
+
+      let output = '';
+      let timedOut = false;
+      let settled = false;
+      let killTimer: NodeJS.Timeout | undefined;
+      let reapTimer: NodeJS.Timeout | undefined;
+
+      const capture = (chunk: Buffer) => {
+        // Bounded: a package manager can emit megabytes of progress.
+        if (output.length < 16_384) output += chunk.toString('utf-8');
+      };
+      child.stdout?.on('data', capture);
+      child.stderr?.on('data', capture);
+
+      const killTree = (signal: NodeJS.Signals) => {
+        try {
+          if (child.pid) process.kill(-child.pid, signal);
+        } catch {
+          try {
+            child.kill(signal);
+          } catch {
+            /* already gone */
+          }
+        }
+      };
+
+      const finish = (code: number | null) => {
+        if (settled) return;
+        settled = true;
+        clearTimeout(timer);
+        if (killTimer) clearTimeout(killTimer);
+        if (reapTimer) clearTimeout(reapTimer);
+        resolve({ code, output, timedOut });
+      };
+
+      const timer = setTimeout(() => {
+        timedOut = true;
+        killTree('SIGTERM');
+        killTimer = setTimeout(() => killTree('SIGKILL'), 3_000);
+        // Last resort: a grandchild that escaped the group (double-fork/setsid)
+        // can hold the pipes open past SIGKILL, and `close` would still never
+        // arrive. Answer the caller anyway rather than leaking the request.
+        reapTimer = setTimeout(() => finish(null), 8_000);
+      }, DEEPSEEK_INSTALL_TIMEOUT_MS);
+
+      child.on('error', (err) => {
+        output = `${output}\n${err.message}`;
+        finish(null);
+      });
+      child.on('close', (code) => finish(code));
+    });
+
+    if (result.code !== 0) {
+      const detail = result.timedOut
+        ? `timed out after ${Math.round(DEEPSEEK_INSTALL_TIMEOUT_MS / 1000)}s`
+        : result.output.slice(-1000).trim() || 'no output';
+      return createErrorResponse(
+        ApiErrorCode.OPERATION_FAILED,
+        `Installing ${pkg} into profile "${profile}" failed: ${detail}`
+      );
+    }
+    const { listDeepSeekProfiles, resolveDefaultDeepSeekProfile, isDeepSeekRunnable } =
+      await import('../../utils/deepseek-cli-resolver.js');
+    return {
+      profile,
+      package: pkg,
+      runnable: isDeepSeekRunnable(),
+      defaultProfile: resolveDefaultDeepSeekProfile(),
+      profiles: listDeepSeekProfiles(),
     };
   });
 

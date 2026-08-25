@@ -115,6 +115,10 @@ export function defaultRemoteCommandForMode(mode: SessionMode): string {
     antigravity: remoteLoginShellCommand('agy'),
     pi: remoteLoginShellCommand('pi'),
     grok: remoteLoginShellCommand('grok'),
+    // `dsh` alone boots nothing: the launcher needs a profile, and the remote box's
+    // profile inventory is unknown here. The per-host `commands.deepseek` override
+    // is the escape hatch for naming one.
+    deepseek: remoteLoginShellCommand('dsh'),
   };
   return commands[mode as RemoteCommandMode] || commands.shell;
 }

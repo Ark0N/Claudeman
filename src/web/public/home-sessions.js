@@ -79,6 +79,7 @@ const HOME_SESSIONS_MODE_BADGE = {
   antigravity: 'ag',
   pi: 'pi',
   grok: 'gk',
+  deepseek: 'ds',
 };
 
 Object.assign(CodemanApp.prototype, {

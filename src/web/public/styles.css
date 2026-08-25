@@ -2501,6 +2501,16 @@ body.solo-mode .btn-lifecycle-log {
   color: #d4d4d8;
 }
 
+/* DeepSeek: the vendor's own brand blue. Deliberately NOT added to the
+   light-skin `--accent-d` override list above (which rescues gemini/antigravity/
+   pi/grok, whose pastels wash out on paper backgrounds) — this indigo already
+   carries enough contrast on the light skins, and overriding it would throw away
+   the one cue that separates a dsh tab from its neighbours. */
+.session-tab .tab-mode.deepseek {
+  background: rgba(77, 107, 254, 0.18);
+  color: #7c93ff;
+}
+
 /* Timer Banner - Compact */
 .timer-banner {
   display: flex;
@@ -3882,6 +3892,24 @@ body.touch-device .terminal-container .xterm .xterm-helper-textarea {
   transform: translateY(-1px);
 }
 
+/* DeepSeek Harness: the #4d6bfe blue identity, matching
+   .btn-toolbar.btn-run.mode-deepseek and .run-mode-dot.deepseek so the welcome
+   action reads as the same backend. */
+.welcome-btn-deepseek {
+  background: linear-gradient(135deg, #101a4d 0%, #2740c4 55%, #4d6bfe 100%);
+  border-color: rgba(124, 147, 255, 0.4);
+  color: #eef2ff;
+  box-shadow: 0 2px 8px rgba(77, 107, 254, 0.16), inset 0 1px 0 rgba(255, 255, 255, 0.06);
+}
+
+.welcome-btn-deepseek:hover {
+  background: linear-gradient(135deg, #16225f 0%, #3350e6 55%, #6b83ff 100%);
+  box-shadow: 0 4px 20px rgba(77, 107, 254, 0.3), 0 0 40px rgba(39, 64, 196, 0.12), inset 0 1px 0 rgba(255, 255, 255, 0.08);
+  border-color: rgba(150, 170, 255, 0.5);
+  color: #f8faff;
+  transform: translateY(-1px);
+}
+
 .welcome-btn-gemini {
   background: linear-gradient(135deg, #10243f 0%, #174ea6 55%, #4f46e5 100%);
   border-color: rgba(96, 165, 250, 0.4);
@@ -4975,6 +5003,25 @@ body.touch-device .terminal-container .xterm .xterm-helper-textarea {
   color: #fafafa;
 }
 
+/* DeepSeek mode colors. Same cascade note as pi/grok above: this base-sheet pair
+   only renders on the `og` skin — the nested `html:not([data-skin="og"])` block
+   re-declares `.btn-toolbar.btn-run` at a HIGHER specificity, so deepseek also
+   carries a rule inside that block (search `.btn-toolbar.btn-run.mode-deepseek`). */
+.btn-toolbar.btn-run.mode-deepseek,
+.btn-toolbar.btn-run-gear.mode-deepseek {
+  background: linear-gradient(135deg, #101a4d 0%, #2740c4 55%, #4d6bfe 100%);
+  border-color: rgba(124, 147, 255, 0.55);
+  color: #eef2ff;
+  box-shadow: 0 1px 2px rgba(0, 0, 0, 0.2), inset 0 1px 0 rgba(255, 255, 255, 0.06);
+}
+.btn-toolbar.btn-run.mode-deepseek:hover,
+.btn-toolbar.btn-run-gear.mode-deepseek:hover {
+  background: linear-gradient(135deg, #16225f 0%, #3350e6 55%, #6b83ff 100%);
+  box-shadow: 0 0 12px rgba(77, 107, 254, 0.35), 0 2px 8px rgba(39, 64, 196, 0.3), inset 0 1px 0 rgba(255, 255, 255, 0.08);
+  border-color: rgba(150, 170, 255, 0.65);
+  color: #f8faff;
+}
+
 /* Dropdown menu */
 .run-mode-menu {
   display: none;
@@ -5059,6 +5106,7 @@ body.touch-device .terminal-container .xterm .xterm-helper-textarea {
 .run-mode-dot.antigravity { background: #22d3ee; }
 .run-mode-dot.pi { background: #f472b6; }
 .run-mode-dot.grok { background: #a1a1aa; }
+.run-mode-dot.deepseek { background: #4d6bfe; }
 .run-mode-dot.shell { background: #94a3b8; }
 
 /* Phone-only Enter button (see index.html). Hidden by default at every width;
@@ -14403,6 +14451,16 @@ html:not([data-skin="og"]) {
   color: #fafafa;
 }
 .btn-toolbar.btn-run.mode-grok:hover { box-shadow: 0 0 14px -2px rgba(161, 161, 170, 0.5); }
+/* DeepSeek keeps its indigo on the non-og skins — same specificity trap as pi
+   and grok above: without this rule the generic `.btn-toolbar.btn-run` in this
+   nested block wins and deepseek renders as generic claude blue, which is the
+   one colour it must not be mistaken for. */
+.btn-toolbar.btn-run.mode-deepseek {
+  background: linear-gradient(135deg, #2740c4, #4d6bfe);
+  border-color: #1b2a8f;
+  color: #f8faff;
+}
+.btn-toolbar.btn-run.mode-deepseek:hover { box-shadow: 0 0 14px -2px rgba(77, 107, 254, 0.55); }
 .btn-toolbar.btn-run-gear {
   background: var(--accent-d);
   border-color: var(--accent);

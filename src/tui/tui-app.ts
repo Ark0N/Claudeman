@@ -1014,6 +1014,7 @@ const MODE_ITEMS: ReadonlyArray<{ id: TuiRunMode; label: string; detail: string 
   { id: 'antigravity', label: 'antigravity', detail: 'Google Antigravity' },
   { id: 'pi', label: 'pi', detail: 'pi.dev' },
   { id: 'grok', label: 'grok', detail: 'xAI Grok Build' },
+  { id: 'deepseek', label: 'deepseek', detail: 'DeepSeek Harness (dsh)' },
 ];
 
 // ─────────────────────────────────────────────────────────────────────────────

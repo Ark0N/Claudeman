@@ -55,6 +55,7 @@ const MOBILE_OVERVIEW_RUN_MODES = [
   { mode: 'antigravity', label: 'Antigravity', short: 'Antigravity' },
   { mode: 'pi', label: 'Pi', short: 'Pi' },
   { mode: 'grok', label: 'Grok', short: 'Grok' },
+  { mode: 'deepseek', label: 'DeepSeek', short: 'DeepSeek' },
   { mode: 'shell', label: 'Terminal / Shell', short: 'Shell' },
 ];
 
@@ -580,6 +581,11 @@ Object.assign(CodemanApp.prototype, {
     menu.appendChild(header);
 
     for (const webview of this.webviews ? this.webviews.values() : []) {
+      // Managed records are Codeman-owned shortcut state (the DeepSeek web UI
+      // writes one), not saved dashboards: same filter as the desktop run menu,
+      // or the phone picker lists a stale 127.0.0.1:<port> row that dies on the
+      // next server restart with no affordance here to restart it.
+      if (webview.managed) continue;
       const option = document.createElement('button');
       option.type = 'button';
       option.className = 'mobile-overview-run-option';

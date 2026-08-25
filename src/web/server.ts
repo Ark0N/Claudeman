@@ -91,10 +91,11 @@ import {
   attachSessionListeners,
   detachSessionListeners,
 } from './session-listener-wiring.js';
-import { sessionWaits, hooksAvailableForMode } from './session-wait-registry.js';
+import { sessionWaits } from './session-wait-registry.js';
 import { intentStore } from '../intent-store.js';
 import { AI_CHECK_MODEL } from '../config/ai-defaults.js';
 import { approvalInbox } from './approval-inbox.js';
+import { stopDeepSeekWeb } from '../deepseek-web-server.js';
 import {
   wireRespawnListeners,
   setupTimedRespawn,
@@ -1093,7 +1094,10 @@ export class WebServer extends EventEmitter {
    */
   private async captureIntentPrompt(sessionId: string, text: string): Promise<void> {
     const session = this.sessions.get(sessionId);
-    if (!session || !hooksAvailableForMode(session.mode)) return;
+    // `mode === 'claude'` directly: the intent profile is fed from Claude's own
+    // transcript, so this is a claude question, not a hooks-available one (which
+    // `deepseek` now answers yes to).
+    if (!session || session.mode !== 'claude') return;
     try {
       const settings = await this.readSettings();
       if (settings.readMyMindEnabled !== true) return;
@@ -1436,6 +1440,7 @@ export class WebServer extends EventEmitter {
         { isAntigravityAvailable },
         { isPiAvailable },
         { isGrokAvailable },
+        { isDeepSeekRunnable, isDeepSeekAvailable },
         { isCloudflaredAvailable },
         { isGitAvailable },
       ] = await Promise.all([
@@ -1446,6 +1451,7 @@ export class WebServer extends EventEmitter {
         import('../utils/antigravity-cli-resolver.js'),
         import('../utils/pi-cli-resolver.js'),
         import('../utils/grok-cli-resolver.js'),
+        import('../utils/deepseek-cli-resolver.js'),
         import('../utils/cloudflared-resolver.js'),
         import('../git-clone.js'),
       ]);
@@ -1457,6 +1463,13 @@ export class WebServer extends EventEmitter {
         antigravity: isAntigravityAvailable(),
         pi: isPiAvailable(),
         grok: isGrokAvailable(),
+        // RUNNABLE, not merely installed: `dsh` is a profile launcher, and a dsh
+        // with no pane-capable profile would offer a Run button that spawns a
+        // pane which dies on arrival. The Add-Profile affordance in the run menu
+        // keys off `deepseekBinary` instead, so a user who has the binary but no
+        // profile is offered the fix rather than a greyed-out entry.
+        deepseek: isDeepSeekRunnable(),
+        deepseekBinary: isDeepSeekAvailable(),
         cloudflared: isCloudflaredAvailable(),
         // Not a run mode: the Add Case → Clone tab is an offer this box cannot
         // keep without git (issue #236), same reasoning as cloudflared above.
@@ -2738,6 +2751,7 @@ export class WebServer extends EventEmitter {
               antigravityConfig: muxSession.mode === 'antigravity' ? savedState?.antigravityConfig : undefined,
               piConfig: muxSession.mode === 'pi' ? savedState?.piConfig : undefined,
               grokConfig: muxSession.mode === 'grok' ? savedState?.grokConfig : undefined,
+              deepSeekConfig: muxSession.mode === 'deepseek' ? savedState?.deepSeekConfig : undefined,
               envOverrides: savedEnvOverrides,
               effort: savedState?.effort,
               attachmentHistory: savedAttachmentHistory,
@@ -3121,6 +3135,12 @@ export class WebServer extends EventEmitter {
       this._dockerBridgeServer.close();
       this._dockerBridgeServer = null;
     }
+
+    // The background `dsh web` is detached so its whole plugin tree can be
+    // signalled at once, which also means it would OUTLIVE Codeman and hold its
+    // port against the next start — the exact EADDRINUSE this feature already
+    // got wrong once.
+    void stopDeepSeekWeb();
 
     // Dispose all managed timers (intervals + resettable timeouts)
     this.cleanup.dispose();

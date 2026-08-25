@@ -1,5 +1,5 @@
 /**
- * @fileoverview Quick start (case loading, session spawning for Claude/Shell/OpenCode/Codex/Gemini/Antigravity/Pi/Grok),
+ * @fileoverview Quick start (case loading, session spawning for Claude/Shell/OpenCode/Codex/Gemini/Antigravity/Pi/Grok/DeepSeek),
  * session options modal (per-session settings, color picker, rename),
  * session options tabs (Ralph config tab), case settings (CRUD, links),
  * create case modal, and mobile case picker.
@@ -406,6 +406,9 @@ Object.assign(CodemanApp.prototype, {
       if (mode === 'grok') {
         return await this.runGrok();
       }
+      if (mode === 'deepseek') {
+        return await this.runDeepSeek();
+      }
       if (mode === 'shell') {
         return await this.runShell();
       }
@@ -471,9 +474,148 @@ Object.assign(CodemanApp.prototype, {
    * run modes like the rest, and neither `agy` nor `pi` is likely to be installed.
    */
   _refreshRunModeAvailability(menu) {
-    for (const mode of ['claude', 'opencode', 'codex', 'gemini', 'antigravity', 'pi', 'grok']) {
+    for (const mode of ['claude', 'opencode', 'codex', 'gemini', 'antigravity', 'pi', 'grok', 'deepseek']) {
       const btn = menu.querySelector(`.run-mode-option[data-mode="${mode}"]`);
       if (btn) btn.style.display = this.isCliAvailable(mode) ? 'flex' : 'none';
+    }
+    // DeepSeek is the one mode whose availability has two halves: `dsh` can be
+    // perfectly installed while no pane-capable profile exists, because DeepSeek
+    // ships no terminal front door. In that state the honest offer is "add one",
+    // not a hidden entry with no explanation anywhere.
+    const avail = window.__codemanCliAvailable || {};
+    const dsInstall = menu.querySelector('#runModeDeepSeekInstall');
+    if (dsInstall) {
+      dsInstall.style.display = !avail.deepseek && avail.deepseekBinary ? 'flex' : 'none';
+    }
+    // The web UI needs only the BINARY: it is the one interactive surface
+    // DeepSeek ships itself, so it works on a box with no terminal profile at
+    // all (and is the honest thing to offer there).
+    const dsWeb = menu.querySelector('#runModeDeepSeekWeb');
+    if (dsWeb) dsWeb.style.display = avail.deepseekBinary ? 'flex' : 'none';
+  },
+
+  /**
+   * Start the DeepSeek Harness browser UI and open it as a Codeman web tab.
+   *
+   * The server is a background child process owned by
+   * `deepseek-web-server.ts`, NOT a shell session. It was a shell session first,
+   * on the reasoning that Codeman already supervises those, and that version
+   * worked - it just put a terminal tab on screen beside the web tab the user
+   * actually asked for, on every click. Opening a dashboard should open one tab.
+   *
+   * `--trusted-host` is the load-bearing flag: dsh fences its `/api` behind a
+   * browser-trust check on the request authority, and a Codeman web tab reaches
+   * it through Codeman's own origin via the webview proxy, not directly. Without
+   * passing Codeman's authority the page renders and every API call fails.
+   *
+   * The tab is saved `trusted: true`, and that is REQUIRED rather than a
+   * convenience: an untrusted webview is sandboxed without `allow-same-origin`,
+   * which breaks this dashboard twice over. The dsh client-runtime reads
+   * `localStorage` while loading its plugins and dies there ("the document is
+   * sandboxed and lacks the 'allow-same-origin' flag"), and an opaque-origin
+   * frame sends `Origin: null`, so dsh's own trust check 403s every `/api` call
+   * no matter which authority `--trusted-host` names. Passing `location.host`
+   * only means anything once the frame actually carries that origin.
+   *
+   * The trade this makes is real and worth stating: a trusted proxied frame is
+   * same-origin with Codeman and can therefore reach Codeman's own API. It is
+   * defensible only because of what this specific dashboard already is - an
+   * agent harness Codeman just started itself, on loopback, which can run code
+   * as the user regardless. It is not a precedent for trusting third-party
+   * dashboards generally, which is why it is set here rather than defaulted.
+   */
+  async runDeepSeekWeb() {
+    document.getElementById('runModeMenu')?.classList.remove('active');
+    const ownsLaunchTerminal = this._beginSessionLaunchStatus('Starting the DeepSeek web UI...');
+
+    try {
+      // One request, and the server owns everything behind it: picking a free
+      // port, spawning, waiting for the port to answer, and reusing an already
+      // running server instead of racing it. This used to start the server in a
+      // shell SESSION, which worked but put a terminal tab on screen next to the
+      // web tab actually asked for, every single time.
+      //
+      // `authority` is what dsh fences its own `/api` behind (`--trusted-host`),
+      // so it must be the origin this page is loaded from rather than anything
+      // the server could guess: a Codeman reachable at both loopback and a
+      // tailnet name has two, and only the browser knows which one is in play.
+      const startRes = await fetch('/api/deepseek/web', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ authority: location.host }),
+      });
+      const startData = await startRes.json();
+      if (!startData.success) throw new Error(startData.error || 'Failed to start the DeepSeek web UI');
+      const url = startData.data.url;
+
+      // One managed record, repointed rather than duplicated: the port is chosen
+      // per launch, so creating a fresh row each time would stack a dashboard
+      // per restart, each pointing at a port nothing serves any more.
+      let webview = [...(this.webviews?.values() || [])].find((w) => w.managed === 'deepseek-web');
+      if (webview) {
+        const patchRes = await fetch(`/api/webviews/${webview.id}`, {
+          method: 'PATCH',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ url, trusted: true }),
+        });
+        const patchData = await patchRes.json();
+        if (!patchData.success) throw new Error(patchData.error || 'Failed to update the web tab');
+        webview = patchData.data.webview || patchData.data;
+      } else {
+        const wvRes = await fetch('/api/webviews', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({
+            name: 'DeepSeek Harness',
+            url,
+            icon: '\u{1F433}',
+            managed: 'deepseek-web',
+            trusted: true,
+          }),
+        });
+        const wvData = await wvRes.json();
+        if (!wvData.success) throw new Error(wvData.error || 'Failed to save the web tab');
+        webview = wvData.data.webview || wvData.data;
+      }
+      // refreshWebviews, not a hopeful optional-chain: openWebview() reads
+      // this.webviews and silently no-ops on an id it has not loaded, so
+      // skipping the refresh made the FIRST click create the record but open
+      // nothing (the SSE round-trip had not landed yet).
+      await this.refreshWebviews?.();
+
+      this._appendSessionLaunchStatus(ownsLaunchTerminal, `Serving on ${url} - opening it as a tab.`);
+      if (webview?.id) await this.openWebview(webview.id);
+    } catch (err) {
+      this._reportSessionLaunchError(ownsLaunchTerminal, err.message);
+    }
+  },
+
+  /**
+   * Install a DeepSeek Harness terminal profile from the run menu.
+   *
+   * Held open for as long as the package manager takes (the endpoint bounds it),
+   * so the button reports progress rather than appearing to do nothing. On
+   * success the availability map is patched in place, which is what makes the
+   * real DeepSeek entry appear without a reload.
+   */
+  async installDeepSeekProfile() {
+    const label = 'Installing a DeepSeek terminal profile (this can take a minute)...';
+    const ownsLaunchTerminal = this._beginSessionLaunchStatus(label);
+    try {
+      const res = await fetch('/api/deepseek/install-profile', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({}),
+      });
+      const data = await res.json();
+      if (!data.success) throw new Error(data.error || 'Failed to install the profile');
+      window.__codemanCliAvailable = { ...(window.__codemanCliAvailable || {}), deepseek: !!data.data.runnable };
+      this._appendSessionLaunchStatus(ownsLaunchTerminal, `Installed ${data.data.package} into profile "${data.data.profile}".`);
+      this.showToast?.(`DeepSeek profile "${data.data.profile}" installed`, 'success');
+      const menu = document.getElementById('runModeMenu');
+      if (menu) this._refreshRunModeAvailability(menu);
+    } catch (err) {
+      this._reportSessionLaunchError(ownsLaunchTerminal, err.message);
     }
   },
 
@@ -568,7 +710,7 @@ Object.assign(CodemanApp.prototype, {
       gearBtn.className = `btn-toolbar btn-run-gear mode-${mode}`;
     }
     if (label) {
-      label.textContent = mode === 'opencode' ? 'Run OC' : mode === 'codex' ? 'Run CX' : mode === 'gemini' ? 'Run GM' : mode === 'antigravity' ? 'Run AG' : mode === 'pi' ? 'Run PI' : mode === 'grok' ? 'Run GK' : mode === 'shell' ? 'Run SH' : 'Run';
+      label.textContent = mode === 'opencode' ? 'Run OC' : mode === 'codex' ? 'Run CX' : mode === 'gemini' ? 'Run GM' : mode === 'antigravity' ? 'Run AG' : mode === 'pi' ? 'Run PI' : mode === 'grok' ? 'Run GK' : mode === 'deepseek' ? 'Run DS' : mode === 'shell' ? 'Run SH' : 'Run';
     }
   },
 
@@ -1341,6 +1483,84 @@ Object.assign(CodemanApp.prototype, {
     }
   },
 
+  /**
+   * Launch a DeepSeek Harness (`dsh`) session.
+   *
+   * Sends `permissionMode: 'danger-full-access'` for the same reason every
+   * sibling Run button sends its bypass switch: Codeman sessions exist for
+   * autonomous work. The harness has no bypass FLAG, so this rides the
+   * `DSH_PERMISSION_MODE` export instead, and the multi-user clamp forces it
+   * back down to `workspace-write` for non-granted owners server-side.
+   *
+   * `statusReporting` is left unset, i.e. ON: it is what upgrades this mode from
+   * output-stabilization guessing to definitive idle/blocked hook events.
+   *
+   * The two-part availability check is deliberate. `dsh` being installed is not
+   * enough — DeepSeek ships no terminal front door, so a box can have a perfect
+   * binary and nothing a pane can run. Reporting that precisely, with the exact
+   * command that fixes it, is the difference between "the Run button is broken"
+   * and a 30-second fix.
+   */
+  async runDeepSeek() {
+    const caseName = document.getElementById('quickStartCase').value || 'testcase';
+    // Remote/docker cases run dsh on the OTHER side: skip the local status probe and the
+    // local-only config/env below (quick-start rejects them for remote cases).
+    const _runLoc = (this.cases || []).find(c => c.name === caseName)?.location;
+    const isRemote = _runLoc === 'remote' || _runLoc === 'docker';
+
+    const ownsLaunchTerminal = this._beginSessionLaunchStatus(`Starting DeepSeek session in ${caseName}...`);
+    this.terminal.focus();
+
+    try {
+      if (!isRemote) {
+        const statusRes = await fetch('/api/deepseek/status');
+        const status = (await statusRes.json()).data;
+        if (!status.available) {
+          this._reportSessionLaunchError(
+            ownsLaunchTerminal,
+            'DeepSeek Harness CLI (dsh) not found. Install with: npm install -g @deepseek-ai/dsh'
+          );
+          return;
+        }
+        if (!status.runnable) {
+          this._reportSessionLaunchError(
+            ownsLaunchTerminal,
+            'No interactive DeepSeek Harness profile is installed. DeepSeek ships only web and headless ' +
+            'profiles, so the terminal agent comes from a plugin. Install one from the Run menu, or run: ' +
+            'dsh plugin --profile dsh-tui add @deepseek-harness-tui/dsh-tui'
+          );
+          return;
+        }
+      }
+
+      const envOverrides = this.buildEnvOverrides(this.getCaseSettings(caseName), this.loadAppSettingsFromStorage());
+      const res = await fetch('/api/quick-start', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          caseName,
+          mode: 'deepseek',
+          sessionName: `w${this._nextCaseSessionStartNumber(caseName)}-${caseName}`,
+          ...(isRemote ? {} : {
+            deepSeekConfig: { permissionMode: 'danger-full-access' },
+            ...(Object.keys(envOverrides).length > 0 ? { envOverrides } : {}),
+          }),
+        })
+      });
+      const data = await res.json();
+      if (!data.success) throw new Error(data.error || 'Failed to start DeepSeek');
+      await this._ensureCreatedSessionVisible(data.data.sessionId, data.data.session);
+
+      if (data.data.sessionId) {
+        await this.selectSession(data.data.sessionId);
+      }
+
+      this.terminal.focus();
+    } catch (err) {
+      this._reportSessionLaunchError(ownsLaunchTerminal, err.message);
+    }
+  },
+
 
   // ═══════════════════════════════════════════════════════════════
   // Session Options Modal
@@ -1406,7 +1626,7 @@ Object.assign(CodemanApp.prototype, {
     if (detachToggle) detachToggle.checked = this.hasTabDetachOverride(sessionId);
 
     // Reset to an appropriate tab — Summary for external CLIs (Respawn/Ralph are Claude-only)
-    const isAltMode = session.mode === 'opencode' || session.mode === 'codex' || session.mode === 'gemini' || session.mode === 'antigravity' || session.mode === 'pi' || session.mode === 'grok';
+    const isAltMode = session.mode === 'opencode' || session.mode === 'codex' || session.mode === 'gemini' || session.mode === 'antigravity' || session.mode === 'pi' || session.mode === 'grok' || session.mode === 'deepseek';
     this.switchOptionsTab(isAltMode ? 'summary' : 'respawn');
 
     // Update respawn status display and buttons
@@ -1436,7 +1656,7 @@ Object.assign(CodemanApp.prototype, {
     }
 
     // Hide Claude-specific options for external CLI sessions
-    const isExternalCli = session.mode === 'opencode' || session.mode === 'codex' || session.mode === 'gemini' || session.mode === 'antigravity' || session.mode === 'pi' || session.mode === 'grok';
+    const isExternalCli = session.mode === 'opencode' || session.mode === 'codex' || session.mode === 'gemini' || session.mode === 'antigravity' || session.mode === 'pi' || session.mode === 'grok' || session.mode === 'deepseek';
     const claudeOnlyEls = document.querySelectorAll('[data-claude-only]');
     claudeOnlyEls.forEach(el => { el.style.display = isExternalCli ? 'none' : ''; });
 
@@ -3217,7 +3437,7 @@ Object.defineProperty(CodemanApp.prototype, 'runMode', {
   },
   set(mode) {
     this._runMode =
-      mode === 'opencode' || mode === 'codex' || mode === 'gemini' || mode === 'antigravity' || mode === 'pi' || mode === 'grok' || mode === 'claude'
+      mode === 'opencode' || mode === 'codex' || mode === 'gemini' || mode === 'antigravity' || mode === 'pi' || mode === 'grok' || mode === 'deepseek' || mode === 'claude'
         ? mode
         : 'claude';
   },

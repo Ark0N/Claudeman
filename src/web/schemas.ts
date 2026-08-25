@@ -132,6 +132,15 @@ const ALLOWED_ENV_PREFIXES = [
   'PI_',
   'GROK_',
   'XAI_',
+  // DeepSeek Harness: `DSH_*` carries the launcher's own documented inputs
+  // (DSH_HOME, DSH_PERMISSION_MODE, DSH_TELEMETRY_MODE, and the DSH_TUI_* knobs
+  // the terminal front door reads); `DEEPSEEK_*` is the vendor namespace holding
+  // DEEPSEEK_API_KEY / DEEPSEEK_BASE_URL, the same narrow-vendor reasoning that
+  // admitted XAI_* for grok. Foreign provider keys stay out: a dsh settings.yaml
+  // can name ANY env var as a provider credential (apiKeyEnv), which is pi's
+  // 34-provider-key problem in a new shape, and the answer is the same one.
+  'DSH_',
+  'DEEPSEEK_',
 ];
 
 /**
@@ -171,7 +180,7 @@ const safeEnvOverridesSchema = z
     },
     {
       message:
-        'envOverrides contains blocked or disallowed env var keys. Only CLAUDE_CODE_*, OPENCODE_*, CODEX_*, GEMINI_*, GOOGLE_*, ANTIGRAVITY_*, PI_*, GROK_*, XAI_* keys and CLAUDE_CONFIG_DIR are allowed.',
+        'envOverrides contains blocked or disallowed env var keys. Only CLAUDE_CODE_*, OPENCODE_*, CODEX_*, GEMINI_*, GOOGLE_*, ANTIGRAVITY_*, PI_*, GROK_*, XAI_*, DSH_*, DEEPSEEK_* keys and CLAUDE_CONFIG_DIR are allowed.',
     }
   );
 
@@ -337,6 +346,88 @@ const GrokConfigSchema = z
   .optional();
 
 /**
+ * Schema for DeepSeek Harness (`dsh`)-specific configuration.
+ *
+ * `permissionMode` maps to the `DSH_PERMISSION_MODE` env export, NOT to a flag —
+ * the harness has no command-line permission switch. An ABSENT config spawns the
+ * profile under the harness's own `workspace-write` default, which still asks
+ * for approval, so the multi-user clamp only needs the only-if-sent branch (like
+ * codex/antigravity/grok).
+ *
+ * `profile` is a directory name under `$DSH_HOME/profiles`, so it is constrained
+ * to a single path SEGMENT: no separators, no dots-only names. It is interpolated
+ * into the `bash -c "…"` spawn line and joined into a filesystem path, and this
+ * regex is what keeps both safe.
+ */
+const DeepSeekConfigSchema = z
+  .object({
+    profile: z
+      .string()
+      .min(1)
+      .max(64)
+      .regex(/^[a-zA-Z0-9][a-zA-Z0-9._-]*$/)
+      .optional(),
+    permissionMode: z.enum(['read-only', 'workspace-write', 'danger-full-access']).optional(),
+    resumeSession: z.boolean().optional(),
+    resumeSessionId: z
+      .string()
+      .max(100)
+      .regex(/^[a-zA-Z0-9._-]+$/)
+      .optional(),
+    statusReporting: z.boolean().optional(),
+  })
+  .optional();
+
+/**
+ * Body of POST /api/deepseek/install-profile.
+ *
+ * `package` is a package SPECIFIER handed to `dsh plugin … add`, which runs a
+ * real package-manager install, so it is the security-relevant field. Two things
+ * contain it: this regex (an npm name, optionally scoped, optionally with an
+ * `@version` tail, and NOTHING else — no path, no URL, no git spec, no leading
+ * dash that could be read as a flag), and the route, which spawns an argv ARRAY
+ * with no shell. The route additionally requires the privileged grant in
+ * multi-user mode: installing a plugin is arbitrary code execution on the host,
+ * the same bar as a `shell` session.
+ */
+export const DeepSeekInstallProfileSchema = z
+  .object({
+    profile: z
+      .string()
+      .min(1)
+      .max(64)
+      .regex(/^[a-zA-Z0-9][a-zA-Z0-9._-]*$/)
+      .optional(),
+    package: z
+      .string()
+      .min(1)
+      .max(214)
+      .regex(/^(?:@[a-z0-9][a-z0-9._-]*\/)?[a-z0-9][a-z0-9._-]*(?:@[a-zA-Z0-9][a-zA-Z0-9._-]*)?$/)
+      .optional(),
+  })
+  .strict();
+
+/**
+ * POST /api/deepseek/web: start the background `dsh web` for one browser authority.
+ *
+ * `authority` becomes `--trusted-host`, which is what dsh fences its own `/api`
+ * behind, so it must be the origin the browser will actually load the tab from
+ * (`location.host`). It reaches a spawn as one element of an argv ARRAY, never a
+ * shell string, so this regex is defence in depth rather than the only guard: it
+ * admits host:port in the shapes a browser authority can take (dotted names,
+ * IPv4, bracketed IPv6) and nothing that could be read as a second argument.
+ */
+export const DeepSeekWebStartSchema = z
+  .object({
+    authority: z
+      .string()
+      .min(1)
+      .max(255)
+      .regex(/^(?:\[[0-9a-fA-F:]+\]|[a-zA-Z0-9](?:[a-zA-Z0-9.-]*[a-zA-Z0-9])?)(?::\d{1,5})?$/),
+  })
+  .strict();
+
+/**
  * The session that spawned the one being created — pure UI decoration, drawn as a
  * lineage line between the two tabs. Accepted here and, equivalently, as the
  * `X-Codeman-Parent-Session` header (the agent skill sets that once on its shared
@@ -349,7 +440,7 @@ const parentSessionIdSchema = z.string().max(100).optional();
 
 export const CreateSessionSchema = z.object({
   workingDir: safePathSchema.optional(),
-  mode: z.enum(['claude', 'shell', 'opencode', 'codex', 'gemini', 'antigravity', 'pi', 'grok']).optional(),
+  mode: z.enum(['claude', 'shell', 'opencode', 'codex', 'gemini', 'antigravity', 'pi', 'grok', 'deepseek']).optional(),
   name: z.string().max(100).optional(),
   /** Session that spawned this one — see parentSessionIdSchema. */
   parentSessionId: parentSessionIdSchema,
@@ -366,6 +457,7 @@ export const CreateSessionSchema = z.object({
   antigravityConfig: AntigravityConfigSchema,
   piConfig: PiConfigSchema,
   grokConfig: GrokConfigSchema,
+  deepSeekConfig: DeepSeekConfigSchema,
   /** Resume a previous Claude conversation by its session ID (used for reboot recovery) */
   resumeSessionId: z
     .string()
@@ -502,6 +594,7 @@ const RemoteCommandOverridesSchema = z
     antigravity: z.string().min(1).max(300).optional(),
     pi: z.string().min(1).max(300).optional(),
     grok: z.string().min(1).max(300).optional(),
+    deepseek: z.string().min(1).max(300).optional(),
   })
   .strict()
   .optional();
@@ -776,13 +869,14 @@ export const QuickStartSchema = z.object({
    *  a real host dir, so the settings file crosses the bind mount); rejected for
    *  remote cases (the file would be written on the WRONG machine). */
   modelOverride: z.string().max(50).optional(),
-  mode: z.enum(['claude', 'shell', 'opencode', 'codex', 'gemini', 'antigravity', 'pi', 'grok']).optional(),
+  mode: z.enum(['claude', 'shell', 'opencode', 'codex', 'gemini', 'antigravity', 'pi', 'grok', 'deepseek']).optional(),
   openCodeConfig: OpenCodeConfigSchema,
   codexConfig: CodexConfigSchema,
   geminiConfig: GeminiConfigSchema,
   antigravityConfig: AntigravityConfigSchema,
   piConfig: PiConfigSchema,
   grokConfig: GrokConfigSchema,
+  deepSeekConfig: DeepSeekConfigSchema,
   envOverrides: safeEnvOverridesSchema,
   /** Claude CLI effort level (soft default via --settings, switchable in-session via /effort) */
   effort: effortLevelSchema,
@@ -804,6 +898,11 @@ export const HookEventSchema = z.object({
     'stop',
     'teammate_idle',
     'task_completed',
+    // A turn STARTED. Unlike the others this one has no Claude Code hook behind
+    // it: it is reported by the DeepSeek Harness status shim, and exists so a
+    // dialog answered in the terminal resolves its Approvals Inbox item at once
+    // instead of lingering red until the next `stop`.
+    'agent_working',
   ]),
   sessionId: z.string().min(1),
   data: z.record(z.string(), z.unknown()).nullable().optional(),
@@ -1310,7 +1409,7 @@ const noNewlines = (v: string) => !/[\r\n]/.test(v);
 /** Shared field shape for creating/updating a scheduled job. */
 const CronJobBaseSchema = z.object({
   name: z.string().min(1).max(200),
-  agentType: z.enum(['claude', 'shell', 'opencode', 'codex', 'gemini', 'antigravity', 'pi', 'grok']),
+  agentType: z.enum(['claude', 'shell', 'opencode', 'codex', 'gemini', 'antigravity', 'pi', 'grok', 'deepseek']),
   workingDir: safePathSchema,
   launchCommand: z.string().max(2000).refine(noNewlines, 'launchCommand must be a single line').optional(),
   promptMode: z.enum(['inline_text', 'prompt_file_path']),
@@ -1600,6 +1699,12 @@ const WebviewBaseSchema = z.object({
    * and call the API that spawns agents.
    */
   trusted: z.boolean().optional(),
+  /**
+   * Marks a record Codeman maintains itself. Declared here because a plain
+   * `z.object` STRIPS undeclared keys, so an undeclared marker would be dropped
+   * on the way in and the dedup it drives would never fire.
+   */
+  managed: z.enum(['deepseek-web']).optional(),
 });
 
 /** POST /api/webviews */

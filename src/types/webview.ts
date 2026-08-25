@@ -32,6 +32,16 @@
 export type WebviewEmbedMode = 'proxy' | 'direct';
 
 /** A saved dashboard, persisted to `~/.codeman/webviews.json`. */
+/**
+ * Dashboards Codeman creates and maintains on the user's behalf.
+ *
+ * A managed record is hidden from the saved-dashboard list, because the shortcut
+ * that maintains it is already a menu entry of its own: listing both showed the
+ * same dashboard twice, once as "DeepSeek web UI..." and once as the row it had
+ * just written.
+ */
+export type WebviewManagedKind = 'deepseek-web';
+
 export interface Webview {
   id: string;
   /** Display name shown on the tab. */
@@ -49,6 +59,12 @@ export interface Webview {
    * cookies/localStorage, only for dashboards the user fully trusts.
    */
   trusted: boolean;
+  /**
+   * Set when Codeman owns this record rather than the user (see
+   * `WebviewManagedKind`). Managed rows are maintained by the shortcut that
+   * created them, including repointing the URL when the port changes.
+   */
+  managed?: WebviewManagedKind;
   /** Multi-user owner (username). Undefined in single-user mode. */
   owner?: string;
   createdAt: number;
