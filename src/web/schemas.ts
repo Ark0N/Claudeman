@@ -408,6 +408,26 @@ export const DeepSeekInstallProfileSchema = z
   .strict();
 
 /**
+ * POST /api/deepseek/web: start the background `dsh web` for one browser authority.
+ *
+ * `authority` becomes `--trusted-host`, which is what dsh fences its own `/api`
+ * behind, so it must be the origin the browser will actually load the tab from
+ * (`location.host`). It reaches a spawn as one element of an argv ARRAY, never a
+ * shell string, so this regex is defence in depth rather than the only guard: it
+ * admits host:port in the shapes a browser authority can take (dotted names,
+ * IPv4, bracketed IPv6) and nothing that could be read as a second argument.
+ */
+export const DeepSeekWebStartSchema = z
+  .object({
+    authority: z
+      .string()
+      .min(1)
+      .max(255)
+      .regex(/^(?:\[[0-9a-fA-F:]+\]|[a-zA-Z0-9](?:[a-zA-Z0-9.-]*[a-zA-Z0-9])?)(?::\d{1,5})?$/),
+  })
+  .strict();
+
+/**
  * The session that spawned the one being created — pure UI decoration, drawn as a
  * lineage line between the two tabs. Accepted here and, equivalently, as the
  * `X-Codeman-Parent-Session` header (the agent skill sets that once on its shared

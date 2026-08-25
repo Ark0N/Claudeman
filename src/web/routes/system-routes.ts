@@ -12,7 +12,6 @@ import fs from 'node:fs/promises';
 import { totalmem, freemem, loadavg, cpus } from 'node:os';
 import { execSync, spawn } from 'node:child_process';
 import { randomBytes } from 'node:crypto';
-import { createServer } from 'node:net';
 import { dataPath } from '../../config/instance.js';
 import { ApiErrorCode, createErrorResponse, getErrorMessage, type NiceConfig } from '../../types.js';
 import { isUnauthenticatedNetworkAcknowledged } from '../network-auth-policy.js';
@@ -28,6 +27,7 @@ import {
   SubagentParentMapSchema,
   RevokeSessionSchema,
   DeepSeekInstallProfileSchema,
+  DeepSeekWebStartSchema,
 } from '../schemas.js';
 import { subagentWatcher } from '../../subagent-watcher.js';
 import { imageWatcher } from '../../image-watcher.js';
@@ -70,34 +70,6 @@ import { resolveTerminalHistoryConfig } from '../../config/terminal-history.js';
 const DEEPSEEK_DEFAULT_TUI_PACKAGE = '@deepseek-harness-tui/dsh-tui';
 const DEEPSEEK_DEFAULT_PROFILE = 'dsh-tui';
 
-/**
- * Where `GET /api/deepseek/web-port` starts looking, and how far it walks.
- *
- * 3080 is `dsh web`'s own default, so it is the friendly first choice — but it
- * is emphatically NOT a fixed port. DeepSeek's web UI is a thing users run
- * themselves, so the default is exactly the port most likely to be taken
- * already, and hardcoding it made the shortcut die with EADDRINUSE against the
- * user's own server while the tab still opened onto nothing.
- */
-const DEEPSEEK_WEB_PORT_BASE = 3080;
-const DEEPSEEK_WEB_PORT_SPAN = 40;
-
-/**
- * True when nothing holds `port` on the loopback interface.
- *
- * Binding is the only honest test: a connect probe cannot distinguish "free"
- * from "listening but not answering yet", and this runs moments before `dsh web`
- * binds the same port. The check is inherently racy, which is why the caller
- * still verifies the server answered before it persists a tab for it.
- */
-async function isLoopbackPortFree(port: number): Promise<boolean> {
-  return new Promise((resolve) => {
-    const probe = createServer();
-    probe.once('error', () => resolve(false));
-    probe.once('listening', () => probe.close(() => resolve(true)));
-    probe.listen(port, '127.0.0.1');
-  });
-}
 /** A plugin install compiles and links a dependency tree; npm-scale, not curl-scale. */
 const DEEPSEEK_INSTALL_TIMEOUT_MS = 300_000;
 
@@ -541,19 +513,44 @@ export function registerSystemRoutes(
     };
   });
 
-  // First free loopback port for a `dsh web` the UI is about to start.
+  // Start (or reuse) the background `dsh web` behind the Run menu shortcut.
   //
-  // The browser cannot answer this: it can neither bind a port nor tell a closed
-  // one from a filtered one. Keeping the choice server-side also keeps it next
-  // to the process that will inherit it.
-  app.get('/api/deepseek/web-port', async () => {
-    for (let port = DEEPSEEK_WEB_PORT_BASE; port < DEEPSEEK_WEB_PORT_BASE + DEEPSEEK_WEB_PORT_SPAN; port++) {
-      if (await isLoopbackPortFree(port)) return { success: true, data: { port } };
+  // This runs as a plain child process rather than a shell SESSION on purpose.
+  // The session version worked, but it put a terminal tab on screen next to the
+  // web tab the user actually asked for, every single time. Nothing about a
+  // long-lived HTTP server needs to be a tab.
+  //
+  // Fenced at the same bar as the profile installer, and for the same reason:
+  // booting a dsh profile executes the plugin code in it, so this is a
+  // privileged action even though it reads as "open a page".
+  app.post('/api/deepseek/web', async (req) => {
+    const { authority } = parseBody(DeepSeekWebStartSchema, req.body);
+    if (isMultiUserMode() && !(await canUsernameRunPrivilegedCommands(getAuthUser(req).username))) {
+      return createErrorResponse(
+        ApiErrorCode.FORBIDDEN,
+        'Starting the DeepSeek web UI requires the can-bypass-permissions grant'
+      );
     }
-    return createErrorResponse(
-      ApiErrorCode.INTERNAL_ERROR,
-      `No free port for the DeepSeek web UI in ${DEEPSEEK_WEB_PORT_BASE}-${DEEPSEEK_WEB_PORT_BASE + DEEPSEEK_WEB_PORT_SPAN - 1}`
-    );
+
+    const { resolveDeepSeekDir, getDeepSeekNotFoundMessage } = await import('../../utils/deepseek-cli-resolver.js');
+    const dir = resolveDeepSeekDir();
+    if (!dir) return createErrorResponse(ApiErrorCode.OPERATION_FAILED, getDeepSeekNotFoundMessage());
+
+    const { startDeepSeekWeb } = await import('../../deepseek-web-server.js');
+    const result = await startDeepSeekWeb(dir, authority);
+    if (!result.ok) return createErrorResponse(ApiErrorCode.OPERATION_FAILED, result.error);
+    return { success: true, data: { port: result.port, url: result.url, reused: result.reused } };
+  });
+
+  app.get('/api/deepseek/web', async () => {
+    const { getDeepSeekWebStatus } = await import('../../deepseek-web-server.js');
+    return { success: true, data: getDeepSeekWebStatus() };
+  });
+
+  app.delete('/api/deepseek/web', async () => {
+    const { stopDeepSeekWeb } = await import('../../deepseek-web-server.js');
+    await stopDeepSeekWeb();
+    return { success: true, data: { stopped: true } };
   });
 
   // Bootstrap an interactive profile so the mode becomes usable.

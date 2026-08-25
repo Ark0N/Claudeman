@@ -49,14 +49,30 @@ in the six external CLIs before it.
 The browser UI is the only interactive surface DeepSeek ships itself, so it gets
 a **shortcut, not a run mode**: `Run ▸ DeepSeek web UI…` starts
 `dsh web --no-open --host 127.0.0.1 --port <free> --trusted-host <codeman-authority>`
-in an ordinary shell session and opens the URL as an ordinary web tab.
+as a background process and opens the URL as an ordinary web tab.
 
-Built entirely from parts that already exist: the server is a shell session
-(visible, scrollable, killable, dies with its tab) and the UI is a web tab.
-Nothing new supervises a long-lived HTTP server, because Codeman already does.
+The server was a **shell session** first, on the reasoning that Codeman already
+supervises those (visible, scrollable, killable, dies with its tab) so nothing
+new had to own a long-lived HTTP server. That version worked and was still
+wrong in use: clicking "open the DeepSeek web UI" put a terminal tab on screen
+next to the web tab actually asked for, every single time, and after the first
+launch the terminal was pure noise. Opening a dashboard should open one tab.
+
+So `POST /api/deepseek/web` owns it instead (`src/deepseek-web-server.ts`), and
+what the session gave away for free is now explicit: exactly one server, reused
+rather than raced on a second click; restarted when the requested authority
+changes; killed on Codeman shutdown (a detached child would otherwise hold its
+port against the next start — the very EADDRINUSE this feature already got
+wrong once); and boot output captured, since with no shell tab there is nowhere
+else for a stack trace to land. It is fenced at the same bar as the profile
+installer: booting a dsh profile executes the plugin code in it, so it requires
+the privileged grant in multi-user mode.
+
 `--trusted-host` is load-bearing — dsh fences its `/api` behind a browser-trust
 check on the request authority, and a Codeman web tab reaches it through
-Codeman's own origin via the webview proxy, not directly.
+Codeman's own origin via the webview proxy, not directly. The authority comes
+from the CLIENT (`location.host`) because only the browser knows which of a
+multi-homed Codeman's origins is actually in play.
 
 Three things about this shortcut are load-bearing and each came from it failing
 in exactly that way against a real install:
@@ -88,10 +104,11 @@ listing both showed the same dashboard twice. Being managed is also what lets a
 relaunch repoint the existing row instead of stacking one dead dashboard per
 restart, since the port is now chosen per launch.
 
-⚠️ The authority baked into `--trusted-host` is the one the launch was clicked
-from. Codeman reachable at several authorities (loopback *and* a tailnet name)
-therefore needs the server restarted from whichever one is in use; the reuse
-path checks that the server is reachable, not that it trusts the current origin.
+The authority baked into `--trusted-host` is the one the launch was clicked
+from, and reuse is conditional on it: a running server fenced for a *different*
+origin is stopped and restarted rather than reused, because reusing it renders a
+page whose every API call 403s — which reads as a broken dashboard rather than a
+misconfigured one.
 
 ## 4. Touch points (the checklist)
 
@@ -144,9 +161,9 @@ behaviour covered by 31 new unit tests; and an isolated instance used to exercis
 - A Docker case with `mode: 'deepseek'` (needs a `--no-cache` agent-image
   rebuild — see the `--no-cache` rule in CLAUDE.md).
 - A remote-SSH deepseek case.
-- The web-UI shortcut against a tunnel authority. Loopback is verified end to end
-  through the webview proxy (dashboard renders, its `/api` calls succeed); the
-  cross-authority case above is a known limitation rather than an open question.
+- The web-UI shortcut against a tunnel authority. Loopback and a tailnet name are
+  both verified end to end through the webview proxy (dashboard renders, its
+  `/api` calls succeed, no shell session created).
 
 ## 6. Follow-ups
 

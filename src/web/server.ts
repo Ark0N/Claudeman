@@ -95,6 +95,7 @@ import { sessionWaits } from './session-wait-registry.js';
 import { intentStore } from '../intent-store.js';
 import { AI_CHECK_MODEL } from '../config/ai-defaults.js';
 import { approvalInbox } from './approval-inbox.js';
+import { stopDeepSeekWeb } from '../deepseek-web-server.js';
 import {
   wireRespawnListeners,
   setupTimedRespawn,
@@ -3134,6 +3135,12 @@ export class WebServer extends EventEmitter {
       this._dockerBridgeServer.close();
       this._dockerBridgeServer = null;
     }
+
+    // The background `dsh web` is detached so its whole plugin tree can be
+    // signalled at once, which also means it would OUTLIVE Codeman and hold its
+    // port against the next start — the exact EADDRINUSE this feature already
+    // got wrong once.
+    void stopDeepSeekWeb();
 
     // Dispose all managed timers (intervals + resettable timeouts)
     this.cleanup.dispose();

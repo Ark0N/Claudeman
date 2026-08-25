@@ -497,11 +497,11 @@ Object.assign(CodemanApp.prototype, {
   /**
    * Start the DeepSeek Harness browser UI and open it as a Codeman web tab.
    *
-   * Deliberately built from parts that already exist rather than a new process
-   * manager: the server runs in an ordinary SHELL session, so it is visible,
-   * scrollable, killable and dies with its tab like anything else, and the UI
-   * itself is an ordinary web tab. Nothing here needs to know how to supervise a
-   * long-lived HTTP server, because Codeman already does.
+   * The server is a background child process owned by
+   * `deepseek-web-server.ts`, NOT a shell session. It was a shell session first,
+   * on the reasoning that Codeman already supervises those, and that version
+   * worked - it just put a terminal tab on screen beside the web tab the user
+   * actually asked for, on every click. Opening a dashboard should open one tab.
    *
    * `--trusted-host` is the load-bearing flag: dsh fences its `/api` behind a
    * browser-trust check on the request authority, and a Codeman web tab reaches
@@ -526,63 +526,32 @@ Object.assign(CodemanApp.prototype, {
    */
   async runDeepSeekWeb() {
     document.getElementById('runModeMenu')?.classList.remove('active');
-    const caseName = document.getElementById('quickStartCase').value || 'testcase';
-    const sessionName = `dsh-web-${caseName}`;
-    const ownsLaunchTerminal = this._beginSessionLaunchStatus(`Starting the DeepSeek web UI in ${caseName}...`);
+    const ownsLaunchTerminal = this._beginSessionLaunchStatus('Starting the DeepSeek web UI...');
 
     try {
-      // A server started by an earlier click may still be serving. Reusing it is
-      // what makes this entry idempotent: without the check, every click started
-      // a second `dsh web`, and the second one lost the port race.
-      const managed = [...(this.webviews?.values() || [])].find((w) => w.managed === 'deepseek-web');
-      if (managed && (await this._probeUrlReachable(managed.url))) {
-        this._appendSessionLaunchStatus(ownsLaunchTerminal, `Already serving on ${managed.url} - opening it as a tab.`);
-        await this.openWebview(managed.id);
-        return;
-      }
-
-      // Never hardcode the port. 3080 is `dsh web`'s own default, which makes it
-      // precisely the port a DeepSeek user is most likely to be running already;
-      // binding it unconditionally killed the launch with EADDRINUSE while the
-      // tab still opened onto nothing.
-      const portRes = await fetch('/api/deepseek/web-port');
-      const portData = await portRes.json();
-      if (!portData.success) throw new Error(portData.error || 'No free port for the DeepSeek web UI');
-      const port = portData.data.port;
-      const url = `http://127.0.0.1:${port}`;
-
-      const res = await fetch('/api/quick-start', {
+      // One request, and the server owns everything behind it: picking a free
+      // port, spawning, waiting for the port to answer, and reusing an already
+      // running server instead of racing it. This used to start the server in a
+      // shell SESSION, which worked but put a terminal tab on screen next to the
+      // web tab actually asked for, every single time.
+      //
+      // `authority` is what dsh fences its own `/api` behind (`--trusted-host`),
+      // so it must be the origin this page is loaded from rather than anything
+      // the server could guess: a Codeman reachable at both loopback and a
+      // tailnet name has two, and only the browser knows which one is in play.
+      const startRes = await fetch('/api/deepseek/web', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ caseName, mode: 'shell', sessionName }),
+        body: JSON.stringify({ authority: location.host }),
       });
-      const data = await res.json();
-      if (!data.success) throw new Error(data.error || 'Failed to start the shell session');
-      const sessionId = data.data.sessionId;
-      await this._ensureCreatedSessionVisible(sessionId, data.data.session);
-
-      // The shell needs a moment to reach its prompt before it will accept a
-      // command; the same settle the other shell-driven flows use.
-      await new Promise((r) => setTimeout(r, 1200));
-      const cmd = `dsh web --no-open --host 127.0.0.1 --port ${port} --trusted-host ${location.host}`;
-      await fetch(`/api/sessions/${sessionId}/input`, {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ input: `${cmd}\r` }),
-      });
-
-      // Verify the server actually answers BEFORE persisting a tab for it. The
-      // tab used to open unconditionally, so a server that died on startup left
-      // a saved dashboard pointing at nothing and no hint as to why.
-      this._appendSessionLaunchStatus(ownsLaunchTerminal, `Waiting for ${url} to answer...`);
-      if (!(await this._waitForUrlReachable(url))) {
-        throw new Error(`The DeepSeek web UI never answered on ${url} - see the "${sessionName}" tab for what it printed.`);
-      }
+      const startData = await startRes.json();
+      if (!startData.success) throw new Error(startData.error || 'Failed to start the DeepSeek web UI');
+      const url = startData.data.url;
 
       // One managed record, repointed rather than duplicated: the port is chosen
       // per launch, so creating a fresh row each time would stack a dashboard
       // per restart, each pointing at a port nothing serves any more.
-      let webview = managed;
+      let webview = [...(this.webviews?.values() || [])].find((w) => w.managed === 'deepseek-web');
       if (webview) {
         const patchRes = await fetch(`/api/webviews/${webview.id}`, {
           method: 'PATCH',
@@ -615,37 +584,6 @@ Object.assign(CodemanApp.prototype, {
     } catch (err) {
       this._reportSessionLaunchError(ownsLaunchTerminal, err.message);
     }
-  },
-
-  /**
-   * Server-side reachability check for a URL the browser is about to embed.
-   *
-   * Goes through the existing webview probe rather than `fetch(url)` from the
-   * page: a loopback dashboard is cross-origin to Codeman and would fail CORS
-   * long before it could report whether anything is listening.
-   */
-  async _probeUrlReachable(url) {
-    try {
-      const res = await fetch('/api/webviews/probe', {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ url }),
-      });
-      const data = await res.json();
-      return !!(data.success && data.data?.reachable);
-    } catch {
-      return false;
-    }
-  },
-
-  /** Poll `_probeUrlReachable` until the server answers or the budget runs out. */
-  async _waitForUrlReachable(url, timeoutMs = 25000, intervalMs = 1000) {
-    const deadline = Date.now() + timeoutMs;
-    while (Date.now() < deadline) {
-      if (await this._probeUrlReachable(url)) return true;
-      await new Promise((r) => setTimeout(r, intervalMs));
-    }
-    return false;
   },
 
   /**
