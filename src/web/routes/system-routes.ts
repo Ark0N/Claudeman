@@ -12,6 +12,7 @@ import fs from 'node:fs/promises';
 import { totalmem, freemem, loadavg, cpus } from 'node:os';
 import { execSync, spawn } from 'node:child_process';
 import { randomBytes } from 'node:crypto';
+import { createServer } from 'node:net';
 import { dataPath } from '../../config/instance.js';
 import { ApiErrorCode, createErrorResponse, getErrorMessage, type NiceConfig } from '../../types.js';
 import { isUnauthenticatedNetworkAcknowledged } from '../network-auth-policy.js';
@@ -68,6 +69,35 @@ import { resolveTerminalHistoryConfig } from '../../config/terminal-history.js';
  */
 const DEEPSEEK_DEFAULT_TUI_PACKAGE = '@deepseek-harness-tui/dsh-tui';
 const DEEPSEEK_DEFAULT_PROFILE = 'dsh-tui';
+
+/**
+ * Where `GET /api/deepseek/web-port` starts looking, and how far it walks.
+ *
+ * 3080 is `dsh web`'s own default, so it is the friendly first choice — but it
+ * is emphatically NOT a fixed port. DeepSeek's web UI is a thing users run
+ * themselves, so the default is exactly the port most likely to be taken
+ * already, and hardcoding it made the shortcut die with EADDRINUSE against the
+ * user's own server while the tab still opened onto nothing.
+ */
+const DEEPSEEK_WEB_PORT_BASE = 3080;
+const DEEPSEEK_WEB_PORT_SPAN = 40;
+
+/**
+ * True when nothing holds `port` on the loopback interface.
+ *
+ * Binding is the only honest test: a connect probe cannot distinguish "free"
+ * from "listening but not answering yet", and this runs moments before `dsh web`
+ * binds the same port. The check is inherently racy, which is why the caller
+ * still verifies the server answered before it persists a tab for it.
+ */
+async function isLoopbackPortFree(port: number): Promise<boolean> {
+  return new Promise((resolve) => {
+    const probe = createServer();
+    probe.once('error', () => resolve(false));
+    probe.once('listening', () => probe.close(() => resolve(true)));
+    probe.listen(port, '127.0.0.1');
+  });
+}
 /** A plugin install compiles and links a dependency tree; npm-scale, not curl-scale. */
 const DEEPSEEK_INSTALL_TIMEOUT_MS = 300_000;
 
@@ -509,6 +539,21 @@ export function registerSystemRoutes(
       defaultProfile: resolveDefaultDeepSeekProfile(),
       profiles: listDeepSeekProfiles(),
     };
+  });
+
+  // First free loopback port for a `dsh web` the UI is about to start.
+  //
+  // The browser cannot answer this: it can neither bind a port nor tell a closed
+  // one from a filtered one. Keeping the choice server-side also keeps it next
+  // to the process that will inherit it.
+  app.get('/api/deepseek/web-port', async () => {
+    for (let port = DEEPSEEK_WEB_PORT_BASE; port < DEEPSEEK_WEB_PORT_BASE + DEEPSEEK_WEB_PORT_SPAN; port++) {
+      if (await isLoopbackPortFree(port)) return { success: true, data: { port } };
+    }
+    return createErrorResponse(
+      ApiErrorCode.INTERNAL_ERROR,
+      `No free port for the DeepSeek web UI in ${DEEPSEEK_WEB_PORT_BASE}-${DEEPSEEK_WEB_PORT_BASE + DEEPSEEK_WEB_PORT_SPAN - 1}`
+    );
   });
 
   // Bootstrap an interactive profile so the mode becomes usable.

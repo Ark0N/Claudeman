@@ -132,6 +132,7 @@ function registerCrudRoutes(app: FastifyInstance, ctx: EventPort & TabLayoutPort
         // dashboard on an HTTPS Codeman, which is the common case.
         embedMode: input.embedMode ?? 'proxy',
         trusted: input.trusted ?? false,
+        managed: input.managed,
         owner,
         createdAt: Date.now(),
       };

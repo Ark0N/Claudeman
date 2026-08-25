@@ -1679,6 +1679,12 @@ const WebviewBaseSchema = z.object({
    * and call the API that spawns agents.
    */
   trusted: z.boolean().optional(),
+  /**
+   * Marks a record Codeman maintains itself. Declared here because a plain
+   * `z.object` STRIPS undeclared keys, so an undeclared marker would be dropped
+   * on the way in and the dedup it drives would never fire.
+   */
+  managed: z.enum(['deepseek-web']).optional(),
 });
 
 /** POST /api/webviews */

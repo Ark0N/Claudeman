@@ -48,7 +48,7 @@ in the six external CLIs before it.
 
 The browser UI is the only interactive surface DeepSeek ships itself, so it gets
 a **shortcut, not a run mode**: `Run ▸ DeepSeek web UI…` starts
-`dsh web --no-open --host 127.0.0.1 --port 3080 --trusted-host <codeman-authority>`
+`dsh web --no-open --host 127.0.0.1 --port <free> --trusted-host <codeman-authority>`
 in an ordinary shell session and opens the URL as an ordinary web tab.
 
 Built entirely from parts that already exist: the server is a shell session
@@ -57,6 +57,41 @@ Nothing new supervises a long-lived HTTP server, because Codeman already does.
 `--trusted-host` is load-bearing — dsh fences its `/api` behind a browser-trust
 check on the request authority, and a Codeman web tab reaches it through
 Codeman's own origin via the webview proxy, not directly.
+
+Three things about this shortcut are load-bearing and each came from it failing
+in exactly that way against a real install:
+
+- **The port is chosen, never hardcoded.** `GET /api/deepseek/web-port` walks
+  3080..3119 for a free loopback port. 3080 is dsh's own default, which makes it
+  precisely the port a DeepSeek user is most likely to already be serving on:
+  binding it unconditionally killed the launch with `EADDRINUSE` against the
+  user's own `dsh web`.
+- **The tab is opened only after the server answers.** The launch polls
+  `POST /api/webviews/probe` until the URL responds, so a server that dies on
+  startup reports the failure and points at its shell tab, instead of silently
+  persisting a dashboard aimed at nothing.
+- **The saved tab is `trusted: true`, and must be.** An untrusted webview is
+  sandboxed without `allow-same-origin`, which breaks this dashboard twice: the
+  dsh client-runtime reads `localStorage` while loading plugins and dies there,
+  and an opaque-origin frame sends `Origin: null`, so dsh's trust check 403s
+  every `/api` call regardless of what `--trusted-host` names. Passing
+  `location.host` only means anything once the frame actually carries that
+  origin. The trade is real — a trusted proxied frame is same-origin with
+  Codeman and can reach Codeman's API — and is defensible only because this
+  particular dashboard is an agent harness Codeman just started itself on
+  loopback, which can already run code as the user. It is not a precedent for
+  trusting third-party dashboards generally.
+
+The record is marked `managed: 'deepseek-web'`, which keeps it out of the
+saved-dashboard list: the shortcut that maintains it is already a menu entry, so
+listing both showed the same dashboard twice. Being managed is also what lets a
+relaunch repoint the existing row instead of stacking one dead dashboard per
+restart, since the port is now chosen per launch.
+
+⚠️ The authority baked into `--trusted-host` is the one the launch was clicked
+from. Codeman reachable at several authorities (loopback *and* a tailnet name)
+therefore needs the server restarted from whichever one is in use; the reuse
+path checks that the server is reachable, not that it trusts the current origin.
 
 ## 4. Touch points (the checklist)
 
@@ -109,9 +144,9 @@ behaviour covered by 31 new unit tests; and an isolated instance used to exercis
 - A Docker case with `mode: 'deepseek'` (needs a `--no-cache` agent-image
   rebuild — see the `--no-cache` rule in CLAUDE.md).
 - A remote-SSH deepseek case.
-- The web-UI shortcut end to end through the webview proxy, in particular whether
-  `--trusted-host <codeman-authority>` is the right authority for dsh's `/api`
-  fence in every deployment shape (loopback, tailscale, tunnel).
+- The web-UI shortcut against a tunnel authority. Loopback is verified end to end
+  through the webview proxy (dashboard renders, its `/api` calls succeed); the
+  cross-authority case above is a known limitation rather than an open question.
 
 ## 6. Follow-ups
 
