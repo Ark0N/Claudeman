@@ -23,6 +23,7 @@ import {
   findDeepSeekTranscript,
   parseDeepSeekTranscript,
   readDeepSeekLastResponse,
+  resetDeepSeekTranscriptMemoForTest,
   resolveDeepSeekHome,
   zstdFrameRanges,
   zstdSupported,
@@ -357,5 +358,38 @@ describe.skipIf(!zstdSupported())('session-to-transcript pairing', () => {
       deepSeekHomeOverride: join(tmpdir(), 'dsh-home-that-does-not-exist'),
     });
     expect(result).toEqual({ text: '', timestamp: '', blocks: [] });
+  });
+
+  it('serves an unchanged transcript from the memo and re-reads when the stat moves', async () => {
+    const home = await mkdtemp(join(tmpdir(), 'dsh-home-'));
+    try {
+      const dir = join(home, 'sessions', '--home-tester-cases-worker-1--', 'memo');
+      await mkdir(dir, { recursive: true });
+      const path = join(dir, 'session.jsonl');
+      const stamp = new Date(sessionStart + 1_000);
+      const read = () =>
+        readDeepSeekLastResponse({ workingDir: workspace, createdAt: sessionStart, deepSeekHomeOverride: home });
+      const body = (answer: string) =>
+        `${[sessionHeader(workspace, sessionStart + 1_000), assistantMessage(answer), turnEnd(1, { kind: 'completed' })].join('\n')}\n`;
+
+      resetDeepSeekTranscriptMemoForTest();
+      await writeFile(path, body('AAAA'));
+      await utimes(path, stamp, stamp);
+      expect((await read())?.text).toBe('AAAA');
+
+      // Same byte length, same forced mtime: indistinguishable from unchanged
+      // by stat, and deliberately served from the memo — the 1s/poll skill loop
+      // must not decode an unchanged file, and dsh only ever APPENDS, so a
+      // same-stat rewrite does not exist outside a test.
+      await writeFile(path, body('BBBB'));
+      await utimes(path, stamp, stamp);
+      expect((await read())?.text).toBe('AAAA');
+
+      // An append moves mtime (and normally size), which is the invalidation.
+      await utimes(path, new Date(sessionStart + 2_000), new Date(sessionStart + 2_000));
+      expect((await read())?.text).toBe('BBBB');
+    } finally {
+      await rm(home, { recursive: true, force: true });
+    }
   });
 });

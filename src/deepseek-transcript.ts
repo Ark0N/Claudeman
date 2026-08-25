@@ -193,8 +193,11 @@ export function zstdFrameRanges(buf: Buffer): Array<[number, number]> {
  * a zstd magic is passed through unchanged, which is what lets the same reader
  * open a plain `session.jsonl` (dsh writes one when compression is off).
  *
- * A frame that fails to decompress is skipped rather than fatal: a half-written
- * tail frame must not cost the caller the whole conversation.
+ * A frame that fails to decompress truncates the decode THERE rather than
+ * failing it: everything decoded before it is kept, so a half-written tail
+ * frame does not cost the caller the whole conversation. (Not "skipped" — a
+ * frame after a corrupt one is never reached, which is the safe reading: dsh
+ * appends, so a bad frame means everything after it is suspect too.)
  */
 export function decodeZstdFrames(buf: Buffer): string {
   if (buf.length < 4) return buf.toString('utf8');
@@ -246,12 +249,16 @@ function stripReasoningPrefix(text: string): string {
   return close === -1 ? text : text.slice(close + '</think>'.length);
 }
 
-function textOfContent(content: unknown): string {
+/** `stripReasoning` is for ASSISTANT content only: a user prompt containing a
+ *  literal `</think>` (someone pasting a transcript, say) must render whole. */
+function textOfContent(content: unknown, stripReasoning = true): string {
   const parts: string[] = [];
   for (const entry of asArray(content)) {
     const block = asRecord(entry);
     if (!block) continue;
-    if (block.type === 'text' && typeof block.text === 'string') parts.push(stripReasoningPrefix(block.text));
+    if (block.type === 'text' && typeof block.text === 'string') {
+      parts.push(stripReasoning ? stripReasoningPrefix(block.text) : block.text);
+    }
   }
   return parts.join('').trim();
 }
@@ -374,7 +381,7 @@ export function parseDeepSeekTranscript(raw: string, options: { blocks?: boolean
         // snapshot dsh injects every turn (sandbox policy, approvals, cwd).
         if (asRecord(data.source)?.kind !== 'user') break;
         if (!wantBlocks) break;
-        const text = textOfContent(data.content);
+        const text = textOfContent(data.content, false);
         if (text) blocks.push({ kind: 'prompt', label: 'Prompt', role: 'user', text });
         break;
       }
@@ -508,13 +515,19 @@ const TRANSCRIPT_FILES = ['session.jsonl.zstd', 'session.jsonl'];
  *   1. a transcript whose header `createdAt` sits within `PAIRING_WINDOW_MS` of
  *      this session's start — that is this pane's own boot, and it stays right
  *      even when a sibling session is running in the same case directory;
- *   2. otherwise the newest transcript created after this session started —
- *      which is what `/new` inside a live session produces;
+ *   2. otherwise the newest transcript created after this session started;
  *   3. otherwise nothing.
  *
- * ⚠️ Step 2 cannot tell a `/new` from a sibling that started later in the same
- * workspace. Agent fleets do not hit it (each worker gets its own case, and the
- * skill refuses a duplicate name); two humans sharing one case directory can.
+ * ⚠️ The boot transcript wins for as long as it exists on disk — deliberately,
+ * and even over a LATER transcript in the same workspace. Step 2 cannot tell a
+ * `/new` from a sibling session that started later in the same directory, so
+ * preferring newest-eligible would hand a worker its busier sibling's reply
+ * (the exact bug the hard rule above was measured against, one seat over).
+ * The cost of that choice: after an interactive `/new` in a dsh tab, this
+ * reader keeps serving the pre-`/new` conversation (the same session's own
+ * earlier turns — stale, never foreign); step 2 is reached only when no
+ * boot-window transcript exists. Worker fleets never `/new`, so they only
+ * ever see step 1.
  */
 export async function findDeepSeekTranscript(options: {
   dshHome: string;
@@ -612,6 +625,24 @@ async function readTranscriptHeader(path: string): Promise<{ cwd?: string; id?: 
 const MAX_TRANSCRIPT_BYTES = 64 * 1024 * 1024;
 
 /**
+ * Memo of the last few decoded transcripts, keyed on (path, mtime, size,
+ * blocks). The skill's `last_text` polls once per second, and each poll used
+ * to zstdDecompressSync + reparse the WHOLE file on the event loop even when
+ * nothing had been appended — a multi-MB transcript made that a repeated
+ * ~100ms-class stall on the single-threaded server. A poll that finds the
+ * file unchanged now costs one stat. Insertion-order eviction; tiny, because
+ * an entry only earns its keep while a session is being actively polled.
+ */
+const parseMemo = new Map<string, DeepSeekTranscriptResult>();
+const PARSE_MEMO_MAX = 16;
+
+/** Test seam: a fixture that rewrites one path in place inside a single mtime
+ *  tick would otherwise read its predecessor back out of the memo. */
+export function resetDeepSeekTranscriptMemoForTest(): void {
+  parseMemo.clear();
+}
+
+/**
  * Read one dsh session's last answer.
  *
  * ⚠️ The two empty outcomes are deliberately different, because the caller must
@@ -645,11 +676,21 @@ export async function readDeepSeekLastResponse(
   const stat = await fs.stat(path).catch(() => null);
   if (!stat || stat.size > MAX_TRANSCRIPT_BYTES) return empty;
 
+  const memoKey = `${path}|${stat.mtimeMs}|${stat.size}|${options.blocks ? 1 : 0}`;
+  const memoized = parseMemo.get(memoKey);
+  if (memoized) return memoized;
+
   let buf: Buffer;
   try {
     buf = await fs.readFile(path);
   } catch {
     return empty;
   }
-  return parseDeepSeekTranscript(decodeZstdFrames(buf), options);
+  const result = parseDeepSeekTranscript(decodeZstdFrames(buf), options);
+  if (parseMemo.size >= PARSE_MEMO_MAX) {
+    const oldest = parseMemo.keys().next().value;
+    if (oldest !== undefined) parseMemo.delete(oldest);
+  }
+  parseMemo.set(memoKey, result);
+  return result;
 }

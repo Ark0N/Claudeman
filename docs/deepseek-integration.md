@@ -223,6 +223,12 @@ reader (`src/deepseek-transcript.ts`):
   which is returned as `Turn error: …` (and an early stop such as `max-tokens` as
   `Turn ended: …`) instead of an empty string that reads as "still thinking".
 
+The transcript reader applies to **local** dsh sessions only. A Docker case's
+harness writes its transcript inside the container's own `~/.dsh` (the workspace
+bind mount does not cover it), and a remote-SSH case's lives on the remote host,
+so the local reader could never find those files — such sessions keep the pane
+segmenter, coarse but real. The splash caveat above applies to them accordingly.
+
 ### As an agent worker
 
 Because dsh has both halves — a real end-of-turn signal and a real transcript — an

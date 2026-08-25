@@ -2051,7 +2051,14 @@ export function registerSessionRoutes(
     // reply reads as a reply. So an EMPTY transcript result still wins over the
     // pane — "nothing said yet" is the honest answer. Only `null`, meaning a
     // Node too old to decode zstd, falls through to the segmenter below.
-    if (session.mode === 'deepseek') {
+    // ⚠️ Local sessions only: a docker case's harness writes its transcript
+    // inside the CONTAINER's ~/.dsh (the workspace bind-mount does not cover
+    // it) and a remote-SSH case's lives on the remote host, so the local
+    // reader would scan a $DSH_HOME that can never hold this session's file
+    // and return "nothing said yet" forever — an agent polling that worker
+    // would starve on an answer that exists. Those configurations keep the
+    // pane segmenter below: coarse, but the real conversation.
+    if (session.mode === 'deepseek' && !session.docker && !session.remote) {
       const deepSeekQuery = req.query as { context?: string };
       const full = deepSeekQuery.context === 'full';
       const transcript = await readDeepSeekLastResponse(session, { blocks: full });
