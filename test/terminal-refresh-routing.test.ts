@@ -51,6 +51,7 @@ type RefreshApp = {
   _wsSessionId: string | null;
   _isLoadingBuffer: boolean;
   _terminalRefreshSessionId: string | null;
+  _terminalRefreshGeneration: number;
   _onSSENeedsRefresh: (data?: { id?: string }) => void;
   _onSessionNeedsRefresh: (data?: { id?: string }) => Promise<void>;
   [key: string]: unknown;
@@ -113,6 +114,7 @@ describe('terminal refresh coalescing', () => {
     app.activeSessionId = 'active';
     app._isLoadingBuffer = false;
     app._terminalRefreshSessionId = null;
+    app._terminalRefreshGeneration = 0;
     app.terminal = {
       buffer: { active: { baseY: 20, viewportY: 20 } },
       clear: vi.fn(),
@@ -137,5 +139,63 @@ describe('terminal refresh coalescing', () => {
     releaseWrite();
     await Promise.all([first, duplicate]);
     expect(app.chunkedTerminalWrite).toHaveBeenCalledTimes(1);
+  });
+
+  it('rejects an older activation after switching A -> B -> A', async () => {
+    let releaseOldResponse!: (response: unknown) => void;
+    let releaseCurrentJson!: (payload: unknown) => void;
+    const oldResponse = new Promise<unknown>((resolveResponse) => {
+      releaseOldResponse = resolveResponse;
+    });
+    const currentJson = new Promise<unknown>((resolveJson) => {
+      releaseCurrentJson = resolveJson;
+    });
+    fetchImpl = vi
+      .fn()
+      .mockImplementationOnce(() => oldResponse)
+      .mockResolvedValueOnce({ json: () => currentJson }) as unknown as typeof fetch;
+
+    const app = appFromPrototype();
+    app.activeSessionId = 'active';
+    app._isLoadingBuffer = false;
+    app._terminalRefreshSessionId = null;
+    app._terminalRefreshGeneration = 0;
+    app.terminal = {
+      buffer: { active: { baseY: 20, viewportY: 20 } },
+      clear: vi.fn(),
+      reset: vi.fn(),
+      scrollToBottom: vi.fn(),
+      scrollToLine: vi.fn(),
+    };
+    app._replayWouldShrinkBuffer = () => false;
+    app.chunkedTerminalWrite = vi.fn(async () => {});
+    app._setHistoryTruncation = vi.fn();
+    app.sendResize = vi.fn();
+    app._localEchoOverlay = null;
+
+    const stale = app._onSessionNeedsRefresh({ id: 'active' });
+    await vi.waitFor(() => expect(fetchImpl).toHaveBeenCalledTimes(1));
+
+    // Mirror the generation invalidation in selectSession for A -> B -> A.
+    app.activeSessionId = 'background';
+    app._terminalRefreshGeneration++;
+    app._terminalRefreshSessionId = null;
+    app.activeSessionId = 'active';
+    app._terminalRefreshGeneration++;
+    app._terminalRefreshSessionId = null;
+
+    const current = app._onSessionNeedsRefresh({ id: 'active' });
+    await vi.waitFor(() => expect(fetchImpl).toHaveBeenCalledTimes(2));
+
+    releaseOldResponse({ json: async () => ({ data: { terminalBuffer: 'stale history' } }) });
+    await stale;
+    expect(app.terminal.clear).not.toHaveBeenCalled();
+    expect(app._terminalRefreshSessionId).toBe('active');
+
+    releaseCurrentJson({ data: { terminalBuffer: 'current history', source: 'mux-full-history' } });
+    await current;
+    expect(app.terminal.clear).toHaveBeenCalledOnce();
+    expect(app.chunkedTerminalWrite).toHaveBeenCalledWith('current history');
+    expect(app._terminalRefreshSessionId).toBeNull();
   });
 });

@@ -685,8 +685,10 @@ class CodemanApp {
     this._bufferLoadSeq = 0;
     this._bufferLoadOwner = null;
     // Coalesce repeated needsRefresh signals so full-history fetches cannot
-    // overlap their destructive clear-and-replay phase.
+    // overlap their destructive clear-and-replay phase. The generation also
+    // invalidates an older activation of the same session after A -> B -> A.
     this._terminalRefreshSessionId = null;
+    this._terminalRefreshGeneration = 0;
 
     // Flicker filter state (buffers output after screen clears)
     this.flickerFilterBuffer = '';
@@ -2370,7 +2372,12 @@ class CodemanApp {
     // refresh-specific guard, repeated SSE drain signals can overlap multiple
     // fetch -> clear -> replay cycles and visibly loop through old history.
     if (this._isLoadingBuffer || this._terminalRefreshSessionId === sessionId) return;
+    const refreshGeneration = ++this._terminalRefreshGeneration;
     this._terminalRefreshSessionId = sessionId;
+    const isCurrentRefresh = () =>
+      this._terminalRefreshGeneration === refreshGeneration &&
+      this._terminalRefreshSessionId === sessionId &&
+      this.activeSessionId === sessionId;
     try {
       // Recovery should restore the WHOLE picture, so ask for full history
       // rather than a tail. Measured on a 900-line shell pane: the tail rewrite
@@ -2382,15 +2389,18 @@ class CodemanApp {
       // the same downgrade guard as the scroll-to-top re-pull and fall back to
       // the historical tail there, leaving that case exactly as it was.
       let res = await fetch(`/api/sessions/${sessionId}/terminal?full=1`);
+      if (!isCurrentRefresh()) return;
       let data = (await res.json())?.data ?? {};
+      if (!isCurrentRefresh()) return;
       if (data.terminalBuffer && this._replayWouldShrinkBuffer(data.terminalBuffer)) {
         res = await fetch(`/api/sessions/${sessionId}/terminal?tail=${TERMINAL_TAIL_SIZE}`);
+        if (!isCurrentRefresh()) return;
         data = (await res.json())?.data ?? {};
+        if (!isCurrentRefresh()) return;
       }
-      // Bail on a tab switch mid-fetch: writing here would paint this session's
-      // history into the terminal the user is now looking at. The window is two
-      // fetches wide in the fallback case, so this guard is not optional.
-      if (this.activeSessionId !== sessionId) return;
+      // Bail on a tab switch (including A -> B -> A) mid-fetch: writing here
+      // would paint an earlier activation's history into the current terminal.
+      if (!isCurrentRefresh()) return;
       if (data.terminalBuffer) {
         // This refresh is SERVER-triggered, so a user quietly reading scrollback
         // did not ask for it and must not be dragged to the bottom by it (#259).
@@ -2401,6 +2411,7 @@ class CodemanApp {
         this.terminal.clear();
         this.terminal.reset();
         await this.chunkedTerminalWrite(data.terminalBuffer);
+        if (!isCurrentRefresh()) return;
         // A tail fetch can be partial, and the banner would otherwise keep
         // describing the pre-refresh buffer (#258).
         this._setHistoryTruncation(sessionId, data);
@@ -2421,9 +2432,12 @@ class CodemanApp {
     } catch (err) {
       console.error('needsRefresh reload failed:', err);
     } finally {
-      // A tab switch can release this slot for the new active session while the
-      // old fetch is still resolving. Never let that stale request clear its lock.
-      if (this._terminalRefreshSessionId === sessionId) {
+      // The generation check prevents an A -> B -> A stale request from
+      // releasing the newer A activation's lock.
+      if (
+        this._terminalRefreshGeneration === refreshGeneration &&
+        this._terminalRefreshSessionId === sessionId
+      ) {
         this._terminalRefreshSessionId = null;
       }
     }
@@ -2719,6 +2733,7 @@ class CodemanApp {
     ws.onopen = () => {
       // Only mark ready if this is still the intended session
       if (this._ws === ws) {
+        const recoveredFromGap = (this._wsReconnectAttempts || 0) > 0;
         this._wsReady = true;
         this._wsState = 'connected';
         this._wsReconnectAttempts = 0;
@@ -2732,6 +2747,10 @@ class CodemanApp {
         // Flush any durably-queued input over the fresh socket (covers frames a
         // prior half-open socket silently dropped, and input typed while offline).
         this._onWsReady(sessionId);
+        // SSE is the output fallback while WS reconnects. Its anonymous drain
+        // frame may arrive after onopen, when the normal SSE wrapper ignores it;
+        // recover the gap explicitly once so dropped fallback bytes are restored.
+        if (recoveredFromGap) this._onSessionNeedsRefresh({ id: sessionId });
       }
     };
 
@@ -3484,6 +3503,7 @@ class CodemanApp {
     this._isLoadingBuffer = false;
     this._loadBufferQueue = null;
     this._bufferLoadOwner = null;
+    this._terminalRefreshGeneration = (this._terminalRefreshGeneration || 0) + 1;
     this._terminalRefreshSessionId = null;
     // Abort any in-flight chunkedTerminalWrite (SSE reconnect reloads buffers)
     this._chunkedWriteGen = (this._chunkedWriteGen || 0) + 1;
@@ -5276,8 +5296,11 @@ class CodemanApp {
       }
     }
 
-    // Close WebSocket for previous session (new one opens after buffer load)
+    // Close WebSocket for previous session (new one opens after buffer load).
+    // Reconnect attempts belong to that session; the next tab's first socket is
+    // a fresh connection and must not run the fallback-gap recovery path.
     this._disconnectWs();
+    this._wsReconnectAttempts = 0;
 
     // Clear CJK input to prevent sending stale text to the wrong session.
     // Must go through CjkInput.clear() — a raw value wipe leaves the module's
@@ -5308,6 +5331,7 @@ class CodemanApp {
     this._isLoadingBuffer = false;
     this._loadBufferQueue = null;
     this._bufferLoadOwner = null;
+    this._terminalRefreshGeneration = (this._terminalRefreshGeneration || 0) + 1;
     this._terminalRefreshSessionId = null;
     // Abort any in-flight chunkedTerminalWrite from the previous session.
     // Without this, old rAF-scheduled chunks continue writing stale data

@@ -106,6 +106,7 @@ type LifecycleApp = {
   _wsReady: boolean;
   _wsReconnectAttempts: number | undefined;
   _ws: FakeWebSocket | null;
+  _onSessionNeedsRefresh: (data: { id: string }) => void;
   activeSessionId: string | null;
 };
 
@@ -134,6 +135,7 @@ function makeApp(
   app.isOnline = true;
   app.sendResize = vi.fn();
   app._onWsReady = vi.fn();
+  app._onSessionNeedsRefresh = vi.fn();
   Object.assign(app, overrides);
   return { app: app as LifecycleApp, els };
 }
@@ -254,6 +256,26 @@ describe('WS reconnect backoff — attempts survive the _connectWs → _disconne
     ws2.onopen?.();
     expect(app._wsReconnectAttempts).toBe(0);
     expect(app._wsState).toBe('connected');
+  });
+
+  it('recovers terminal history once after a WS fallback gap, but not on initial open', () => {
+    const { CodemanApp, timers } = loadHarness();
+    const { app } = makeApp(CodemanApp);
+
+    app._connectWs('s1');
+    const ws1 = FakeWebSocket.instances[0];
+    ws1.readyState = 1;
+    ws1.onopen?.();
+    expect(app._onSessionNeedsRefresh).not.toHaveBeenCalled();
+
+    ws1.onclose?.({ code: 1006, reason: '' });
+    fireNextTimer(timers);
+    const ws2 = FakeWebSocket.instances[1];
+    ws2.readyState = 1;
+    ws2.onopen?.();
+
+    expect(app._onSessionNeedsRefresh).toHaveBeenCalledOnce();
+    expect(app._onSessionNeedsRefresh).toHaveBeenCalledWith({ id: 's1' });
   });
 });
 
