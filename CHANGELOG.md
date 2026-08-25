@@ -1,5 +1,38 @@
 # aicodeman
 
+## 1.23.0
+
+### Minor Changes
+
+- DeepSeek Harness as a ninth run mode, DeepSeek agent workers, and detailed rows for the vertical tab rail.
+
+  **DeepSeek Harness (`dsh`) run mode** (#337): DeepSeek's plugin-native agent framework joins Claude Code, shell, OpenCode, Codex, Gemini, Antigravity, Pi and Grok as a run mode. The harness is a profile launcher rather than an agent, so availability is two questions (binary AND a pane-capable profile): the Run button gates on both, a missing terminal profile is offered as a one-click install (`POST /api/deepseek/install-profile`, the only endpoint in Codeman that installs third-party code, fenced accordingly), and the resolver demands the harness's own help banner so Debian's unrelated `dsh` (dancer's shell) can never be spawned. Its permission switch is the `DSH_PERMISSION_MODE` env export (the harness has no bypass flag), injected via tmux setenv and clamped for non-granted owners in multi-user mode, including the env-override path. The community TUI's supervisor-reporting contract makes deepseek the first non-Claude mode with REAL lifecycle signals: a generated status shim turns its idle/working/blocked reports into definitive `stop`/`permission_prompt`/`agent_working` hook events, so dsh sessions get real respawn triggers, real wait signals and red "needs you" alerts instead of output-stabilization guesswork. The vendor's browser UI opens as a managed web tab through a background `dsh web` fenced to Codeman's origin. Docker image support included.
+
+  **DeepSeek agent workers** (#341): the codeman agent skill can spawn and drive dsh workers like claude ones — tasked, waited on and read with the same calls. `GET /api/sessions/:id/last-response` reads the harness's real zstd transcript (one frame per append; the reader walks frame boundaries itself, since a naive decode silently truncates to the first frame), distinguishes real prompts from plugin-injected context, and reports a failed turn's provider error instead of an empty answer.
+
+  **Vertical tab rail: detailed rows** (#338): the vertical rail can now show the home screen's per-session line (created stamp, state duration, status pill) via the new per-device `tabRailDetail` setting (default detailed; `simple` restores the 1.22.0 rows). One shared row model and one gate (`isRichTabRows()`) keep the rail, the rich sidebar and both home screens in agreement about what "working" means. A never-sized rail opens at the 320px Wide preset; below 288px the created stamp is dropped, below 240px rows fall back to simple. Also fixes Escape during an inline tab rename committing an empty name (the session then displayed its folder name).
+
+  **Review hardening across all three** (post-review commits on each PR): multi-user owners without the bypass grant can no longer redirect the server's forwarded `DEEPSEEK_API_KEY` via a `DEEPSEEK_BASE_URL` override; waits on `stop`/`blocked` are refused for docker/remote dsh sessions (their status bridge cannot reach the harness) and docker/remote dsh sessions keep the pane reader (their transcripts are not local); dsh approvals are alerts answered in the terminal, never blind keystrokes into a third-party TUI; the status shim forwards the contract's `--seq` token (stale retried reports are dropped server-side) and treats 4xx as permanent so a misconfigured session cannot rate-limit the hook endpoint for the whole instance; concurrent DeepSeek web-UI starts are serialized; cron deepseek jobs run the same launch gate as the HTTP paths; the installer's dsh identity probe is stdin-closed, bounded and memoized; transcript reads are memoized per (path, mtime, size) so 1s polling stops decoding unchanged files; the rail's width dialog, compact-threshold folder rows and reset affordances are rich-aware.
+
+### Patch Changes
+
+- b330f1d: Vertical tab rail: detailed rows, and a rename cancel that no longer wipes the name.
+
+  The vertical rail (Tab Orientation → Vertical) now draws the same per-session
+  line the home screen and the rich sidebar draw — when the session was created,
+  how long it has been in the state it is in, the folder it runs in, and a status
+  pill — instead of just the name. New per-device setting **Vertical Rail Rows**
+  (`tabRailDetail`, App Settings → Appearance → Tabs) with `Detailed` as the
+  default and `Simple (name only)` as the opt-out. A rail that has never been
+  sized now opens at 320px (the existing Wide preset) so the line fits; a narrower
+  rail sheds the created stamp below 288px and falls back to simple rows below
+  240px.
+
+  Also fixes a data-loss bug in the inline tab rename that predates the rail:
+  pressing Escape cleared the input and blurred it, and the blur handler commits —
+  so cancelling a rename stored an EMPTY session name and the tab fell back to its
+  folder label. Escape now cancels without a request, in every layout.
+
 ## 1.22.0
 
 ### Minor Changes
