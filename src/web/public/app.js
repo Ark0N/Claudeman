@@ -684,6 +684,9 @@ class CodemanApp {
     this._loadBufferQueue = null;  // queued SSE events during buffer load
     this._bufferLoadSeq = 0;
     this._bufferLoadOwner = null;
+    // Coalesce repeated needsRefresh signals so full-history fetches cannot
+    // overlap their destructive clear-and-replay phase.
+    this._terminalRefreshSessionId = null;
 
     // Flicker filter state (buffers output after screen clears)
     this.flickerFilterBuffer = '';
@@ -1859,7 +1862,11 @@ class CodemanApp {
     this._onSessionTerminal(data);
   }
   _onSSENeedsRefresh(data) {
-    if (this._wsReady && this._wsSessionId === data?.id) return;
+    // Session-scoped refreshes for background tabs must not repaint the active
+    // terminal. Anonymous refreshes come from SSE backpressure recovery; when
+    // the active WS is complete, that duplicate transport has nothing to repair.
+    if (data?.id && data.id !== this.activeSessionId) return;
+    if (this._wsReady && this._wsSessionId === this.activeSessionId) return;
     this._onSessionNeedsRefresh(data);
   }
   _onSSEClearTerminal(data) {
@@ -2354,13 +2361,16 @@ class CodemanApp {
     }
   }
 
-  async _onSessionNeedsRefresh() {
+  async _onSessionNeedsRefresh(data = {}) {
     // Server sends this after SSE backpressure clears — terminal data was dropped,
     // so reload the buffer to recover from any display corruption.
-    if (!this.activeSessionId || !this.terminal) return;
-    // Skip if buffer load already in progress — avoids competing clear+rewrite cycles
-    if (this._isLoadingBuffer) return;
-    const sessionId = this.activeSessionId;
+    const sessionId = data?.id || this.activeSessionId;
+    if (!sessionId || sessionId !== this.activeSessionId || !this.terminal) return;
+    // Skip if another buffer load or refresh is already in progress. Without a
+    // refresh-specific guard, repeated SSE drain signals can overlap multiple
+    // fetch -> clear -> replay cycles and visibly loop through old history.
+    if (this._isLoadingBuffer || this._terminalRefreshSessionId === sessionId) return;
+    this._terminalRefreshSessionId = sessionId;
     try {
       // Recovery should restore the WHOLE picture, so ask for full history
       // rather than a tail. Measured on a 900-line shell pane: the tail rewrite
@@ -2410,6 +2420,12 @@ class CodemanApp {
       }
     } catch (err) {
       console.error('needsRefresh reload failed:', err);
+    } finally {
+      // A tab switch can release this slot for the new active session while the
+      // old fetch is still resolving. Never let that stale request clear its lock.
+      if (this._terminalRefreshSessionId === sessionId) {
+        this._terminalRefreshSessionId = null;
+      }
     }
   }
 
@@ -3468,6 +3484,7 @@ class CodemanApp {
     this._isLoadingBuffer = false;
     this._loadBufferQueue = null;
     this._bufferLoadOwner = null;
+    this._terminalRefreshSessionId = null;
     // Abort any in-flight chunkedTerminalWrite (SSE reconnect reloads buffers)
     this._chunkedWriteGen = (this._chunkedWriteGen || 0) + 1;
     // Preserve local echo overlay text across SSE reconnect — just hide until
@@ -5291,6 +5308,7 @@ class CodemanApp {
     this._isLoadingBuffer = false;
     this._loadBufferQueue = null;
     this._bufferLoadOwner = null;
+    this._terminalRefreshSessionId = null;
     // Abort any in-flight chunkedTerminalWrite from the previous session.
     // Without this, old rAF-scheduled chunks continue writing stale data
     // into the terminal, interleaving with the new session's buffer.

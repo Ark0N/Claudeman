@@ -191,7 +191,7 @@ describe('backpressure refresh keeps a reader in place (issue #259)', () => {
 
   it('is wired into the refresh path instead of an unconditional scrollToBottom', () => {
     const app = readFileSync(resolve(PUBLIC, 'app.js'), 'utf8');
-    const start = app.indexOf('async _onSessionNeedsRefresh()');
+    const start = app.indexOf('async _onSessionNeedsRefresh(');
     expect(start).toBeGreaterThan(-1);
     const body = app.slice(start, app.indexOf('\n  async _onSessionClearTerminal', start));
     expect(body).toContain('computeRewriteScrollLine');
@@ -206,7 +206,7 @@ describe('backpressure refresh keeps a reader in place (issue #259)', () => {
     // falls back to the tail only when the full capture would shrink the buffer
     // (a repaint-mode pane keeps roughly one frame in tmux).
     const app = readFileSync(resolve(PUBLIC, 'app.js'), 'utf8');
-    const start = app.indexOf('async _onSessionNeedsRefresh()');
+    const start = app.indexOf('async _onSessionNeedsRefresh(');
     const body = app.slice(start, app.indexOf('\n  async _onSessionClearTerminal', start));
     expect(body).toContain('terminal?full=1');
     expect(body).toContain('this._replayWouldShrinkBuffer(data.terminalBuffer)');

@@ -225,10 +225,11 @@ describe('OpenCode session initial resize', () => {
       await route.continue();
     });
 
-    // Dispatch the needsRefresh event directly on the EventSource
-    // (this is how the server sends SSE events — as named events)
+    // Exercise the SSE fallback explicitly. With an active WebSocket this same
+    // frame is a duplicate and must be ignored by the routing guard.
     await page.evaluate((sid: string) => {
-      const app = (window as unknown as { app: { eventSource: EventSource } }).app;
+      const app = (window as unknown as { app: { eventSource: EventSource; _wsReady: boolean } }).app;
+      app._wsReady = false;
       if (app.eventSource) {
         const event = new MessageEvent('session:needsRefresh', {
           data: JSON.stringify({ id: sid }),
@@ -246,6 +247,52 @@ describe('OpenCode session initial resize', () => {
 
     // Cleanup
     await page.route('**/api/sessions/*/resize', (route) => route.continue());
+    await page.evaluate(async (sid: string) => {
+      await fetch(`/api/sessions/${sid}`, { method: 'DELETE' });
+    }, sessionId);
+  });
+
+  it('does not replay history for duplicate or background SSE refreshes while WS is active', async () => {
+    ({ context, page } = await freshPage());
+    await navigateAndWait(page);
+
+    const sessionId = await page.evaluate(async () => {
+      const res = await fetch('/api/sessions', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ workingDir: '/tmp', name: 'refresh-routing-test' }),
+      });
+      const body = await res.json();
+      const data = body.data ?? body;
+      return data.id ?? data.session?.id;
+    });
+
+    await page.evaluate(async (sid: string) => {
+      const app = (window as unknown as { app: { selectSession: (id: string) => Promise<void> } }).app;
+      await app.selectSession(sid);
+    }, sessionId);
+    await page.waitForFunction(() => (window as unknown as { app: { _wsReady: boolean } }).app._wsReady, undefined, {
+      timeout: 5000,
+    });
+
+    const terminalRequests: string[] = [];
+    await page.route('**/api/sessions/*/terminal*', async (route) => {
+      terminalRequests.push(route.request().url());
+      await route.continue();
+    });
+
+    await page.evaluate(() => {
+      const app = (window as unknown as { app: { eventSource: EventSource } }).app;
+      app.eventSource.dispatchEvent(
+        new MessageEvent('session:needsRefresh', { data: JSON.stringify({ id: 'background-session' }) })
+      );
+      app.eventSource.dispatchEvent(new MessageEvent('session:needsRefresh', { data: '{}' }));
+    });
+    await page.waitForTimeout(300);
+
+    expect(terminalRequests).toEqual([]);
+
+    await page.unroute('**/api/sessions/*/terminal*');
     await page.evaluate(async (sid: string) => {
       await fetch(`/api/sessions/${sid}`, { method: 'DELETE' });
     }, sessionId);
