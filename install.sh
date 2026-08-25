@@ -1010,21 +1010,28 @@ add_to_path() {
     success "Added to $profile"
 }
 
-setup_sc_alias() {
+# The `sc` bash chooser was retired in favour of `codeman tui`, which reaches
+# sessions 10+, carries the server's real states and leaves an attach with one
+# key. Older installers wrote this alias, so take it back out.
+#
+# Marker-owned on purpose: it matches the exact line WE wrote, so a user's own
+# `alias sc=` for something entirely different is never touched. The rewrite
+# goes through `cat >` rather than `mv` so the profile keeps its own mode and
+# ownership.
+remove_sc_alias() {
     local profile
     profile=$(detect_shell_profile)
+    [[ -f "$profile" ]] || return 0
+    grep -qE "^alias sc='tmux-chooser'\$" "$profile" 2>/dev/null || return 0
 
-    # Check if alias already exists
-    if [[ -f "$profile" ]] && grep -qE "^alias sc=" "$profile" 2>/dev/null; then
-        info "Alias 'sc' already configured in $profile"
-        return 0
+    local tmp
+    tmp=$(mktemp 2>/dev/null) || return 0
+    if sed -e "/^alias sc='tmux-chooser'\$/d" \
+           -e '/^# Codeman tmux session shortcut$/d' "$profile" > "$tmp" 2>/dev/null; then
+        cat "$tmp" > "$profile"
+        info "Removed the retired 'sc' alias from $profile (use: codeman tui)"
     fi
-
-    echo "" >> "$profile"
-    echo "# Codeman tmux session shortcut" >> "$profile"
-    echo "alias sc='tmux-chooser'" >> "$profile"
-
-    info "Added 'sc' alias for tmux-chooser"
+    rm -f "$tmp"
 }
 
 # ============================================================================
@@ -2172,13 +2179,14 @@ main() {
         ln -sf "$INSTALL_DIR/dist/index.js" "$symlink_dir/codeman"
         info "Created symlink: $symlink_dir/codeman"
 
-        # Install tmux-chooser as 'tmux-chooser' command
-        if [[ -f "$INSTALL_DIR/scripts/tmux-chooser.sh" ]]; then
-            ln -sf "$INSTALL_DIR/scripts/tmux-chooser.sh" "$symlink_dir/tmux-chooser"
-            info "Created symlink: $symlink_dir/tmux-chooser"
-            # Add 'sc' alias for quick access
-            setup_sc_alias
+        # tmux-chooser/`sc` is retired; `codeman tui` replaces it. Sweep up what
+        # an older installer left behind, so an update does not leave a symlink
+        # pointing at a script this version no longer ships.
+        if [[ -L "$symlink_dir/tmux-chooser" ]]; then
+            rm -f "$symlink_dir/tmux-chooser"
+            info "Removed the retired tmux-chooser symlink (use: codeman tui)"
         fi
+        remove_sc_alias
 
         # Add ~/.local/bin to PATH if not already there
         if [[ ":$PATH:" != *":$symlink_dir:"* ]]; then
@@ -2379,9 +2387,9 @@ main() {
 
     echo -e "  ${BOLD}Mobile Access (Termius/SSH):${NC}"
     echo ""
-    echo -e "    ${CYAN}sc${NC}              # Interactive tmux session chooser"
-    echo -e "    ${CYAN}sc 2${NC}            # Quick attach to session 2"
-    echo -e "    ${CYAN}sc -h${NC}           # Help"
+    echo -e "    ${CYAN}codeman tui${NC}     # Full-screen session dashboard"
+    echo -e "    ${CYAN}codeman tui 2${NC}   # Attach straight to session 2"
+    echo -e "    ${CYAN}codeman tui -l${NC}  # Numbered list, then exit"
     echo ""
 
     echo -e "  ${BOLD}Documentation:${NC}"
@@ -2565,6 +2573,7 @@ uninstall() {
         rm -f "$symlink_dir/tmux-chooser"
         success "Removed symlink: $symlink_dir/tmux-chooser"
     fi
+    remove_sc_alias
 
     # Remove install directory
     if [[ -d "$INSTALL_DIR" ]]; then

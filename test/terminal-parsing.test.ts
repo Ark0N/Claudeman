@@ -107,7 +107,7 @@ describe('Terminal Output Parsing', () => {
     it('should parse dollar amounts', () => {
       expect(parseCost('Cost: $0.05')).toBe(0.05);
       expect(parseCost('$1.23')).toBe(1.23);
-      expect(parseCost('Total: $10.00')).toBe(10.00);
+      expect(parseCost('Total: $10.00')).toBe(10.0);
     });
 
     it('should handle integer amounts', () => {
@@ -125,14 +125,8 @@ describe('Terminal Output Parsing', () => {
 
   describe('Prompt Detection', () => {
     const isPrompt = (line: string): boolean => {
-      const promptPatterns = [
-        /❯\s*$/,
-        />\s*$/,
-        /\$\s*$/,
-        /⏵\s*$/,
-        /↵\s*send/,
-      ];
-      return promptPatterns.some(p => p.test(line));
+      const promptPatterns = [/❯\s*$/, />\s*$/, /\$\s*$/, /⏵\s*$/, /↵\s*send/];
+      return promptPatterns.some((p) => p.test(line));
     };
 
     it('should detect chevron prompt', () => {
@@ -172,7 +166,7 @@ describe('Terminal Output Parsing', () => {
         /\bAnalyzing\b/i,
         /[⠋⠙⠹⠸⠼⠴⠦⠧⠇⠏]/,
       ];
-      return workingPatterns.some(p => p.test(line));
+      return workingPatterns.some((p) => p.test(line));
     };
 
     it('should detect Thinking state', () => {
@@ -308,9 +302,7 @@ describe('Terminal Output Parsing', () => {
 
   describe('Tool Use Detection', () => {
     const detectToolUse = (content: Array<{ type: string; name?: string }>): string[] => {
-      return content
-        .filter(block => block.type === 'tool_use' && block.name)
-        .map(block => block.name!);
+      return content.filter((block) => block.type === 'tool_use' && block.name).map((block) => block.name!);
     };
 
     it('should detect single tool use', () => {
@@ -331,17 +323,12 @@ describe('Terminal Output Parsing', () => {
     });
 
     it('should handle no tool uses', () => {
-      const content = [
-        { type: 'text', text: 'Just text' },
-      ];
+      const content = [{ type: 'text', text: 'Just text' }];
       expect(detectToolUse(content)).toEqual([]);
     });
 
     it('should ignore tool_result', () => {
-      const content = [
-        { type: 'tool_use', name: 'Read' },
-        { type: 'tool_result' },
-      ];
+      const content = [{ type: 'tool_use', name: 'Read' }, { type: 'tool_result' }];
       expect(detectToolUse(content)).toEqual(['Read']);
     });
   });

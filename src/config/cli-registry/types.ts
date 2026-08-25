@@ -241,8 +241,17 @@ export interface CliCapabilities {
   /**
    * Params a non-granted multi-user owner may not set freely, and what they are forced to.
    * Data-driven so a CUSTOM CLI's bypass flag is clampable exactly like codex's.
+   *
+   * `materializeWhenAbsent` distinguishes two real shapes, not one:
+   *   - only-if-sent (false/omitted; codex, antigravity, grok): the CLI's own
+   *     absent-config default already spawns safe, so the clamp should only touch
+   *     a config the caller actually sent.
+   *   - materialize (true; gemini, pi): the absent-config default is ITSELF unsafe
+   *     for a non-granted owner (gemini defaults to `yolo`; pi's absent default is
+   *     an interactive trust prompt the session user could just answer "yes" to),
+   *     so the clamp must CREATE a config object even when none was sent.
    */
-  privilegedParams: Array<{ param: string; clampTo: boolean | string }>;
+  privilegedParams: Array<{ param: string; clampTo: boolean | string; materializeWhenAbsent?: boolean }>;
   /** Version gates referenced by `capabilityGate` conditions. */
   gates: Record<string, { minVersion: string; failClosed: boolean }>;
   /** Cap on a single terminal frame, when this CLI needs a tighter one than the default. */

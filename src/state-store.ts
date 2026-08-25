@@ -40,6 +40,8 @@ import {
 } from './types.js';
 import { Debouncer, MAX_SESSION_TOKENS } from './utils/index.js';
 import { dataPath, CODEMAN_INSTANCE } from './config/instance.js';
+import { normalizeSessionOrder } from './session-order.js';
+import { validateTabLayout, type TabLayout } from './tab-layout.js';
 
 /** Debounce delay for batching state writes (ms) */
 const SAVE_DEBOUNCE_MS = 500;
@@ -281,6 +283,9 @@ export class StateStore {
     if (this.state.sessionOrder) {
       parts.push(`"sessionOrder":${JSON.stringify(this.state.sessionOrder)}`);
     }
+    if (this.state.tabLayouts !== undefined) {
+      parts.push(`"tabLayouts":${JSON.stringify(this.state.tabLayouts)}`);
+    }
 
     return `{${parts.join(',')}}`;
   }
@@ -514,22 +519,28 @@ export class StateStore {
    */
   cleanupStaleSessions(activeSessionIds: Set<string>): {
     count: number;
-    cleaned: Array<{ id: string; name?: string }>;
+    cleaned: Array<{ id: string; name?: string; owner?: string }>;
   } {
-    const allSessionIds = Object.keys(this.state.sessions);
-    const cleaned: Array<{ id: string; name?: string }> = [];
+    const staleIds = new Set(Object.keys(this.state.sessions).filter((sessionId) => !activeSessionIds.has(sessionId)));
+    return this.cleanupSessionsByIds(staleIds);
+  }
 
-    for (const sessionId of allSessionIds) {
-      if (!activeSessionIds.has(sessionId)) {
-        if (this.state.sessions[sessionId]?.pinned === true) continue; // COD-142: pinned records persist even with no live session
-        const name = this.state.sessions[sessionId]?.name;
-        cleaned.push({ id: sessionId, name });
-        delete this.state.sessions[sessionId];
-        this.cachedSessionJsons.delete(sessionId);
-        this.dirtySessions.delete(sessionId);
-        // Also clean up Ralph state for this session
-        this.ralphStates.delete(sessionId);
-      }
+  /** Deletes only confirmed stale session IDs, retaining records pinned after confirmation. */
+  cleanupSessionsByIds(sessionIds: ReadonlySet<string>): {
+    count: number;
+    cleaned: Array<{ id: string; name?: string; owner?: string }>;
+  } {
+    const cleaned: Array<{ id: string; name?: string; owner?: string }> = [];
+
+    for (const sessionId of sessionIds) {
+      const session = this.state.sessions[sessionId];
+      if (!session || session.pinned === true) continue; // COD-142: pinned records persist even with no live session
+      cleaned.push({ id: sessionId, name: session.name, owner: session.owner });
+      delete this.state.sessions[sessionId];
+      this.cachedSessionJsons.delete(sessionId);
+      this.dirtySessions.delete(sessionId);
+      // Also clean up Ralph state for this session
+      this.ralphStates.delete(sessionId);
     }
 
     if (cleaned.length > 0) {
@@ -662,6 +673,41 @@ export class StateStore {
   setSessionOrder(order: string[]): void {
     this.state.sessionOrder = order;
     this.save();
+  }
+
+  /** Returns an owner layout, or null before that owner has been migrated. */
+  getTabLayout(owner: string): TabLayout | null {
+    const layouts = this.state.tabLayouts;
+    return layouts && Object.hasOwn(layouts, owner) ? layouts[owner] : null;
+  }
+
+  /** Returns a defensive snapshot of every stored owner layout. */
+  getTabLayouts(): Record<string, TabLayout> {
+    return structuredClone(this.state.tabLayouts ?? {});
+  }
+
+  /** Validates and atomically persists one owner layout. */
+  setTabLayout(owner: string, layout: TabLayout): void {
+    const validated = validateTabLayout(layout);
+    this.state.tabLayouts = { ...(this.state.tabLayouts ?? {}), [owner]: validated };
+    this.save();
+  }
+
+  /** Atomically publishes validated owner layouts and their latest global compatibility projection. */
+  commitTabLayoutProjection(
+    layouts: Readonly<Record<string, TabLayout>>,
+    projectOrder: (latest: readonly string[]) => readonly string[]
+  ): { layouts: Record<string, TabLayout>; sessionOrder: string[] } {
+    const validated = Object.fromEntries(
+      Object.entries(layouts).map(([owner, layout]) => [owner, validateTabLayout(layout)])
+    );
+    const sessionOrder = normalizeSessionOrder(projectOrder([...(this.state.sessionOrder ?? [])]));
+    const nextLayouts = { ...(this.state.tabLayouts ?? {}), ...validated };
+
+    this.state.tabLayouts = nextLayouts;
+    this.state.sessionOrder = sessionOrder;
+    this.save();
+    return { layouts: structuredClone(validated), sessionOrder: [...sessionOrder] };
   }
 
   /** Resets all state to initial values and saves immediately. */

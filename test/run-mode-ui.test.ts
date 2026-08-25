@@ -357,6 +357,7 @@ describe('Codex quick start settings', () => {
         'welcomeAntigravityBtn',
         'welcomeGeminiBtn',
         'welcomePiBtn',
+        'welcomeGrokBtn',
         'welcomeTunnelBtn',
       ]) {
         welcomeBtns[id] = { style: { display: 'PRISTINE' } };
@@ -366,7 +367,7 @@ describe('Codex quick start settings', () => {
       // flags map below: _refreshRunModeAvailability must gate ANY button actually
       // present, not a fixed list, which is exactly the bug that shipped GitHub Copilot
       // CLI enabled with no way to see it in the Run menu.
-      for (const mode of ['claude', 'opencode', 'codex', 'gemini', 'antigravity', 'pi', 'shell', 'copilot']) {
+      for (const mode of ['claude', 'opencode', 'codex', 'gemini', 'antigravity', 'pi', 'grok', 'shell', 'copilot']) {
         modeBtns[mode] = { dataset: { mode }, style: { display: 'PRISTINE' } };
       }
       const menu = {
@@ -399,6 +400,7 @@ describe('Codex quick start settings', () => {
       gemini: false,
       antigravity: false,
       pi: false,
+      grok: false,
       cloudflared: false,
     };
 
@@ -422,6 +424,13 @@ describe('Codex quick start settings', () => {
       const withPi = loadUi({ ...ALL_OFF, pi: true });
       withPi.app.applyWelcomeCliVisibility();
       expect(withPi.welcomeBtns.welcomePiBtn.style.display).toBe('flex');
+
+      // Grok is gated on `grok` like the rest; the resolver additionally
+      // version-probes the binary, so a stray `grok` on PATH reports unavailable.
+      const withGrok = loadUi({ ...ALL_OFF, grok: true });
+      withGrok.app.applyWelcomeCliVisibility();
+      expect(withGrok.welcomeBtns.welcomeGrokBtn.style.display).toBe('flex');
+      expect(withGrok.welcomeBtns.welcomeClaudeBtn.style.display).toBe('none');
       expect(withPi.welcomeBtns.welcomeClaudeBtn.style.display).toBe('none');
 
       // Antigravity is a first-class welcome action, gated on `agy` like the rest.
@@ -1054,7 +1063,6 @@ describe('_renderRunModeOptions (rebuilding the Run menu from the live registry)
     const shellGroup = { replaceChildren: (...c: any[]) => (shellGroup.children = c), children: [] as any[] };
     elements.runModeAgentOptions = agentGroup;
     elements.runModeShellOption = shellGroup;
-
     const sessionUi = readFileSync(resolve(import.meta.dirname, '../src/web/public/session-ui.js'), 'utf8');
     vm.runInContext(sessionUi, context, { filename: 'session-ui.js' });
 

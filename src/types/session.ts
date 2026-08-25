@@ -8,7 +8,7 @@
  * - SessionConfig — creation-time config (id, workingDir, createdAt)
  * - SessionOutput — captured stdout/stderr/exitCode
  * - SessionStatus — 'idle' | 'busy' | 'stopped' | 'error'
- * - SessionMode — 'claude' | 'shell' | 'opencode' | 'codex' | 'gemini' | 'antigravity' | 'pi' (which CLI backend)
+ * - SessionMode — 'claude' | 'shell' | 'opencode' | 'codex' | 'gemini' | 'antigravity' | 'pi' | 'grok' (which CLI backend)
  * - ClaudeMode — CLI permission mode ('dangerously-skip-permissions' | 'auto' | 'normal' | 'allowedTools')
  * - SessionColor — visual differentiation color
  * - OpenCodeConfig — OpenCode-specific settings (model, autoAllowTools, continueSession)
@@ -16,6 +16,7 @@
  * - GeminiConfig — Gemini CLI-specific settings (model, approvalMode, resumeSession)
  * - AntigravityConfig — Antigravity CLI (agy) settings (model, dangerouslySkipPermissions, resumeConversationId)
  * - PiConfig — Pi CLI (pi.dev) settings (model, provider, thinking, resume/continue, project trust)
+ * - GrokConfig — Grok Build CLI (xAI `grok`) settings (model, alwaysApprove, resume/continue)
  *
  * Cross-domain relationships:
  * - SessionState.respawnConfig embeds RespawnConfig (respawn domain)
@@ -44,11 +45,11 @@ export type SessionStatus = 'idle' | 'busy' | 'stopped' | 'error';
 export type ClaudeMode = 'dangerously-skip-permissions' | 'auto' | 'normal' | 'allowedTools';
 
 /** Session mode: which CLI backend a session runs */
-export type SessionMode = 'claude' | 'shell' | 'opencode' | 'codex' | 'gemini' | 'antigravity' | 'pi';
+export type SessionMode = 'claude' | 'shell' | 'opencode' | 'codex' | 'gemini' | 'antigravity' | 'pi' | 'grok';
 
 export type RemoteCommandMode = Extract<
   SessionMode,
-  'shell' | 'claude' | 'opencode' | 'codex' | 'gemini' | 'antigravity' | 'pi'
+  'shell' | 'claude' | 'opencode' | 'codex' | 'gemini' | 'antigravity' | 'pi' | 'grok'
 >;
 
 /**
@@ -157,7 +158,7 @@ export interface RemoteSessionInfo {
 /** Which CLI backends a Docker case can run (same set as remote). */
 export type DockerCommandMode = Extract<
   SessionMode,
-  'shell' | 'claude' | 'opencode' | 'codex' | 'gemini' | 'antigravity' | 'pi'
+  'shell' | 'claude' | 'opencode' | 'codex' | 'gemini' | 'antigravity' | 'pi' | 'grok'
 >;
 
 /** Container engine. Docker and Podman differ in the uid/userns + host-gateway alias. */
@@ -364,6 +365,30 @@ export interface PiConfig {
 }
 
 /**
+ * Grok Build CLI (xAI `grok`) session configuration.
+ *
+ * Grok has Claude-style permission modes; the bypass switch is `--always-approve`
+ * ("auto-approve all tool executions", the CLI's `bypassPermissions` mode). Deny
+ * rules from `~/.grok/config.toml` / project `.grok/config.toml` still apply on
+ * top of it. Verified against grok 1.0.5.
+ */
+export interface GrokConfig {
+  /** Model ID (e.g. "grok-4.5", or a custom `[model.<name>]` from config.toml). Passed via --model. */
+  model?: string;
+  /**
+   * Auto-approve all tool executions (passes --always-approve). Absent = grok's
+   * own default permission mode (ask). Multi-user: forced off for non-granted
+   * owners by the only-if-sent clamp branch, like codex/antigravity — the
+   * absent-config spawn already defaults safe.
+   */
+  alwaysApprove?: boolean;
+  /** Continue the most recent session for the working directory (-c). Skipped when resumeSessionId is set. */
+  continueSession?: boolean;
+  /** Resume a specific session by ID (--resume). Ids only, never titles or paths. */
+  resumeSessionId?: string;
+}
+
+/**
  * Configuration for creating a new session
  */
 export interface SessionConfig {
@@ -500,6 +525,14 @@ export interface SessionState {
   color?: SessionColor;
   /** Flicker filter enabled (buffers output after screen clears) */
   flickerFilterEnabled?: boolean;
+  /**
+   * True while the CLI in the pane has a mouse-tracking DECSET on, as observed
+   * by the server on its way out of the stream (those sequences are stripped for
+   * claude/codex/gemini, so the browser can never see them itself). The browser
+   * hand-encodes a click report ONLY when this is true; without it, every click
+   * sent mouse reports to a CLI that never asked for them.
+   */
+  cliMouseTracking?: boolean;
   /** Claude Code CLI version (parsed from terminal, e.g., "2.1.27") */
   cliVersion?: string;
   /** Claude model in use (parsed from terminal, e.g., "Opus 4.5") */
@@ -518,6 +551,8 @@ export interface SessionState {
   antigravityConfig?: AntigravityConfig;
   /** Pi-specific configuration (only for mode === 'pi') */
   piConfig?: PiConfig;
+  /** Grok-specific configuration (only for mode === 'grok') */
+  grokConfig?: GrokConfig;
   /** Claude conversation session ID to resume after reboot (set by restore script) */
   resumeSessionId?: string;
   /** Claude CLI effort level (soft default via --settings, switchable in-session via /effort) */

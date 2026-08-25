@@ -52,6 +52,7 @@ export interface SessionListenerRefs {
   limitResumeCancelled: (data: { reason: string }) => void;
   respawnBreakerTripped: (data: { count: number }) => void;
   cliInfoUpdated: (data: { version?: string; model?: string; accountType?: string; latestVersion?: string }) => void;
+  mouseTrackingChanged: (active: boolean) => void;
   ralphLoopUpdate: (state: RalphTrackerState) => void;
   ralphTodoUpdate: (todos: RalphTodoItem[]) => void;
   ralphCompletionDetected: (phrase: string) => void;
@@ -219,10 +220,18 @@ export function createSessionListeners(session: Session, deps: SessionListenerDe
       // An idle-prompt inbox item means "composer is waiting"; any working
       // transition means input arrived, so the item is moot. ONLY the idle
       // kind: `working` is heuristic and can flap mid-turn, so clearing a
-      // pending permission/question dialog on it would false-clear real
-      // approvals (those resolve via stop / elicitation hooks / answer-time
-      // re-capture instead).
+      // pending permission/question dialog on the signal ALONE would
+      // false-clear real approvals.
       approvalInbox.resolveForSession(session.id, 'resolved_in_terminal', ['idle']);
+      // A permission/question dialog gets the pane-VERIFIED variant instead:
+      // the signal only decides when to look, `verifyStillAnswerable` re-reads
+      // the screen and resolves only when the dialog is really gone. Without
+      // this, answering a dialog in the terminal left its red "needs you" alert
+      // armed for the rest of the turn, because the only other staleness check
+      // lives in `GET /api/approvals` and nothing calls that while a page is
+      // open. `stop` was the first thing to clear it, which on a long turn is
+      // minutes away.
+      approvalInbox.resolveIfDialogGone(session.id);
       deps.broadcast(SseEvent.SessionWorking, { id: session.id });
       // Full state ride-along: the home screens sort the running group on
       // lastSubmitAt, and without this the browser keeps the stamp it loaded
@@ -342,6 +351,20 @@ export function createSessionListeners(session: Session, deps: SessionListenerDe
       deps.broadcastSessionStateDebounced(session.id);
     },
 
+    /**
+     * The CLI turned mouse tracking on or off (observed while stripping the
+     * DECSETs out of the stream). Rides the full session state so the browser
+     * learns it through the session object it already merges, with no new SSE
+     * event to keep in sync across the two registries.
+     *
+     * Broadcast IMMEDIATELY, not debounced: this flips when a dialog opens, and
+     * a user can click that dialog inside the 500ms debounce window, which is
+     * exactly the click that has to be reported.
+     */
+    mouseTrackingChanged: () => {
+      deps.broadcast(SseEvent.SessionUpdated, { session: deps.getSessionStateWithRespawn(session) });
+    },
+
     // ─── Ralph Tracking Events ──────────────────────────────
 
     /** Broadcasts `session:ralphLoopUpdate` — Ralph tracker loop state changed (iteration, phase) */
@@ -453,6 +476,7 @@ export function attachSessionListeners(session: Session, refs: SessionListenerRe
   session.on('limitResumeCancelled', refs.limitResumeCancelled);
   session.on('respawnBreakerTripped', refs.respawnBreakerTripped);
   session.on('cliInfoUpdated', refs.cliInfoUpdated);
+  session.on('mouseTrackingChanged', refs.mouseTrackingChanged);
   session.on('ralphLoopUpdate', refs.ralphLoopUpdate);
   session.on('ralphTodoUpdate', refs.ralphTodoUpdate);
   session.on('ralphCompletionDetected', refs.ralphCompletionDetected);
@@ -487,6 +511,7 @@ export function detachSessionListeners(session: Session, refs: SessionListenerRe
   session.off('limitResumeCancelled', refs.limitResumeCancelled);
   session.off('respawnBreakerTripped', refs.respawnBreakerTripped);
   session.off('cliInfoUpdated', refs.cliInfoUpdated);
+  session.off('mouseTrackingChanged', refs.mouseTrackingChanged);
   session.off('ralphLoopUpdate', refs.ralphLoopUpdate);
   session.off('ralphTodoUpdate', refs.ralphTodoUpdate);
   session.off('ralphCompletionDetected', refs.ralphCompletionDetected);

@@ -65,8 +65,9 @@ RUN npm install -g --ignore-scripts ${CLI_PI_NPM_PACKAGE} \
 # root's ~/.grok in the same layer so the image does not carry the download twice.
 # The staging cp -T is what makes this survive the installer's own behavior EITHER
 # way: newer installers already symlink /usr/local/bin/grok -> /root/.grok/bin/grok,
-# and a direct `cp -L` onto that symlink fails with "same file", while removing the
-# link first and copying fresh works for both old and new installers.
+# and a direct `cp -L` onto that symlink fails with "same file" (2026-08-24
+# rebuild), while removing the link first and copying fresh works for both old and
+# new installers.
 ARG CLI_GROK_INSTALL_URL="https://x.ai/cli/install.sh"
 RUN curl -fsSL "${CLI_GROK_INSTALL_URL}" | bash \
  && cp -L /root/.grok/bin/grok /usr/local/bin/grok.real \

@@ -32,7 +32,7 @@ export interface CompareResult {
 export async function compareScreenshot(
   page: Page,
   name: string,
-  options: CompareOptions = {},
+  options: CompareOptions = {}
 ): Promise<CompareResult> {
   const threshold = options.threshold ?? VISUAL.DEFAULT_THRESHOLD;
   const maxDiffPercent = options.maxDiffPercent ?? VISUAL.MAX_DIFF_PERCENT;
@@ -63,21 +63,16 @@ export async function compareScreenshot(
     writeFileSync(actualPath, actualBuffer);
     throw new Error(
       `Dimension mismatch for "${name}": ` +
-      `baseline ${baseline.width}x${baseline.height} vs ` +
-      `actual ${actual.width}x${actual.height}. ` +
-      `Actual saved to ${actualPath}`,
+        `baseline ${baseline.width}x${baseline.height} vs ` +
+        `actual ${actual.width}x${actual.height}. ` +
+        `Actual saved to ${actualPath}`
     );
   }
 
   const diff = new PNG({ width: baseline.width, height: baseline.height });
-  const numDiffPixels = pixelmatch(
-    baseline.data,
-    actual.data,
-    diff.data,
-    baseline.width,
-    baseline.height,
-    { threshold },
-  );
+  const numDiffPixels = pixelmatch(baseline.data, actual.data, diff.data, baseline.width, baseline.height, {
+    threshold,
+  });
 
   const totalPixels = baseline.width * baseline.height;
   const diffPercent = (numDiffPixels / totalPixels) * 100;
@@ -107,17 +102,13 @@ export async function compareScreenshot(
 }
 
 /** Assert screenshot matches baseline, throwing on failure */
-export async function assertScreenshotMatch(
-  page: Page,
-  name: string,
-  options: CompareOptions = {},
-): Promise<void> {
+export async function assertScreenshotMatch(page: Page, name: string, options: CompareOptions = {}): Promise<void> {
   const result = await compareScreenshot(page, name, options);
   if (!result.passed) {
     throw new Error(
       `Visual regression: "${name}" has ${result.diffPercent!.toFixed(2)}% pixel diff ` +
-      `(max ${options.maxDiffPercent ?? VISUAL.MAX_DIFF_PERCENT}%). ` +
-      `See ${result.diffPath}`,
+        `(max ${options.maxDiffPercent ?? VISUAL.MAX_DIFF_PERCENT}%). ` +
+        `See ${result.diffPath}`
     );
   }
 }

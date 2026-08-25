@@ -411,7 +411,7 @@ export function registerRalphRoutes(
     writeFileSync(promptPath, fullPrompt, 'utf-8');
 
     // Register session
-    ctx.addSession(session);
+    await ctx.addSession(session);
     ctx.store.incrementSessionsCreated();
     ctx.persistSessionState(session);
     await ctx.setupSessionListeners(session);

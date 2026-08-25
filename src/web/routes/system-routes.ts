@@ -50,7 +50,8 @@ import {
 } from '../route-helpers.js';
 import { SseEvent } from '../sse-events.js';
 import { getInstallInfo, checkForUpdate, startUpdate, getUpdateStatusForApi } from '../self-update.js';
-import type { SessionPort, EventPort, ConfigPort, InfraPort, AuthPort } from '../ports/index.js';
+import { getRepositoryStatus } from '../repo-status.js';
+import type { SessionPort, EventPort, ConfigPort, InfraPort, AuthPort, TabLayoutPort } from '../ports/index.js';
 import { AUTH_COOKIE_NAME } from '../middleware/auth.js';
 import { QR_AUTH_FAILURE_MAX } from '../../config/tunnel-config.js';
 import { AUTH_SESSION_TTL_MS } from '../../config/auth-config.js';
@@ -130,7 +131,7 @@ export function resolveSpanUrl(hostHeader: string | undefined, fallbackPort = '3
 
 export function registerSystemRoutes(
   app: FastifyInstance,
-  ctx: SessionPort & EventPort & ConfigPort & InfraPort & AuthPort
+  ctx: SessionPort & EventPort & ConfigPort & InfraPort & AuthPort & TabLayoutPort
 ): void {
   const windowStatesPath = dataPath('subagent-window-states.json');
   const parentMapPath = dataPath('subagent-parents.json');
@@ -356,6 +357,11 @@ export function registerSystemRoutes(
   // Poll target for update progress — survives the restart the update triggers.
   app.get('/api/system/update/status', async () => getUpdateStatusForApi());
 
+  // Informational companion to the release-tag updater above: what this CHECKOUT
+  // looks like against its own remotes (ahead/behind, incoming commits), which a
+  // release tag cannot answer for a git install tracking a branch.
+  app.get('/api/system/repo-status', async () => getRepositoryStatus());
+
   // Kick off a detached update to the latest release. Returns immediately; the
   // browser then polls /api/system/update/status across the service restart.
   app.post('/api/system/update', async (_req, reply) => {
@@ -376,7 +382,7 @@ export function registerSystemRoutes(
   });
 
   // ═══════════════════════════════════════════════════════════════
-  // CLI Integrations (Claude, OpenCode, Codex, Gemini, Antigravity, Pi)
+  // CLI Integrations (Claude, OpenCode, Codex, Gemini, Antigravity, Pi, Grok)
   // ═══════════════════════════════════════════════════════════════
 
   // ========== CLI registry ==========
@@ -571,7 +577,9 @@ export function registerSystemRoutes(
 
   app.post('/api/cleanup-state', async () => {
     const activeSessionIds = new Set(ctx.sessions.keys());
-    const result = ctx.store.cleanupStaleSessions(activeSessionIds);
+    const result = await ctx.tabLayouts.runStaleSessionCleanup(activeSessionIds, (ids) =>
+      ctx.store.cleanupSessionsByIds(ids)
+    );
     const lifecycleLog = getLifecycleLog();
     for (const s of result.cleaned) {
       lifecycleLog.log({ event: 'stale_cleaned', sessionId: s.id, name: s.name });
@@ -845,7 +853,8 @@ export function registerSystemRoutes(
       const merged = { ...existing, ...settingsToStore };
       await fs.writeFile(SETTINGS_PATH, JSON.stringify(merged, null, 2));
 
-      // Apply a changed tmux history-limit to all live sessions immediately.
+      // tmux 3.7+ resizes tracked panes; older versions apply this to new panes.
+      // Already-evicted history cannot be recovered on either version.
       if (settings.tmuxHistoryLimit !== undefined) {
         await ctx.mux.setHistoryLimit(resolveTerminalHistoryConfig(merged).tmuxHistoryLimit);
       }

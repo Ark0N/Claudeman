@@ -25,7 +25,7 @@ export async function getBrowser(engine: 'chromium' | 'webkit' = 'chromium'): Pr
 
 export async function createDeviceContext(
   device: DeviceEntry,
-  engineOverride?: 'chromium' | 'webkit',
+  engineOverride?: 'chromium' | 'webkit'
 ): Promise<BrowserContext> {
   const engine = engineOverride ?? device.defaultBrowserType;
   const browser = await getBrowser(engine);
@@ -41,7 +41,7 @@ export async function createDeviceContext(
 export async function createDevicePage(
   device: DeviceEntry,
   url: string,
-  engineOverride?: 'chromium' | 'webkit',
+  engineOverride?: 'chromium' | 'webkit'
 ): Promise<{ context: BrowserContext; page: Page }> {
   const context = await createDeviceContext(device, engineOverride);
   const page = await context.newPage();

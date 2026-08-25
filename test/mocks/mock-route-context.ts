@@ -33,9 +33,30 @@ export function createMockRouteContext(options?: {
   return {
     // -- SessionPort --
     sessions,
-    addSession: vi.fn((s: MockSession) => {
+    addSession: vi.fn(async (s: MockSession) => {
       sessions.set(s.id, s);
     }),
+    tabLayouts: {
+      get: vi.fn(),
+      put: vi.fn(),
+      putLegacyOrder: vi.fn(async (_actor: unknown, order: readonly string[]) => ({
+        order: [...order],
+        changedOwnerOrders: {},
+        globalOrder: [...order],
+        globalChanged: false,
+      })),
+      sessionCreated: vi.fn(),
+      webviewCreated: vi.fn(),
+      sessionsRemoved: vi.fn(async () => {}),
+      webviewDeleted: vi.fn(async () => {}),
+      markRestorationComplete: vi.fn(),
+      markRestorationFailed: vi.fn(),
+      markRestorationSkipped: vi.fn(),
+      assertDeletionReady: vi.fn(),
+      runSessionDeletion: vi.fn(async (_removed, action) => action()),
+      runStaleSessionCleanup: vi.fn(async (_activeIds, action) => action(new Set())),
+      reconcileAfterRestoration: vi.fn(async () => {}),
+    },
     cleanupSession: vi.fn(async () => {}),
     setupSessionListeners: vi.fn(async () => {}),
     persistSessionState: vi.fn(),
@@ -82,6 +103,7 @@ export function createMockRouteContext(options?: {
       getGlobalStats: vi.fn(() => ({ sessionsCreated: 0 })),
       getDailyStats: vi.fn(() => []),
       cleanupStaleSessions: vi.fn(() => ({ count: 0, cleaned: [] })),
+      cleanupSessionsByIds: vi.fn(() => ({ count: 0, cleaned: [] })),
     },
     port: 3000,
     https: false,

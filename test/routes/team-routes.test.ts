@@ -58,7 +58,6 @@ describe('team-routes', () => {
 
   describe('GET /api/teams/:name/tasks', () => {
     it('returns empty array for unknown team', async () => {
-
       const res = await harness.app.inject({
         method: 'GET',
         url: '/api/teams/nonexistent/tasks',

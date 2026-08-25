@@ -432,7 +432,7 @@ Object.assign(CodemanApp.prototype, {
 
   _buildCommandPaletteNewSessionItem(query = '') {
     const mode = this.runMode || this._runMode || 'claude';
-    const labels = { claude: 'Claude', opencode: 'OpenCode', codex: 'Codex', gemini: 'Gemini', antigravity: 'Antigravity', pi: 'Pi' };
+    const labels = { claude: 'Claude', opencode: 'OpenCode', codex: 'Codex', gemini: 'Gemini', antigravity: 'Antigravity', pi: 'Pi', grok: 'Grok' };
     const caseName = this._findCommandPaletteCaseMatch(query) || document.getElementById('quickStartCase')?.value || 'testcase';
     return {
       id: 'new-session',
@@ -3313,6 +3313,11 @@ Object.assign(CodemanApp.prototype, {
     // Stop whatever the previous preview was playing. Overwriting innerHTML
     // only DETACHES a <video>/<audio>; a detached media element keeps playing.
     this._stopFilePreviewMedia();
+    // Disarm detach until this load has a URL of its own: an early error return
+    // must not leave the button opening the PREVIOUS file in a new tab.
+    this.filePreviewDetachUrl = '';
+    const detachBtn = this.$('filePreviewDetachBtn');
+    if (detachBtn) detachBtn.hidden = true;
 
     // Show overlay with loading state
     overlay.classList.add('visible');
@@ -3339,6 +3344,19 @@ Object.assign(CodemanApp.prototype, {
       bodyEl.innerHTML = `<div class="binary-message">${escapeHtml(externalError)}</div>`;
       return;
     }
+
+    // Every branch below renders from one of these routes, so the detach button
+    // can always offer the same bytes in a browser tab: docx/pptx through the
+    // server-converted PDF preview, everything else through the raw route.
+    // (html/htm arrive as a download there by design — file-raw serves them
+    // attachment-only so widening READ never widens RUN.)
+    const officeDoc = ext === 'docx' || ext === 'pptx';
+    this.filePreviewDetachUrl = attachmentId
+      ? `/api/sessions/${sessionId}/attachments/${encodeURIComponent(attachmentId)}/${officeDoc ? 'preview' : 'raw'}`
+      : officeDoc
+        ? `/api/sessions/${sessionId}/file-preview?path=${encodeURIComponent(filePath)}`
+        : `/api/sessions/${sessionId}/file-raw?path=${encodeURIComponent(filePath)}`;
+    if (detachBtn) detachBtn.hidden = false;
 
     // Registered attachment: render straight from its by-id routes — images and
     // PDFs inline, Office docs via the server-converted PDF preview, text fetched
@@ -3489,6 +3507,29 @@ Object.assign(CodemanApp.prototype, {
     // audible and keeps streaming from the server. Closing has to stop it.
     this._stopFilePreviewMedia();
     this.filePreviewContent = '';
+    this.filePreviewDetachUrl = '';
+    const detachBtn = this.$('filePreviewDetachBtn');
+    if (detachBtn) detachBtn.hidden = true;
+  },
+
+  /**
+   * Open the previewed file in a browser tab and close the overlay.
+   *
+   * window.open is called WITHOUT the 'noopener' feature string: with it the
+   * call returns null even on success, which would make a blocked pop-up
+   * indistinguishable from a working one. The opener link is severed by hand
+   * instead, and a null return then reliably means the browser blocked it, in
+   * which case the overlay stays up so the user has not lost the file.
+   */
+  detachFilePreview() {
+    if (!this.filePreviewDetachUrl) return;
+    const win = window.open(this.filePreviewDetachUrl, '_blank');
+    if (!win) {
+      this.showToast('Pop-up blocked: allow pop-ups for this site to detach previews', 'error');
+      return;
+    }
+    win.opener = null;
+    this.closeFilePreview();
   },
 
   /**
@@ -4127,6 +4168,10 @@ Object.assign(CodemanApp.prototype, {
       }).catch(() => {
         this.showToast('Failed to copy', 'error');
       });
+    } else {
+      // Media/PDF/binary previews have no text buffer. Saying so beats the
+      // dead-button silence this used to be.
+      this.showToast('Nothing to copy in this preview', 'info');
     }
   },
 

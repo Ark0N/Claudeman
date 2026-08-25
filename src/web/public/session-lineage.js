@@ -160,6 +160,8 @@ Object.assign(CodemanApp.prototype, {
     const strip = document.getElementById('sessionTabs');
     if (!strip) return;
     const stripRect = strip.getBoundingClientRect();
+    const orientation =
+      document.documentElement.getAttribute('data-tab-orientation') === 'vertical' ? 'vertical' : 'horizontal';
     for (const edge of edges) {
       for (const id of [edge.parentId, edge.childId]) {
         const key = 'tab:' + id;
@@ -175,7 +177,13 @@ Object.assign(CodemanApp.prototype, {
       const childRect = rects.get('tab:' + edge.childId);
       if (!parentRect || !childRect) continue;
 
-      const geom = compute({ parent: parentRect, child: childRect, strip: stripRect, depth: edge.depth });
+      const geom = compute({
+        parent: parentRect,
+        child: childRect,
+        strip: stripRect,
+        depth: edge.depth,
+        orientation,
+      });
       if (!geom) continue; // scrolled out of the strip, or a degenerate rect
 
       const line = document.createElementNS('http://www.w3.org/2000/svg', 'path');
@@ -222,10 +230,12 @@ Object.assign(CodemanApp.prototype, {
     const strip = document.getElementById('sessionTabs');
     if (!strip) return;
     this._lineageScrollHandler = () => {
-      // Sidebar layout scrolls the SAME element vertically, and there the
-      // subagent/ultracode connectors anchor to tab rects too (lineage arcs are
-      // skipped, so _lineageEdgeCount alone would never redraw them).
-      if (this._lineageEdgeCount > 0 || this.isSessionSidebarActive?.()) this.updateConnectionLines();
+      // Sidebar layout and the vertical rail scroll the SAME element
+      // vertically, and there the subagent/ultracode connectors anchor to tab
+      // rects too (the sidebar skips lineage arcs entirely, and the rail can
+      // show connectors with zero lineage edges, so _lineageEdgeCount alone
+      // would never redraw them).
+      if (this._lineageEdgeCount > 0 || this._isVerticalTabList?.()) this.updateConnectionLines();
     };
     strip.addEventListener('scroll', this._lineageScrollHandler, { passive: true });
   },

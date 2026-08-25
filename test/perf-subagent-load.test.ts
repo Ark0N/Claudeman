@@ -20,16 +20,20 @@ import { SubagentWatcher } from '../src/subagent-watcher.js';
 // ========== Helpers ==========
 
 /** Generate a realistic JSONL transcript entry */
-function makeTranscriptEntry(type: 'user' | 'assistant', content: string, extras: Record<string, unknown> = {}): string {
+function makeTranscriptEntry(
+  type: 'user' | 'assistant',
+  content: string,
+  extras: Record<string, unknown> = {}
+): string {
   const base: Record<string, unknown> = {
     type,
     timestamp: new Date().toISOString(),
     message: {
       role: type,
-      content: type === 'user'
-        ? [{ type: 'text', text: content }]
-        : content,
-      ...(type === 'assistant' ? { model: 'claude-sonnet-4-20250514', usage: { input_tokens: 1500, output_tokens: 800 } } : {}),
+      content: type === 'user' ? [{ type: 'text', text: content }] : content,
+      ...(type === 'assistant'
+        ? { model: 'claude-sonnet-4-20250514', usage: { input_tokens: 1500, output_tokens: 800 } }
+        : {}),
     },
     ...extras,
   };
@@ -48,11 +52,13 @@ function generateParentTranscript(lineCount: number, agentIds: string[] = []): s
   }
   // Sprinkle in toolUseResult entries for agent descriptions
   for (const agentId of agentIds) {
-    lines.push(JSON.stringify({
-      type: 'user',
-      timestamp: new Date().toISOString(),
-      toolUseResult: { agentId, description: `Research task for ${agentId}` },
-    }));
+    lines.push(
+      JSON.stringify({
+        type: 'user',
+        timestamp: new Date().toISOString(),
+        toolUseResult: { agentId, description: `Research task for ${agentId}` },
+      })
+    );
   }
   return lines.join('\n') + '\n';
 }
@@ -60,23 +66,29 @@ function generateParentTranscript(lineCount: number, agentIds: string[] = []): s
 /** Generate a subagent transcript file */
 function generateAgentTranscript(lineCount: number): string {
   const lines: string[] = [];
-  lines.push(makeTranscriptEntry('user', 'Investigate the authentication module and suggest improvements for rate limiting'));
+  lines.push(
+    makeTranscriptEntry('user', 'Investigate the authentication module and suggest improvements for rate limiting')
+  );
   for (let i = 1; i < lineCount; i++) {
     if (i % 3 === 0) {
-      lines.push(JSON.stringify({
-        type: 'tool_call',
-        timestamp: new Date().toISOString(),
-        tool: 'Read',
-        input: { file_path: `/home/user/project/src/file-${i}.ts` },
-        toolUseId: `tool-${i}`,
-      }));
+      lines.push(
+        JSON.stringify({
+          type: 'tool_call',
+          timestamp: new Date().toISOString(),
+          tool: 'Read',
+          input: { file_path: `/home/user/project/src/file-${i}.ts` },
+          toolUseId: `tool-${i}`,
+        })
+      );
     } else if (i % 3 === 1) {
-      lines.push(JSON.stringify({
-        type: 'tool_result',
-        timestamp: new Date().toISOString(),
-        toolUseId: `tool-${i - 1}`,
-        content: 'x'.repeat(500),
-      }));
+      lines.push(
+        JSON.stringify({
+          type: 'tool_result',
+          timestamp: new Date().toISOString(),
+          toolUseId: `tool-${i - 1}`,
+          content: 'x'.repeat(500),
+        })
+      );
     } else {
       lines.push(makeTranscriptEntry('assistant', `Analysis step ${i}: Found pattern in module...`));
     }
@@ -159,7 +171,9 @@ describe('SubagentWatcher performance', () => {
             found = true;
             break;
           }
-        } catch { /* skip */ }
+        } catch {
+          /* skip */
+        }
       }
       const elapsed = performance.now() - start;
 
@@ -196,7 +210,9 @@ describe('SubagentWatcher performance', () => {
             if (entry.type === 'user' && entry.toolUseResult?.agentId === 'target-agent') {
               return entry.toolUseResult.description;
             }
-          } catch { /* skip */ }
+          } catch {
+            /* skip */
+          }
         }
         return undefined;
       });
@@ -211,7 +227,9 @@ describe('SubagentWatcher performance', () => {
 
       // Key assertion: max event loop lag should stay reasonable
       // JSON.parse of 10K lines is synchronous and blocks the event loop
-      console.log(`[10K transcript × 5 reads] max lag: ${lag.maxLagMs.toFixed(1)}ms, avg: ${lag.avgLagMs.toFixed(1)}ms`);
+      console.log(
+        `[10K transcript × 5 reads] max lag: ${lag.maxLagMs.toFixed(1)}ms, avg: ${lag.avgLagMs.toFixed(1)}ms`
+      );
 
       // This WILL likely fail — proving the bottleneck
       // 50ms is the threshold where users notice UI jank
@@ -242,20 +260,20 @@ describe('SubagentWatcher performance', () => {
         try {
           const entry = JSON.parse(line);
           if (entry.type === 'user' && entry.message?.content) {
-            const firstContent = Array.isArray(entry.message.content)
-              ? entry.message.content[0]
-              : undefined;
+            const firstContent = Array.isArray(entry.message.content) ? entry.message.content[0] : undefined;
             if (firstContent?.type === 'text') {
               description = firstContent.text.trim().slice(0, 45);
             }
           }
-        } catch { /* skip */ }
+        } catch {
+          /* skip */
+        }
       }
       const readAllElapsed = performance.now() - start;
 
       // Approach 2: Read only first 8KB via partial read
       const start2 = performance.now();
-      const fd = await import('node:fs/promises').then(m => m.open(agentFile, 'r'));
+      const fd = await import('node:fs/promises').then((m) => m.open(agentFile, 'r'));
       const buf = Buffer.alloc(8192);
       const { bytesRead } = await fd.read(buf, 0, 8192, 0);
       await fd.close();
@@ -266,18 +284,20 @@ describe('SubagentWatcher performance', () => {
         try {
           const entry = JSON.parse(line);
           if (entry.type === 'user' && entry.message?.content) {
-            const firstContent = Array.isArray(entry.message.content)
-              ? entry.message.content[0]
-              : undefined;
+            const firstContent = Array.isArray(entry.message.content) ? entry.message.content[0] : undefined;
             if (firstContent?.type === 'text') {
               description2 = firstContent.text.trim().slice(0, 45);
             }
           }
-        } catch { /* skip */ }
+        } catch {
+          /* skip */
+        }
       }
       const partialElapsed = performance.now() - start2;
 
-      console.log(`[extractDescription] file: ${fileSizeKB.toFixed(0)}KB, readAll: ${readAllElapsed.toFixed(1)}ms, partial-8KB: ${partialElapsed.toFixed(1)}ms`);
+      console.log(
+        `[extractDescription] file: ${fileSizeKB.toFixed(0)}KB, readAll: ${readAllElapsed.toFixed(1)}ms, partial-8KB: ${partialElapsed.toFixed(1)}ms`
+      );
       console.log(`[extractDescription] readAll bytes: ${content.length}, partial bytes: ${bytesRead}`);
 
       // Both approaches must find the same description
@@ -338,7 +358,9 @@ describe('SubagentWatcher performance', () => {
         const start = performance.now();
         try {
           await readFile('/proc/self/environ', 'utf8');
-        } catch { /* may fail in containers */ }
+        } catch {
+          /* may fail in containers */
+        }
         times.push(performance.now() - start);
       }
 
@@ -404,7 +426,9 @@ describe('SubagentWatcher performance', () => {
       const elapsed = performance.now() - start;
 
       const totalMB = messages.reduce((sum, m) => sum + m.length, 0) / (1024 * 1024);
-      console.log(`[terminal flush × 20 sessions] serialization: ${elapsed.toFixed(1)}ms, payload: ${totalMB.toFixed(2)}MB`);
+      console.log(
+        `[terminal flush × 20 sessions] serialization: ${elapsed.toFixed(1)}ms, payload: ${totalMB.toFixed(2)}MB`
+      );
 
       // 20 × 16KB = 320KB serialized simultaneously — should still be < 20ms
       expect(elapsed).toBeLessThan(50);
@@ -426,7 +450,8 @@ describe('SubagentWatcher performance', () => {
       mkdirSync(subagentDir, { recursive: true });
 
       // Large parent transcript (5000 lines)
-      const parentTranscript = generateParentTranscript(5000,
+      const parentTranscript = generateParentTranscript(
+        5000,
         Array.from({ length: 10 }, (_, i) => `storm-agent-${i}`)
       );
       writeFileSync(join(tmpDir, 'storm-project', 'hash123', 'session-main.jsonl'), parentTranscript);
@@ -455,7 +480,9 @@ describe('SubagentWatcher performance', () => {
             if (entry.type === 'user' && entry.toolUseResult?.agentId === `storm-agent-${i}`) {
               return entry.toolUseResult.description;
             }
-          } catch { /* skip */ }
+          } catch {
+            /* skip */
+          }
         }
         return undefined;
       });
@@ -482,9 +509,11 @@ describe('SubagentWatcher performance', () => {
       console.log(`[subagent storm] avg event loop lag: ${lag.avgLagMs.toFixed(1)}ms`);
 
       // Count how many lag samples exceeded 50ms (UI jank threshold)
-      const jankSamples = lag.samples.filter(s => s > 50).length;
+      const jankSamples = lag.samples.filter((s) => s > 50).length;
       const totalSamples = lag.samples.length;
-      console.log(`[subagent storm] jank samples (>50ms): ${jankSamples}/${totalSamples} (${((jankSamples / totalSamples) * 100).toFixed(1)}%)`);
+      console.log(
+        `[subagent storm] jank samples (>50ms): ${jankSamples}/${totalSamples} (${((jankSamples / totalSamples) * 100).toFixed(1)}%)`
+      );
 
       // Verify correctness
       for (const d of descriptions) {
@@ -515,8 +544,16 @@ describe('SubagentWatcher performance', () => {
         });
       });
       for (const pidStr of pids.slice(0, 10)) {
-        try { await readFile(`/proc/${pidStr}/environ`, 'utf8'); } catch { /* */ }
-        try { await readFile(`/proc/${pidStr}/cmdline`, 'utf8'); } catch { /* */ }
+        try {
+          await readFile(`/proc/${pidStr}/environ`, 'utf8');
+        } catch {
+          /* */
+        }
+        try {
+          await readFile(`/proc/${pidStr}/cmdline`, 'utf8');
+        } catch {
+          /* */
+        }
       }
       const elapsed = performance.now() - start;
       const lag = await lagPromise;
@@ -545,7 +582,9 @@ describe('SubagentWatcher performance', () => {
         try {
           const s = await statFn(f);
           if (Date.now() - s.mtime.getTime() < 30000) aliveCount++;
-        } catch { /* */ }
+        } catch {
+          /* */
+        }
       }
       const elapsed = performance.now() - start;
       const lag = await lagPromise;
@@ -571,7 +610,9 @@ describe('SubagentWatcher performance', () => {
         try {
           await statFn(`/proc/${ourPid}`);
           aliveCount++;
-        } catch { /* */ }
+        } catch {
+          /* */
+        }
       }
       const elapsed = performance.now() - start;
       const lag = await lagPromise;
@@ -603,7 +644,11 @@ describe('SubagentWatcher performance', () => {
         await statFn(f); // tier 1
       }
       for (let i = 0; i < 20; i++) {
-        try { await statFn(`/proc/${process.pid}`); } catch { /* */ } // tier 2
+        try {
+          await statFn(`/proc/${process.pid}`);
+        } catch {
+          /* */
+        } // tier 2
       }
       const fastElapsed = performance.now() - startFast;
 
@@ -616,13 +661,23 @@ describe('SubagentWatcher performance', () => {
         });
       });
       for (const pidStr of pids.slice(0, 10)) {
-        try { await readFile(`/proc/${pidStr}/environ`, 'utf8'); } catch { /* */ }
-        try { await readFile(`/proc/${pidStr}/cmdline`, 'utf8'); } catch { /* */ }
+        try {
+          await readFile(`/proc/${pidStr}/environ`, 'utf8');
+        } catch {
+          /* */
+        }
+        try {
+          await readFile(`/proc/${pidStr}/cmdline`, 'utf8');
+        } catch {
+          /* */
+        }
       }
       const slowElapsed = performance.now() - startSlow;
 
       const speedup = slowElapsed / Math.max(fastElapsed, 0.01);
-      console.log(`[comparison] tier-1+2: ${fastElapsed.toFixed(1)}ms, old pgrep: ${slowElapsed.toFixed(1)}ms, speedup: ${speedup.toFixed(0)}x`);
+      console.log(
+        `[comparison] tier-1+2: ${fastElapsed.toFixed(1)}ms, old pgrep: ${slowElapsed.toFixed(1)}ms, speedup: ${speedup.toFixed(0)}x`
+      );
 
       // Tiered approach should be significantly faster
       expect(fastElapsed).toBeLessThan(slowElapsed);
@@ -648,7 +703,9 @@ describe('SubagentWatcher performance', () => {
       }
       const elapsed = performance.now() - start;
 
-      console.log(`[JSON.parse × ${parsed} lines] ${elapsed.toFixed(2)}ms (${(elapsed / parsed * 1000).toFixed(1)}µs/line)`);
+      console.log(
+        `[JSON.parse × ${parsed} lines] ${elapsed.toFixed(2)}ms (${((elapsed / parsed) * 1000).toFixed(1)}µs/line)`
+      );
 
       // 1000 lines should be fast, but 10 agents × 1000 lines = 10000 parses
       // all happening synchronously on the event loop during initial tail

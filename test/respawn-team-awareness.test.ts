@@ -38,8 +38,12 @@ class MockTeamWatcher extends TeamWatcher {
   }
 
   // Prevent actual filesystem polling
-  override start(): void { /* noop */ }
-  override stop(): void { /* noop */ }
+  override start(): void {
+    /* noop */
+  }
+  override stop(): void {
+    /* noop */
+  }
 }
 
 // ========== Tests ==========

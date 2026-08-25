@@ -48,7 +48,8 @@ const delay = (ms: number): Promise<void> => new Promise((r) => setTimeout(r, ms
  *    answer "yes" to, which then loads and EXECUTES repo-local `.pi/extensions` TypeScript,
  *    so `approveProjectTrust: false` (`--no-approve`) is materialized. Omitting `--approve`
  *    is NOT a clamp.
- * Codex and antigravity need nothing here: their absent config already spawns safe.
+ * Codex, antigravity and grok need nothing here: their absent config already spawns safe
+ * (grok's bare spawn is its own ask-mode default; --always-approve is only ever sent).
  * Granted/admin/single-user get undefined for both, i.e. upstream defaults untouched.
  */
 export function clampCronExternalCliConfigs(
@@ -425,7 +426,7 @@ export class CronService {
         piConfig,
         owner: job.owner,
       });
-      this.deps.addSession(session);
+      await this.deps.addSession(session);
       this.store.incrementSessionsCreated();
       this.deps.persistSessionState(session);
       await this.deps.setupSessionListeners(session);

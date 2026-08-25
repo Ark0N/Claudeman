@@ -51,6 +51,7 @@ import {
   type GeminiConfig,
   type AntigravityConfig,
   type PiConfig,
+  type GrokConfig,
   type SessionRemote,
   type SessionDocker,
 } from './types.js';
@@ -193,8 +194,9 @@ function getModeLabel(mode: SessionMode): string {
  * repaint via cursor positioning, so dropping the alt-screen switch is safe —
  * content stays in the normal buffer. Excluded: `shell` (arbitrary programs like
  * vim/less/htop legitimately need the alt screen), `opencode` (renders its own
- * TUI that may rely on it) and `pi` (below). Keep parity with the replay-side
- * strip in session-routes.ts.
+ * TUI that may rely on it), `pi` (below) and `grok` (a fullscreen alt-screen TUI
+ * with mouse support, i.e. the opencode case, not the Ink case). Keep parity
+ * with the replay-side strip in session-routes.ts.
  *
  * ⚠️ Being excluded here does NOT preserve the alt screen. Every excluded mode
  * falls through to isMuxAltScreenOnlyStripMode(), which strips the alt-screen
@@ -406,6 +408,15 @@ export class Session extends EventEmitter {
   // sequences split across PTY chunks can't slip past the alt-screen/scrollback
   // strip (see _handleTerminalOutput / isAltScreenStripMode)
   private _altScreenSeqCarry: string = '';
+
+  /**
+   * Mouse-tracking DECSET modes the CLI currently has ON, as observed while
+   * STRIPPING them out of the stream below. Kept as a set rather than a boolean
+   * because a TUI may enable 1002 and later disable 1000 (a mode it never
+   * enabled); tracking is on while any of them is.
+   */
+  private _cliMouseModes = new Set<number>();
+  private _cliMouseTracking = false;
   private resolvePromise: ((value: { result: string; cost: number }) => void) | null = null;
   private rejectPromise: ((reason: Error) => void) | null = null;
   private _promptResolved: boolean = false; // Guard against race conditions in runPrompt
@@ -490,6 +501,8 @@ export class Session extends EventEmitter {
   private _antigravityConfig: AntigravityConfig | undefined;
   // Pi configuration (only for mode === 'pi')
   private _piConfig: PiConfig | undefined;
+  // Grok configuration (only for mode === 'grok')
+  private _grokConfig: GrokConfig | undefined;
   private _resumeSessionId: string | undefined;
 
   // Ephemeral env overrides (e.g., CLAUDE_CODE_EXPERIMENTAL_AGENT_TEAMS). Exported by tmux
@@ -501,7 +514,7 @@ export class Session extends EventEmitter {
   // the CLAUDE_CODE_EFFORT_LEVEL env var, which would hard-lock the session.
   private _effort: EffortLevel | undefined;
 
-  // tmux history-limit (scrollback lines) applied to this session's pane.
+  // tmux history-limit (scrollback lines) allocated when this session's pane is created.
   private readonly _tmuxHistoryLimit: number;
 
   // Remote execution metadata, present when this session runs over SSH through local tmux.
@@ -585,13 +598,15 @@ export class Session extends EventEmitter {
       antigravityConfig?: AntigravityConfig;
       /** Pi configuration (only for mode === 'pi') */
       piConfig?: PiConfig;
+      /** Grok configuration (only for mode === 'grok') */
+      grokConfig?: GrokConfig;
       /** Resume a previous Claude conversation (used after server reboot) */
       resumeSessionId?: string;
       /** Extra env vars exported to the CLI at spawn time (no disk persistence) */
       envOverrides?: Record<string, string>;
       /** Claude CLI effort level (soft default via --settings, switchable in-session via /effort) */
       effort?: EffortLevel;
-      /** tmux history-limit (scrollback lines) for this session's pane. */
+      /** tmux history-limit (scrollback lines) allocated when this session's pane is created. */
       tmuxHistoryLimit?: number;
       /** Restored per-session attachment history. May include server-private external paths. */
       attachmentHistory?: SessionAttachmentHistoryItem[];
@@ -692,6 +707,11 @@ export class Session extends EventEmitter {
     // Apply Pi configuration
     if (config.piConfig) {
       this._piConfig = config.piConfig;
+    }
+
+    // Apply Grok configuration
+    if (config.grokConfig) {
+      this._grokConfig = config.grokConfig;
     }
 
     // Apply env overrides (exported at spawn, not persisted to disk).
@@ -1276,6 +1296,7 @@ export class Session extends EventEmitter {
       niceValue: this._niceConfig.niceValue,
       color: this._color,
       flickerFilterEnabled: this._flickerFilterEnabled,
+      cliMouseTracking: this._cliMouseTracking || undefined,
       cliVersion: this._cliVersion || undefined,
       cliModel: this._cliModel || undefined,
       cliAccountType: this._cliAccountType || undefined,
@@ -1285,6 +1306,7 @@ export class Session extends EventEmitter {
       geminiConfig: this._geminiConfig,
       antigravityConfig: this._antigravityConfig,
       piConfig: this._piConfig,
+      grokConfig: this._grokConfig,
       resumeSessionId: this._resumeSessionId,
       effort: this._effort,
       // COD-118: runtime-only — surfaced so the frontend can require explicit user
@@ -1457,7 +1479,11 @@ export class Session extends EventEmitter {
           // COD-75: codex/gemini/antigravity/pi get COLORTERM=truecolor — mirrors buildEnvExports()
           // in tmux-manager.ts so the attach client and the tmux session agree.
           env: buildMuxAttachEnv(
-            this.mode === 'codex' || this.mode === 'gemini' || this.mode === 'antigravity' || this.mode === 'pi'
+            this.mode === 'codex' ||
+              this.mode === 'gemini' ||
+              this.mode === 'antigravity' ||
+              this.mode === 'pi' ||
+              this.mode === 'grok'
           ),
         })
       );
@@ -1527,6 +1553,7 @@ export class Session extends EventEmitter {
       geminiConfig: this._geminiConfig,
       antigravityConfig: this._antigravityConfig,
       piConfig: this._piConfig,
+      grokConfig: this._grokConfig,
       resumeSessionId: this._resumeSessionId,
       envOverrides: this._envOverrides,
       effort: this._effort,
@@ -1535,6 +1562,46 @@ export class Session extends EventEmitter {
       docker: this._docker,
       owner: this._owner,
     };
+  }
+
+  /**
+   * Remember whether the CLI currently wants to be told about mouse clicks.
+   *
+   * The strip in {@link _handleTerminalOutput} is the ONLY place these sequences
+   * exist. After it, neither the browser nor xterm can ever learn that the CLI
+   * asked for mouse tracking, so `terminal.modes.mouseTrackingMode` is
+   * permanently 'none' for a stripped mode. The browser hand-encodes SGR reports
+   * to compensate (`_sendSyntheticSgrTap` in terminal-ui.js), and with no state
+   * to consult it had to do that on EVERY click, delivering mouse reports to a
+   * CLI that never asked for them. Publishing this through `toState()` is what
+   * lets the browser report a click only when the CLI is listening.
+   *
+   * Only the TRACKING modes count. 1005/1006 select an encoding and 1007 is
+   * alt-scroll; a CLI that picks SGR encoding without turning a tracking mode on
+   * is not asking about clicks, and counting those would put the stray reports
+   * straight back.
+   *
+   * This must stay in lockstep with the strip regex that calls it: a sequence
+   * removed from the stream but not recorded here is one the browser can neither
+   * see nor be told about.
+   */
+  private _recordStrippedMouseMode(seq: string): void {
+    // eslint-disable-next-line no-control-regex
+    const match = /\x1b\[\?(\d+)([hl])$/.exec(seq);
+    if (!match) return;
+    const mode = Number(match[1]);
+    if (mode !== 1000 && mode !== 1001 && mode !== 1002 && mode !== 1003) return;
+    if (match[2] === 'h') this._cliMouseModes.add(mode);
+    else this._cliMouseModes.delete(mode);
+    this._syncCliMouseTracking();
+  }
+
+  /** Emit only on a real transition: a TUI re-emitting its enable on every repaint costs nothing. */
+  private _syncCliMouseTracking(): void {
+    const active = this._cliMouseModes.size > 0;
+    if (active === this._cliMouseTracking) return;
+    this._cliMouseTracking = active;
+    this.emit('mouseTrackingChanged', active);
   }
 
   private _handleTerminalOutput(data: string): void {
@@ -1589,7 +1656,10 @@ export class Session extends EventEmitter {
           // eslint-disable-next-line no-control-regex
           .replace(/\x1b\[3J/g, '')
           // eslint-disable-next-line no-control-regex
-          .replace(/\x1b\[\?(?:1000|1001|1002|1003|1005|1006|1007)[hl]/g, '');
+          .replace(/\x1b\[\?(?:1000|1001|1002|1003|1005|1006|1007)[hl]/g, (seq) => {
+            this._recordStrippedMouseMode(seq);
+            return '';
+          });
       }
     }
 
@@ -1742,6 +1812,7 @@ export class Session extends EventEmitter {
             geminiConfig: this._geminiConfig,
             antigravityConfig: this._antigravityConfig,
             piConfig: this._piConfig,
+            grokConfig: this._grokConfig,
             resumeSessionId: this._resumeSessionId,
             envOverrides: this._envOverrides,
             effort: this._effort,
@@ -1817,6 +1888,10 @@ export class Session extends EventEmitter {
       // be five separate `this.mode === '<id>'` checks, one per external CLI.
       if (getCli(this.mode)?.capabilities.requiresMux) {
         throw new Error(`${getModeLabel(this.mode)} sessions require tmux. Direct PTY fallback is not supported.`);
+      }
+      // Grok sessions require tmux for XAI_API_KEY / GROK_* injection via setenv
+      if (this.mode === 'grok') {
+        throw new Error('Grok sessions require tmux. Direct PTY fallback is not supported.');
       }
       try {
         // Pass --session-id to use the SAME ID as the Codeman session
@@ -2503,6 +2578,11 @@ export class Session extends EventEmitter {
     this._messages = [];
     this._lineBuffer = '';
     this._altScreenSeqCarry = '';
+    // A restarted pane starts with no mouse mode: the new program has not asked
+    // for one yet, and carrying the old CLI's state over would report clicks
+    // into a program that never enabled tracking.
+    this._cliMouseModes.clear();
+    this._syncCliMouseTracking();
     this._markActivity(true);
   }
 

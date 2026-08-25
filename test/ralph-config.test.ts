@@ -6,10 +6,7 @@
  */
 
 import { describe, it, expect } from 'vitest';
-import {
-  parseRalphLoopConfigFromContent,
-  extractCompletionPhraseFromContent,
-} from '../src/ralph-config.js';
+import { parseRalphLoopConfigFromContent, extractCompletionPhraseFromContent } from '../src/ralph-config.js';
 
 describe('parseRalphLoopConfigFromContent', () => {
   describe('valid YAML frontmatter', () => {

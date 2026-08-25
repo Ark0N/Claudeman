@@ -369,7 +369,7 @@ from the transcript file, which is flushed slightly *after* the `stop` hook fire
 single read taken the instant send-and-wait returns comes back `""` even though the
 turn finished (verified live: empty on the first call, full text seconds later). `text`
 is also `""` before the worker's first completed turn, and always `""` for modes with
-no transcript (`shell`, `opencode`, `gemini`, `antigravity`, `pi`, `grok`; the first five
+no transcript (`shell`, `opencode`, `gemini`, `antigravity`, `pi`, `grok`; the first four
 verified live, pi from the same source path), which is
 why the loop above is bounded rather than open-ended. Fall back to the terminal buffer
 there, tail in **bytes** (`textOutput` in `GET .../output` stays empty for interactive

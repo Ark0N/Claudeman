@@ -18,7 +18,7 @@ vi.mock('node:fs', async (orig) => {
   return { ...actual, mkdirSync: vi.fn() };
 });
 
-const ENV_KEYS = ['CODEMAN_INSTANCE', 'CODEMAN_DATA_DIR'] as const;
+const ENV_KEYS = ['CODEMAN_INSTANCE', 'CODEMAN_DATA_DIR', 'CODEMAN_TMUX_SOCKET'] as const;
 const ORIG: Record<string, string | undefined> = Object.fromEntries(ENV_KEYS.map((k) => [k, process.env[k]]));
 
 async function load(env: Partial<Record<(typeof ENV_KEYS)[number], string | undefined>> = {}) {
@@ -75,5 +75,24 @@ describe('config/instance', () => {
     expect(m.dataPath('a', 'b')).toBe(join('/tmp/codeman-test-xyz', 'a', 'b'));
     // Socket is derived from the instance name, not the data dir override.
     expect(m.DEFAULT_TMUX_SOCKET).toBe('codeman-beta');
+  });
+});
+
+describe('resolveTmuxSocketName', () => {
+  it('is the instance socket when no override is set', async () => {
+    const m = await load({ CODEMAN_INSTANCE: 'beta', CODEMAN_TMUX_SOCKET: undefined });
+    expect(m.resolveTmuxSocketName()).toBe('codeman-beta');
+  });
+
+  it('honours a safe CODEMAN_TMUX_SOCKET override', async () => {
+    const m = await load({ CODEMAN_INSTANCE: undefined, CODEMAN_TMUX_SOCKET: 'codeman-test.1' });
+    expect(m.resolveTmuxSocketName()).toBe('codeman-test.1');
+  });
+
+  it('ignores an override that could not be passed to `tmux -L` safely', async () => {
+    // A socket name reaches a command line, so anything outside the pattern
+    // falls back to the instance default rather than being escaped.
+    const m = await load({ CODEMAN_INSTANCE: undefined, CODEMAN_TMUX_SOCKET: 'bad; rm -rf /' });
+    expect(m.resolveTmuxSocketName()).toBe('codeman');
   });
 });

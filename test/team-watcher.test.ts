@@ -107,7 +107,7 @@ describe('TeamWatcher', () => {
       const config = createTeamConfig();
       writeTeamConfig('test-team', config);
 
-      const created = new Promise<TeamConfig>(resolve => {
+      const created = new Promise<TeamConfig>((resolve) => {
         watcher.on('teamCreated', resolve);
       });
 
@@ -128,7 +128,7 @@ describe('TeamWatcher', () => {
 
       watcher.start();
       // Wait for first poll
-      await new Promise(r => setTimeout(r, 100));
+      await new Promise((r) => setTimeout(r, 100));
 
       const teams = watcher.getTeams();
       expect(teams).toHaveLength(2);
@@ -138,7 +138,7 @@ describe('TeamWatcher', () => {
       writeTeamConfig('test-team', createTeamConfig({ leadSessionId: 'my-session' }));
 
       watcher.start();
-      await new Promise(r => setTimeout(r, 100));
+      await new Promise((r) => setTimeout(r, 100));
 
       expect(watcher.getTeamForSession('my-session')).toBeDefined();
       expect(watcher.getTeamForSession('other-session')).toBeUndefined();
@@ -149,9 +149,9 @@ describe('TeamWatcher', () => {
       writeTeamConfig('test-team', config);
 
       watcher.start();
-      await new Promise(r => setTimeout(r, 100));
+      await new Promise((r) => setTimeout(r, 100));
 
-      const updated = new Promise<TeamConfig>(resolve => {
+      const updated = new Promise<TeamConfig>((resolve) => {
         watcher.on('teamUpdated', resolve);
       });
 
@@ -164,7 +164,7 @@ describe('TeamWatcher', () => {
         joinedAt: Date.now(),
       });
       // Small delay to ensure different mtime
-      await new Promise(r => setTimeout(r, 50));
+      await new Promise((r) => setTimeout(r, 50));
       writeTeamConfig('test-team', config);
 
       const team = await updated;
@@ -175,11 +175,11 @@ describe('TeamWatcher', () => {
       writeTeamConfig('test-team', createTeamConfig());
 
       watcher.start();
-      await new Promise(r => setTimeout(r, 100));
+      await new Promise((r) => setTimeout(r, 100));
 
       expect(watcher.getTeams()).toHaveLength(1);
 
-      const removed = new Promise<TeamConfig>(resolve => {
+      const removed = new Promise<TeamConfig>((resolve) => {
         watcher.on('teamRemoved', resolve);
       });
 
@@ -198,7 +198,7 @@ describe('TeamWatcher', () => {
       writeTask('test-team', createTask('2', 'pending'));
 
       watcher.start();
-      await new Promise(r => setTimeout(r, 100));
+      await new Promise((r) => setTimeout(r, 100));
 
       const tasks = watcher.getTeamTasks('test-team');
       expect(tasks).toHaveLength(2);
@@ -211,7 +211,7 @@ describe('TeamWatcher', () => {
       writeTask('test-team', createTask('3', 'pending'));
 
       watcher.start();
-      await new Promise(r => setTimeout(r, 100));
+      await new Promise((r) => setTimeout(r, 100));
 
       expect(watcher.getActiveTaskCount('test-team')).toBe(2); // in_progress + pending
     });
@@ -229,7 +229,7 @@ describe('TeamWatcher', () => {
       writeFileSync(join(dir, '2.json'), JSON.stringify(internalTask));
 
       watcher.start();
-      await new Promise(r => setTimeout(r, 100));
+      await new Promise((r) => setTimeout(r, 100));
 
       const tasks = watcher.getTeamTasks('test-team');
       expect(tasks).toHaveLength(1);
@@ -243,7 +243,7 @@ describe('TeamWatcher', () => {
       writeTask('test-team', createTask('1', 'in_progress', 'researcher'));
 
       watcher.start();
-      await new Promise(r => setTimeout(r, 100));
+      await new Promise((r) => setTimeout(r, 100));
 
       expect(watcher.hasActiveTeammates('session-abc')).toBe(true);
     });
@@ -253,7 +253,7 @@ describe('TeamWatcher', () => {
       writeTask('test-team', createTask('1', 'completed', 'researcher'));
 
       watcher.start();
-      await new Promise(r => setTimeout(r, 100));
+      await new Promise((r) => setTimeout(r, 100));
 
       expect(watcher.hasActiveTeammates('session-abc')).toBe(false);
     });
@@ -266,7 +266,7 @@ describe('TeamWatcher', () => {
       writeTeamConfig('test-team', createTeamConfig({ leadSessionId: 'session-abc' }));
 
       watcher.start();
-      await new Promise(r => setTimeout(r, 100));
+      await new Promise((r) => setTimeout(r, 100));
 
       expect(watcher.getActiveTeammateCount('session-abc')).toBe(2); // researcher + coder
       expect(watcher.getActiveTeammateCount('nonexistent')).toBe(0);
@@ -283,7 +283,7 @@ describe('TeamWatcher', () => {
       writeInbox('test-team', 'researcher', messages);
 
       watcher.start();
-      await new Promise(r => setTimeout(r, 100));
+      await new Promise((r) => setTimeout(r, 100));
 
       const inbox = watcher.getInboxMessages('test-team', 'researcher');
       expect(inbox).toHaveLength(1);
@@ -295,14 +295,14 @@ describe('TeamWatcher', () => {
       writeInbox('test-team', 'researcher', []);
 
       watcher.start();
-      await new Promise(r => setTimeout(r, 100));
+      await new Promise((r) => setTimeout(r, 100));
 
-      const received = new Promise<{ teamName: string; member: string; message: InboxMessage }>(resolve => {
+      const received = new Promise<{ teamName: string; member: string; message: InboxMessage }>((resolve) => {
         watcher.on('inboxMessage', resolve);
       });
 
       // Add a new message
-      await new Promise(r => setTimeout(r, 50));
+      await new Promise((r) => setTimeout(r, 50));
       const messages: InboxMessage[] = [
         { from: 'team-lead', text: '{"type":"task_assignment"}', timestamp: new Date().toISOString(), read: false },
       ];
@@ -322,7 +322,7 @@ describe('TeamWatcher', () => {
       mkdirSync(join(TEAMS_DIR, 'test-team', 'config.json.lock'));
 
       watcher.start();
-      await new Promise(r => setTimeout(r, 100));
+      await new Promise((r) => setTimeout(r, 100));
 
       // Should not discover the team because it's locked
       expect(watcher.getTeams()).toHaveLength(0);
@@ -334,7 +334,7 @@ describe('TeamWatcher', () => {
       mkdirSync(join(TEAMS_DIR, 'test-team', 'config.json.lock'));
 
       watcher.start();
-      await new Promise(r => setTimeout(r, 100));
+      await new Promise((r) => setTimeout(r, 100));
       expect(watcher.getTeams()).toHaveLength(0);
 
       // Stop, remove lock, restart (fresh mtime cache)
@@ -343,7 +343,7 @@ describe('TeamWatcher', () => {
 
       watcher = new TeamWatcher(TEAMS_DIR, TASKS_DIR);
       watcher.start();
-      await new Promise(r => setTimeout(r, 100));
+      await new Promise((r) => setTimeout(r, 100));
 
       expect(watcher.getTeams()).toHaveLength(1);
     });
@@ -355,7 +355,7 @@ describe('TeamWatcher', () => {
       writeTask('test-team', createTask('1', 'in_progress'));
 
       watcher.start();
-      await new Promise(r => setTimeout(r, 100));
+      await new Promise((r) => setTimeout(r, 100));
 
       expect(watcher.getTeams()).toHaveLength(1);
 

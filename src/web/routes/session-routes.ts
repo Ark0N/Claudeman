@@ -12,6 +12,7 @@ import { existsSync, statSync, mkdirSync, writeFileSync } from 'node:fs';
 import { execFile } from 'node:child_process';
 import fs from 'node:fs/promises';
 import { randomBytes } from 'node:crypto';
+import { performance } from 'node:perf_hooks';
 import {
   ApiErrorCode,
   createErrorResponse,
@@ -23,11 +24,12 @@ import {
   type GeminiConfig,
   type AntigravityConfig,
   type PiConfig,
+  type GrokConfig,
   type SessionMode,
 } from '../../types.js';
 import { Session, isAltScreenStripMode, isMuxAltScreenOnlyStripMode, isExternalCliMode } from '../../session.js';
 import { resolveCliBinDir } from '../../utils/cli-resolver.js';
-import { missingCliMessage } from '../../config/cli-registry/registry.js';
+import { missingCliMessage, getCli } from '../../config/cli-registry/registry.js';
 import { SseEvent } from '../sse-events.js';
 import {
   CreateSessionSchema,
@@ -49,7 +51,8 @@ import {
   SessionWaitQuerySchema,
   SessionWaitOutputQuerySchema,
 } from '../schemas.js';
-import { mergeSessionOrder } from '../../session-order.js';
+import { ownerLayoutKey } from '../../tab-layout-persistence.js';
+import { TabLayoutValidationError } from '../../tab-layout.js';
 import {
   sessionWaits,
   resolveWaitSignals,
@@ -109,7 +112,7 @@ import {
   setHistoryIndexRefresher,
   setHistorySessionIndex,
 } from '../session-history-index.js';
-import type { SessionPort, EventPort, ConfigPort, InfraPort, AuthPort } from '../ports/index.js';
+import type { SessionPort, EventPort, ConfigPort, InfraPort, AuthPort, TabLayoutPort } from '../ports/index.js';
 import { RunSummaryTracker } from '../../run-summary.js';
 
 import { MAX_INPUT_LENGTH, MAX_SESSION_NAME_LENGTH } from '../../config/terminal-limits.js';
@@ -134,6 +137,11 @@ import {
   toSessionDocker,
 } from '../../docker-hosts.js';
 import { LRUMap } from '../../utils/lru-map.js';
+import {
+  getLastTranscriptResponse,
+  isExternalCliTranscriptMode,
+  parseExternalCliTranscript,
+} from '../response-viewer-transcript.js';
 
 // Path to linked-cases registry (same file used by case-routes resolveCasePath)
 const LINKED_CASES_FILE = dataPath('linked-cases.json');
@@ -312,51 +320,59 @@ export function _resetPasteRateBuckets(): void {
 /**
  * Security (multi-user §6.3): the Claude-only permission-mode downgrade does not
  * cover the other CLIs' bypass switches. Codex `--dangerously-bypass-approvals-and-sandbox`,
- * Gemini `--approval-mode yolo`, and Antigravity `--dangerously-skip-permissions` disable
- * the safety classifier the non-granted-user downgrade is meant to keep on, so clamp them
- * for a non-granted owner. buildGeminiCommand defaults an ABSENT approvalMode to yolo, so
- * the gemini config must be MATERIALIZED (auto_edit) even when the request sent none.
- * Antigravity is like Codex: an ABSENT config already defaults safe (no bypass flag), so
- * only a sent config needs the flag forced off. No-op in single-user mode / for a granted
- * owner (canUsernameRunPrivilegedCommands returns true when !isMultiUserMode()).
+ * Gemini `--approval-mode yolo`, Antigravity `--dangerously-skip-permissions`, Pi's
+ * `approveProjectTrust`, and Grok `--always-approve` all disable a safety gate the
+ * non-granted-user downgrade is meant to keep on, so clamp them for a non-granted owner.
+ * No-op in single-user mode / for a granted owner (canUsernameRunPrivilegedCommands
+ * returns true when !isMultiUserMode()).
  *
- * Pi has no permission prompts at all, so there is no bypass switch to clamp; its
- * privilege-shaped knob is `approveProjectTrust`, which makes pi LOAD AND EXECUTE
- * repo-local `.pi/extensions` TypeScript and npm-install missing project packages.
- * Pi joins the gemini-style MATERIALIZE branch, not the codex/antigravity
- * only-if-sent one: pi's absent-config default is an interactive trust prompt the
- * session user could simply answer "yes" to in the terminal, so merely omitting
- * `--approve` is not a clamp. Forcing `approveProjectTrust: false` makes
- * buildPiCommand emit `--no-approve`, and the prompt never appears.
+ * Generalized over the registry's `capabilities.privilegedParams`
+ * (`src/config/cli-registry/types.ts`) rather than one hand-written branch per CLI, so a
+ * CUSTOM CLI's own bypass flag is clamped exactly like codex's with zero code here. Each
+ * entry names its param and what a non-granted owner is forced to (`clampTo`), plus
+ * whether an ABSENT config must be MATERIALIZED:
+ *   - only-if-sent (materializeWhenAbsent false/omitted; codex, antigravity, grok): the
+ *     CLI's own absent-config default already spawns safe, so only a config the caller
+ *     actually sent gets touched.
+ *   - materialize (true; gemini, pi): the absent-config default is ITSELF unsafe for a
+ *     non-granted owner (gemini's builder defaults an absent approvalMode to `yolo`;
+ *     pi's absent default is an interactive trust prompt the session user could just
+ *     answer "yes" to), so the clamp must CREATE a config even when none was sent.
  */
+function clampConfigForMode<T extends object>(mode: string, config: T | undefined): T | undefined {
+  const params = getCli(mode)?.capabilities.privilegedParams ?? [];
+  if (params.length === 0) return config;
+  const materializes = params.some((p) => p.materializeWhenAbsent);
+  if (!config && !materializes) return config;
+  const clamped: Record<string, unknown> = { ...(config as Record<string, unknown> | undefined) };
+  for (const { param, clampTo, materializeWhenAbsent } of params) {
+    if (config || materializeWhenAbsent) clamped[param] = clampTo;
+  }
+  return clamped as T;
+}
+
 async function clampExternalCliBypassForOwner(
   owner: string | undefined,
   codexConfig: CodexConfig | undefined,
   geminiConfig: GeminiConfig | undefined,
   antigravityConfig: AntigravityConfig | undefined,
-  piConfig: PiConfig | undefined
+  piConfig: PiConfig | undefined,
+  grokConfig: GrokConfig | undefined
 ): Promise<{
   codexConfig: CodexConfig | undefined;
   geminiConfig: GeminiConfig | undefined;
   antigravityConfig: AntigravityConfig | undefined;
   piConfig: PiConfig | undefined;
+  grokConfig: GrokConfig | undefined;
 }> {
   const granted = await canUsernameRunPrivilegedCommands(owner);
-  if (granted) return { codexConfig, geminiConfig, antigravityConfig, piConfig };
-  // Non-granted: force codex/antigravity bypass off (only meaningful when a config was
-  // sent) and materialize gemini to auto_edit (clamps an explicit 'yolo' and the yolo default)
-  // and pi to --no-approve (clamps an explicit true AND pi's own "ask" default).
-  const clampedCodex = codexConfig ? { ...codexConfig, dangerouslyBypassApprovals: false } : codexConfig;
-  const clampedGemini: GeminiConfig = { ...(geminiConfig ?? {}), approvalMode: 'auto_edit' };
-  const clampedAntigravity = antigravityConfig
-    ? { ...antigravityConfig, dangerouslySkipPermissions: false }
-    : antigravityConfig;
-  const clampedPi: PiConfig = { ...(piConfig ?? {}), approveProjectTrust: false };
+  if (granted) return { codexConfig, geminiConfig, antigravityConfig, piConfig, grokConfig };
   return {
-    codexConfig: clampedCodex,
-    geminiConfig: clampedGemini,
-    antigravityConfig: clampedAntigravity,
-    piConfig: clampedPi,
+    codexConfig: clampConfigForMode('codex', codexConfig),
+    geminiConfig: clampConfigForMode('gemini', geminiConfig),
+    antigravityConfig: clampConfigForMode('antigravity', antigravityConfig),
+    piConfig: clampConfigForMode('pi', piConfig),
+    grokConfig: clampConfigForMode('grok', grokConfig),
   };
 }
 
@@ -655,7 +671,7 @@ function checkExternalCliAvailable(mode: SessionMode): ApiResponse<never> | null
 
 export function registerSessionRoutes(
   app: FastifyInstance,
-  ctx: SessionPort & EventPort & ConfigPort & InfraPort & AuthPort
+  ctx: SessionPort & EventPort & ConfigPort & InfraPort & AuthPort & TabLayoutPort
 ): void {
   // ═══════════════════════════════════════════════════════════════
   // Auth
@@ -687,16 +703,23 @@ export function registerSessionRoutes(
     return (list as Array<{ owner?: string }>).filter((s) => canAccessOwned(user, s.owner));
   });
 
-  // ========== Session Tab Order (global sync, COD-131) ==========
+  // ========== Legacy Session Tab Order (temporary synchronized compatibility bridge) ==========
 
-  app.put('/api/session-order', async (req): Promise<ApiResponse<{ order: string[] }>> => {
-    const { order } = parseBody(SessionOrderUpdateSchema, req.body, 'Invalid session order');
-    // Server is authoritative but never drops ids it knows about that the
-    // pushing device hadn't loaded yet — those fall to the end (mergeSessionOrder).
-    const merged = mergeSessionOrder(order, ctx.store.getSessionOrder());
-    ctx.store.setSessionOrder(merged);
-    ctx.broadcast(SseEvent.SessionOrderChanged, { order: merged });
-    return { success: true, data: { order: merged } };
+  app.put('/api/session-order', async (req, reply): Promise<ApiResponse<{ order: string[] }>> => {
+    try {
+      const { order } = parseBody(SessionOrderUpdateSchema, req.body, 'Invalid session order');
+      const user = getAuthUser(req);
+      const result = await ctx.tabLayouts.putLegacyOrder(
+        { owner: ownerLayoutKey(ownerFor(req)), isAdmin: user.role === 'admin' },
+        order
+      );
+      return { success: true, data: { order: result.order } };
+    } catch (error) {
+      if (error instanceof TabLayoutValidationError) {
+        return reply.code(400).send(createErrorResponse(ApiErrorCode.INVALID_INPUT, error.message));
+      }
+      throw error;
+    }
   });
 
   // ========== Session Creation ==========
@@ -761,11 +784,7 @@ export function registerSessionRoutes(
     //     values).
     const managedCasesBase = resolveCasesDir(getAuthUser(req));
     const canStripDisk =
-      body.mode !== 'opencode' &&
-      body.mode !== 'codex' &&
-      body.mode !== 'gemini' &&
-      body.mode !== 'antigravity' &&
-      body.mode !== 'pi' &&
+      !isExternalCliMode(body.mode ?? 'claude') &&
       body.envOverrides &&
       Object.keys(body.envOverrides).length > 0 &&
       (workingDir.startsWith(CASES_DIR + '/') || workingDir.startsWith(managedCasesBase + '/'));
@@ -818,7 +837,7 @@ export function registerSessionRoutes(
     }
 
     // Pre-flight availability check for an external CLI (opencode/codex/gemini/
-    // antigravity/pi today — see checkExternalCliAvailable's own doc comment).
+    // antigravity/pi/grok today — see checkExternalCliAvailable's own doc comment).
     if (body.mode) {
       const unavailable = checkExternalCliAvailable(body.mode);
       if (unavailable) return unavailable;
@@ -868,9 +887,11 @@ export function registerSessionRoutes(
               ? body.antigravityConfig?.model
               : mode === 'pi'
                 ? body.piConfig?.model
-                : mode !== 'shell'
-                  ? modelConfig?.defaultModel || undefined
-                  : undefined;
+                : mode === 'grok'
+                  ? body.grokConfig?.model
+                  : mode !== 'shell'
+                    ? modelConfig?.defaultModel || undefined
+                    : undefined;
     const claudeModeConfig = await ctx.getClaudeModeConfig();
     // Section 6.3: force non-granted users to a classifier-guarded mode.
     const effectiveClaudeMode = await resolveClaudeModeForUsername(claudeModeConfig.claudeMode, owner);
@@ -880,12 +901,14 @@ export function registerSessionRoutes(
       geminiConfig: gatedGeminiConfig,
       antigravityConfig: gatedAntigravityConfig,
       piConfig: gatedPiConfig,
+      grokConfig: gatedGrokConfig,
     } = await clampExternalCliBypassForOwner(
       owner,
       body.codexConfig,
       body.geminiConfig,
       body.antigravityConfig,
-      body.piConfig
+      body.piConfig,
+      body.grokConfig
     );
     const terminalHistoryConfig = await ctx.getTerminalHistoryConfig();
     const session = new Session({
@@ -903,6 +926,7 @@ export function registerSessionRoutes(
       geminiConfig: mode === 'gemini' ? gatedGeminiConfig : undefined,
       antigravityConfig: mode === 'antigravity' ? gatedAntigravityConfig : undefined,
       piConfig: mode === 'pi' ? gatedPiConfig : undefined,
+      grokConfig: mode === 'grok' ? gatedGrokConfig : undefined,
       resumeSessionId: validatedResumeId,
       envOverrides: body.envOverrides,
       effort: body.effort,
@@ -912,7 +936,7 @@ export function registerSessionRoutes(
       parentSessionId: resolveParentSessionId(ctx, req, body.parentSessionId, owner),
     });
 
-    ctx.addSession(session);
+    await ctx.addSession(session);
     ctx.store.incrementSessionsCreated();
     ctx.persistSessionState(session);
     await ctx.setupSessionListeners(session);
@@ -1124,16 +1148,13 @@ export function registerSessionRoutes(
 
     try {
       // Auto-detect completion phrase from CLAUDE.md BEFORE starting (only if globally enabled and not explicitly disabled by user)
-      // Ralph tracker is not supported for opencode / codex / gemini / antigravity / pi sessions.
-      // Keep this list in step with isExternalCliMode(): _processExpensiveParsers() returns early
-      // for those modes, so a tracker enabled here would never be fed, and the session would
-      // still report ralphEnabled + Ralph UI state that no other external CLI shows.
+      // Ralph tracker is not supported for external CLI sessions (opencode/codex/gemini/
+      // antigravity/pi/grok/etc — anything isExternalCliMode() covers):
+      // _processExpensiveParsers() returns early for those modes, so a tracker enabled
+      // here would never be fed, and the session would still report ralphEnabled + Ralph
+      // UI state that no other external CLI shows.
       if (
-        session.mode !== 'opencode' &&
-        session.mode !== 'codex' &&
-        session.mode !== 'gemini' &&
-        session.mode !== 'antigravity' &&
-        session.mode !== 'pi' &&
+        !isExternalCliMode(session.mode) &&
         ctx.store.getConfig().ralphEnabled &&
         !session.ralphTracker.autoEnableDisabled
       ) {
@@ -1874,6 +1895,22 @@ export function registerSessionRoutes(
       return await readCodexLastResponse(session, codexQuery.context === 'full');
     }
 
+    // OpenCode / Gemini / Antigravity / Pi render their own TUIs and write no
+    // Claude transcript, so the scan below finds nothing and the response viewer
+    // renders permanently empty for them. Segment the terminal buffer instead —
+    // the pane IS the transcript for these CLIs. Codex is already handled above,
+    // where a real rollout file is the better source.
+    if (isExternalCliTranscriptMode(session.mode)) {
+      const externalQuery = req.query as { context?: string };
+      const blocks = parseExternalCliTranscript(session.terminalBuffer, session.mode);
+      return {
+        text: getLastTranscriptResponse(blocks),
+        timestamp: '',
+        hasContext: blocks.length > 0,
+        messages: externalQuery.context === 'full' ? blocks : undefined,
+      };
+    }
+
     // Scan ~/.claude/projects/*/ for the transcript file
     const projectsDir = join(process.env.HOME || '/tmp', '.claude', 'projects');
 
@@ -2246,18 +2283,17 @@ export function registerSessionRoutes(
 
   // Query params:
   //   tail=<bytes> - Only return last N bytes (faster initial load)
-  //   full=1       - Full page reload: replay the entire tmux scrollback (COD-47)
-  app.get('/api/sessions/:id/terminal', async (req) => {
+  //   full=1       - Explicitly request the entire tmux scrollback (COD-47)
+  app.get('/api/sessions/:id/terminal', async (req, reply) => {
+    const routeStartedAt = performance.now();
     const { id } = req.params as { id: string };
     const query = req.query as { tail?: string; full?: string };
     const session = findSessionOrFail(ctx, id, req);
 
-    // `full=1` is the EXPLICIT full-reload signal (COD-47): the browser reloaded
-    // the page and wants the whole scroll history back, so we capture the ENTIRE
-    // tmux scrollback and the user gets back history that scrolled off Codeman's
-    // byte buffer. Requests WITHOUT it — tab switches (`tail=`) and the legacy
-    // no-param callers (response-viewer fallback, clearTerminal refresh) — keep
-    // the fast visible-frame capture.
+    // `full=1` is the EXPLICIT full-history signal (COD-47): capture the ENTIRE
+    // tmux scrollback so history beyond the server byte buffer can be recovered.
+    // Requests WITHOUT it — shell selection/tab switches (`tail=`) and legacy
+    // no-param callers — keep the fast visible-frame capture.
     const tailBytes = query.tail ? parseInt(query.tail, 10) : 0;
     const isFullReload = query.full === '1' || query.full === 'true';
     const { tmuxHistoryLimit, terminalBufferMaxBytes } = await ctx.getTerminalHistoryConfig();
@@ -2270,6 +2306,7 @@ export function registerSessionRoutes(
     // overlap. `captureActivePaneBuffer` is a no-op ('') under test mode and
     // returns null when unavailable, in which case we fall back to history.
     const muxName = session.muxName;
+    const captureStartedAt = performance.now();
     const liveMuxBuffer =
       muxName && typeof ctx.mux.captureActivePaneBuffer === 'function'
         ? ctx.mux.captureActivePaneBuffer(
@@ -2279,6 +2316,7 @@ export function registerSessionRoutes(
               : undefined
           )
         : null;
+    const captureFinishedAt = performance.now();
     const hasLiveMuxBuffer = liveMuxBuffer !== null && liveMuxBuffer.length > 0;
     const source: 'history' | 'mux-visible' | 'mux-full-history' = hasLiveMuxBuffer
       ? isFullReload
@@ -2381,6 +2419,14 @@ export function registerSessionRoutes(
 
     // Remove Ctrl+L and leading whitespace (cheap on tailed subset)
     cleanBuffer = cleanBuffer.replace(CTRL_L_PATTERN, '').replace(LEADING_WHITESPACE_PATTERN, '');
+
+    const finishedAt = performance.now();
+    reply.header(
+      'Server-Timing',
+      `capture;dur=${(captureFinishedAt - captureStartedAt).toFixed(1)}, ` +
+        `prepare;dur=${(finishedAt - captureFinishedAt).toFixed(1)}, ` +
+        `total;dur=${(finishedAt - routeStartedAt).toFixed(1)}`
+    );
 
     return {
       terminalBuffer: cleanBuffer,
@@ -2600,7 +2646,7 @@ export function registerSessionRoutes(
       allowedTools: runClaudeModeConfig.allowedTools,
       owner: runOwner,
     });
-    ctx.addSession(session);
+    await ctx.addSession(session);
     ctx.store.incrementSessionsCreated();
     ctx.persistSessionState(session);
     await ctx.setupSessionListeners(session);
@@ -2643,6 +2689,7 @@ export function registerSessionRoutes(
       geminiConfig,
       antigravityConfig,
       piConfig,
+      grokConfig,
       envOverrides,
       effort,
       parentSessionId,
@@ -2691,6 +2738,7 @@ export function registerSessionRoutes(
         geminiConfig ||
         antigravityConfig ||
         piConfig ||
+        grokConfig ||
         openCodeConfig
       ) {
         return createErrorResponse(
@@ -2723,6 +2771,7 @@ export function registerSessionRoutes(
         geminiConfig ||
         antigravityConfig ||
         piConfig ||
+        grokConfig ||
         openCodeConfig
       ) {
         return createErrorResponse(
@@ -2783,7 +2832,7 @@ export function registerSessionRoutes(
       }
     } else {
       // Pre-flight availability check for an external CLI (opencode/codex/gemini/
-      // antigravity/pi today — see checkExternalCliAvailable's own doc comment). Only
+      // antigravity/pi/grok today — see checkExternalCliAvailable's own doc comment). Only
       // reached for a LOCAL case (the remote/docker branches above return earlier), which
       // is why the LOCAL resolver gate applies here and not there.
       const unavailable = checkExternalCliAvailable(mode);
@@ -2835,8 +2884,9 @@ export function registerSessionRoutes(
         writeFileSync(join(resolvedCasePath, 'CLAUDE.md'), claudeMd);
 
         // Write .claude/settings.local.json with hooks for desktop notifications
-        // (Claude-specific — OpenCode, Codex, Gemini, and Antigravity use their own systems)
-        if (mode !== 'opencode' && mode !== 'codex' && mode !== 'gemini' && mode !== 'antigravity' && mode !== 'pi') {
+        // (Claude-specific — every external CLI, isExternalCliMode()'s own set, uses its
+        // own systems instead)
+        if (!isExternalCliMode(mode)) {
           await writeHooksConfig(resolvedCasePath);
         }
 
@@ -2902,16 +2952,7 @@ export function registerSessionRoutes(
 
     // Strip stale disk entries for keys this request is actively setting (Claude only —
     // see POST /api/sessions for full rationale).
-    if (
-      mode !== 'opencode' &&
-      mode !== 'codex' &&
-      mode !== 'gemini' &&
-      mode !== 'antigravity' &&
-      mode !== 'pi' &&
-      !remote &&
-      envOverrides &&
-      Object.keys(envOverrides).length > 0
-    ) {
+    if (!isExternalCliMode(mode) && !remote && envOverrides && Object.keys(envOverrides).length > 0) {
       await stripCaseEnvKeys(resolvedCasePath, Object.keys(envOverrides));
     }
 
@@ -2930,9 +2971,11 @@ export function registerSessionRoutes(
               ? antigravityConfig?.model
               : mode === 'pi'
                 ? piConfig?.model
-                : mode !== 'shell'
-                  ? qsModelConfig?.defaultModel || undefined
-                  : undefined;
+                : mode === 'grok'
+                  ? grokConfig?.model
+                  : mode !== 'shell'
+                    ? qsModelConfig?.defaultModel || undefined
+                    : undefined;
     const qsClaudeModeConfig = await ctx.getClaudeModeConfig();
     const qsEffectiveClaudeMode = await resolveClaudeModeForUsername(qsClaudeModeConfig.claudeMode, owner);
     // Section 6.3: clamp Codex/Gemini/Antigravity bypass switches for a non-granted owner (no-op single-user/granted).
@@ -2941,7 +2984,8 @@ export function registerSessionRoutes(
       geminiConfig: qsGatedGeminiConfig,
       antigravityConfig: qsGatedAntigravityConfig,
       piConfig: qsGatedPiConfig,
-    } = await clampExternalCliBypassForOwner(owner, codexConfig, geminiConfig, antigravityConfig, piConfig);
+      grokConfig: qsGatedGrokConfig,
+    } = await clampExternalCliBypassForOwner(owner, codexConfig, geminiConfig, antigravityConfig, piConfig, grokConfig);
     const qsTerminalHistoryConfig = await ctx.getTerminalHistoryConfig();
     const session = new Session({
       workingDir: resolvedCasePath,
@@ -2959,6 +3003,7 @@ export function registerSessionRoutes(
       geminiConfig: mode === 'gemini' ? qsGatedGeminiConfig : undefined,
       antigravityConfig: mode === 'antigravity' ? qsGatedAntigravityConfig : undefined,
       piConfig: mode === 'pi' ? qsGatedPiConfig : undefined,
+      grokConfig: mode === 'grok' ? qsGatedGrokConfig : undefined,
       envOverrides,
       effort,
       remote,
@@ -2978,7 +3023,7 @@ export function registerSessionRoutes(
       }
     }
 
-    ctx.addSession(session);
+    await ctx.addSession(session);
     ctx.store.incrementSessionsCreated();
     ctx.persistSessionState(session);
     await ctx.setupSessionListeners(session);
@@ -3009,7 +3054,7 @@ export function registerSessionRoutes(
         });
         ctx.broadcast(SseEvent.SessionInteractive, { id: session.id, mode: 'shell' });
       } else {
-        // 'claude', 'opencode', 'codex', 'gemini', and 'antigravity' modes use startInteractive()
+        // every non-shell mode ('claude', the external CLIs) uses startInteractive()
         await session.startInteractive();
         getLifecycleLog().log({
           event: 'started',

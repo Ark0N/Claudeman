@@ -302,9 +302,13 @@ describe('CleanupManager', () => {
     });
 
     it('logs errors during disposal', () => {
-      cm.registerCleanup('timer', () => {
-        throw new Error('fail');
-      }, 'bad cleanup');
+      cm.registerCleanup(
+        'timer',
+        () => {
+          throw new Error('fail');
+        },
+        'bad cleanup'
+      );
 
       const errorSpy = vi.spyOn(console, 'error').mockImplementation(() => {});
 

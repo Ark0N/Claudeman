@@ -536,10 +536,10 @@ class CodemanApp {
     this._initGeneration = 0;     // dedup concurrent handleInit calls
     this._initFallbackTimer = null; // fallback timer if SSE init doesn't arrive
     this._selectGeneration = 0;   // cancel stale selectSession loads
-    // Sessions whose full tmux scrollback has already been replayed this page load
-    // (COD-47). Tracked PER SESSION rather than as a single "first load" flag: the
-    // flag was consumed by whichever session auto-selected at page load, so every
-    // OTHER tab started life with one visible frame of history (issue #205).
+    // Non-shell sessions whose full tmux scrollback has already been replayed this
+    // page load (COD-47). Shells deliberately start from a bounded tail because
+    // their scrollback can be very large; full history stays available on demand.
+    // Tracked PER SESSION rather than as a single "first load" flag (issue #205).
     this._fullHistoryLoaded = new Set();
     // Cooldown per session for the scroll-to-top "load more history" re-pull.
     this._fullHistoryRepullAt = new Map(); // Map<sessionId, timestamp>
@@ -919,6 +919,8 @@ class CodemanApp {
     // Calls applyTabWrapSettings() itself (it owns tabs-two-rows / tabs-show-folder)
     // and then applies the sidebar variant on top — do not call both.
     this.applySessionListLayout();
+    this.applyTabOrientation();
+    this.initTabRailResize?.();
     this.applyMonitorVisibility();
     this.applyLineageLineSettings?.();
     this._installLineageStripScrollListener?.();
@@ -986,6 +988,11 @@ class CodemanApp {
       this.applySkin();
       this.applyLocalization();
       this.applySessionListLayout();
+      // A fresh device seeding tabOrientation from the server would otherwise
+      // show no rail until a resize or a settings save: the boot-time call ran
+      // before this async load resolved. Must stay AFTER applySessionListLayout
+      // (same ordering rule as the settings-save path).
+      this.applyTabOrientation?.();
       this.applyMonitorVisibility();
       this.applyLineageLineSettings?.();
       // ultracodeFloatingWindows syncs from the server (non-display key), but on a
@@ -2247,9 +2254,11 @@ class CodemanApp {
           ? 'Antigravity'
           : mode === 'pi'
             ? 'Pi'
-            : mode === 'opencode'
-              ? 'OpenCode'
-              : 'Claude';
+            : mode === 'grok'
+              ? 'Grok'
+              : mode === 'opencode'
+                ? 'OpenCode'
+                : 'Claude';
   }
 
   async toggleResponseViewer() {
@@ -3760,6 +3769,21 @@ class CodemanApp {
     return layout === 'sidebar' || layout === 'sidebar-rich' ? layout : 'header';
   }
 
+  resolveSessionSidebarFontSize(value) {
+    const size = Number(value);
+    // Default 12, matching the sidebar's historical 0.75rem name size: a user
+    // who never touches the slider must not get silently restyled (14 here
+    // bumped every existing sidebar install on the rail feature's release).
+    return Number.isInteger(size) && size >= 11 && size <= 18 ? size : 12;
+  }
+
+  applySessionSidebarFontSize(settings = null) {
+    const resolvedSettings = settings ?? this.loadAppSettingsFromStorage();
+    const size = this.resolveSessionSidebarFontSize(resolvedSettings?.sessionSidebarFontSize);
+    document.documentElement.style.setProperty('--session-sidebar-name-font-size', `${size}px`);
+    return size;
+  }
+
   /**
    * Reads the APPLIED layout off <html>, not the settings blob: this is called
    * per dragover event and per tab in render loops, and getSessionListLayout()
@@ -3769,6 +3793,26 @@ class CodemanApp {
    */
   isSessionSidebarActive() {
     return document.documentElement.dataset.sessionList === 'sidebar';
+  }
+
+  _tabOrientation() {
+    return document.documentElement.getAttribute('data-tab-orientation') === 'vertical' ? 'vertical' : 'horizontal';
+  }
+
+  /**
+   * True when the session list renders as a vertical column: the sidebar layout
+   * OR the vertical tab rail. Axis decisions (drag insertion side, active-tab
+   * scroll-into-view, floating-window anchors) must use THIS, not
+   * isSessionSidebarActive() alone — the rail leaves data-session-list at
+   * 'header', so the sidebar predicate reads a vertical rail as horizontal.
+   */
+  _isVerticalTabList() {
+    return this.isSessionSidebarActive() || this._tabOrientation() === 'vertical';
+  }
+
+  shouldInlineSessionActions() {
+    if (this.isSessionSidebarActive()) return !this.isSessionSidebarCollapsed();
+    return this._tabOrientation() === 'vertical' && !document.documentElement.classList.contains('tab-rail-compact');
   }
 
   /**
@@ -3863,17 +3907,22 @@ class CodemanApp {
    */
   applySessionListLayout() {
     const mode = this.getSessionListLayout();
+    this.applySessionSidebarFontSize();
     // 'sidebar' and 'sidebar-rich' are the same column; only row detail differs.
     const sidebar = mode === 'sidebar' || mode === 'sidebar-rich';
     const collapsed = this.isSessionSidebarCollapsed();
     const prevMode = document.documentElement.dataset.sessionList;
     const prevDetail = document.documentElement.dataset.sidebarDetail;
+    const prevCollapsed = document.documentElement.dataset.sidebar;
     const tabsEl = document.getElementById('sessionTabs');
     const headerHost = document.getElementById('sessionTabsHost');
     const sidebarList = document.getElementById('sessionSidebarList');
     if (!tabsEl || !headerHost || !sidebarList) return;
 
-    const host = sidebar ? sidebarList : headerHost;
+    const rail = document.getElementById('tabRail');
+    const railOwnsTabs =
+      !sidebar && document.documentElement.getAttribute('data-tab-orientation') === 'vertical';
+    const host = sidebar ? sidebarList : railOwnsTabs && rail ? rail : headerHost;
     if (tabsEl.parentElement !== host) host.appendChild(tabsEl);
 
     document.documentElement.dataset.sessionList = sidebar ? 'sidebar' : 'header';
@@ -3882,7 +3931,7 @@ class CodemanApp {
     // would let the sidebar CSS style a strip that has nothing to style.
     document.documentElement.dataset.sidebarDetail = mode === 'sidebar-rich' ? 'rich' : 'simple';
     document.documentElement.dataset.sidebar = collapsed ? 'collapsed' : 'expanded';
-    tabsEl.setAttribute('aria-orientation', sidebar ? 'vertical' : 'horizontal');
+    tabsEl.setAttribute('aria-orientation', host === headerHost ? 'horizontal' : 'vertical');
 
     const btn = document.getElementById('sidebarToggleBtn');
     if (btn) {
@@ -3935,7 +3984,8 @@ class CodemanApp {
     const layoutChanged =
       prevMode !== document.documentElement.dataset.sessionList ||
       prevDetail !== document.documentElement.dataset.sidebarDetail;
-    if (layoutChanged && prevTall === this._tallTabsEnabled) {
+    const collapseChanged = prevCollapsed !== document.documentElement.dataset.sidebar;
+    if ((layoutChanged || collapseChanged) && prevTall === this._tallTabsEnabled) {
       this._fullRenderSessionTabs();
     }
     // tabs-auto-wrap is measured, not derived from settings — updateTabOverflowMode()
@@ -4239,12 +4289,13 @@ class CodemanApp {
       container.querySelector('.session-tab.active');
     if (!tab) return;
 
-    // Sidebar layout: the list scrolls VERTICALLY in its own scroller, so the
-    // horizontal computeTabScrollLeft math below would always no-op (scrollLeft
-    // pinned at 0). With 25+ sessions the active row is routinely below the
-    // fold; 'nearest' never scrolls when it is already visible, and only the
-    // list's own scroller moves — the drawer and document stay put.
-    if (this.isSessionSidebarActive()) {
+    // Sidebar layout AND the vertical rail: the list scrolls VERTICALLY in its
+    // own scroller, so the horizontal computeTabScrollLeft math below would
+    // always no-op (scrollLeft pinned at 0). With 25+ sessions the active row
+    // is routinely below the fold; 'nearest' never scrolls when it is already
+    // visible, and only the list's own scroller moves — drawer/rail and
+    // document stay put.
+    if (this._isVerticalTabList()) {
       tab.scrollIntoView({ block: 'nearest' });
       return;
     }
@@ -4275,12 +4326,13 @@ class CodemanApp {
 
   /**
    * Where a floating window (subagent / ultracode) attaches to its parent tab.
-   * Header strip: below the tab, connector runs vertically. Sidebar: to the
-   * RIGHT of the tab, connector runs horizontally — otherwise the window spawns
-   * on top of the sidebar and its bezier loops backwards underneath it.
+   * Header strip: below the tab, connector runs vertically. Sidebar AND the
+   * vertical rail: to the RIGHT of the tab, connector runs horizontally —
+   * otherwise the window spawns on top of the list and its bezier loops
+   * backwards underneath it.
    */
   _tabAnchor(rect) {
-    if (this.isSessionSidebarActive()) {
+    if (this._isVerticalTabList()) {
       return {
         x: rect.right,
         y: rect.top + rect.height / 2,
@@ -4478,9 +4530,17 @@ class CodemanApp {
         const nameEl = tab.querySelector('.tab-name');
         if (nameEl) {
           const _p = parseSessionPrefix(name);
-          const _label = _p && _p.suffix ? _p.suffix : name;
-          if (nameEl.textContent !== _label) {
-            nameEl.textContent = _label;
+          if (nameEl.dataset.fullName !== name) {
+            nameEl.replaceChildren();
+            if (_p && _p.suffix) {
+              const prefix = document.createElement('span');
+              prefix.className = 'tab-name-prefix';
+              prefix.textContent = `${_p.prefix}: `;
+              nameEl.append(prefix, document.createTextNode(_p.suffix));
+            } else {
+              nameEl.textContent = name;
+            }
+            nameEl.dataset.fullName = name;
             tab.title = _p && _p.suffix
               ? (session.workingDir ? `${_p.prefix} (${session.workingDir})` : _p.prefix)
               : (session.workingDir || '');
@@ -4531,9 +4591,11 @@ class CodemanApp {
           // Need to add badge - insert before the action-icon overlay so the
           // badge stays a direct child of the tab (outside .tab-actions)
           const badgeHtml = this.renderSubagentTabBadge(id, minimizedAgents);
-          const actionsEl = tab.querySelector('.tab-actions');
+          const actionsEl = tab.querySelector(':scope > .tab-actions');
           if (actionsEl) {
             actionsEl.insertAdjacentHTML('beforebegin', badgeHtml);
+          } else {
+            tab.insertAdjacentHTML('beforeend', badgeHtml);
           }
         } else if (minimizedCount === 0 && subagentBadgeEl) {
           // Count went to 0 - remove badge
@@ -4563,11 +4625,12 @@ class CodemanApp {
     // The full-render path already redraws the connection SVG; this incremental
     // one does not, and a badge appearing widens a tab and shifts every tab after
     // it, sliding the lineage arcs off their anchors. Only pay for it when there
-    // is something anchored to tab rects: lineage arcs, or — in sidebar layout,
-    // where lineage is skipped and the edge count stays 0 — the subagent/
-    // ultracode connectors, whose rows a badge changes the HEIGHT of. Same
-    // widening as the strip-scroll listener in session-lineage.js.
-    if (this._lineageEdgeCount > 0 || this.isSessionSidebarActive()) this.updateConnectionLines();
+    // is something anchored to tab rects: lineage arcs, or — in a VERTICAL list
+    // (sidebar, where lineage is skipped and the edge count stays 0, or the
+    // rail, which can show connectors with zero lineage edges too) — the
+    // subagent/ultracode connectors, whose rows a badge changes the HEIGHT of.
+    // Same widening as the strip-scroll listener in session-lineage.js.
+    if (this._lineageEdgeCount > 0 || this._isVerticalTabList()) this.updateConnectionLines();
 
     this.applySidebarFilter(this._sidebarFilter);
   }
@@ -4590,6 +4653,17 @@ class CodemanApp {
     const settings = this.loadAppSettingsFromStorage();
     const defaults = this.getDefaultSettings();
     const manualTwoRows = deviceType === 'desktop' ? (settings.tabTwoRows ?? defaults.tabTwoRows ?? false) : false;
+
+    const orientation = window.CodemanTabOverflow?.resolveTabOrientation
+      ? window.CodemanTabOverflow.resolveTabOrientation({
+          deviceType,
+          setting: settings.tabOrientation ?? defaults.tabOrientation ?? 'horizontal',
+        })
+      : 'horizontal';
+    if (orientation === 'vertical') {
+      container.classList.remove('tabs-auto-wrap');
+      return;
+    }
 
     if (manualTwoRows || deviceType !== 'desktop') {
       container.classList.remove('tabs-auto-wrap');
@@ -4631,6 +4705,7 @@ class CodemanApp {
   }
 
   _fullRenderSessionTabs() {
+    this.closeTabRailActionMenu?.();
     if (this._inlineRenameActive) return;
     const container = this.$('sessionTabs');
 
@@ -4708,7 +4783,9 @@ class CodemanApp {
       // JUST the description on the tab; the generated w<n>-<case> id moves to the
       // tooltip and stays visible in the session settings modal.
       const parsedName = parseSessionPrefix(name);
-      const tabLabel = parsedName && parsedName.suffix ? parsedName.suffix : name;
+      const tabLabel = parsedName && parsedName.suffix
+        ? `<span class="tab-name-prefix">${escapeHtml(parsedName.prefix)}: </span>${escapeHtml(parsedName.suffix)}`
+        : escapeHtml(name);
       const tabTooltip = parsedName && parsedName.suffix
         ? (session.workingDir ? `${parsedName.prefix} (${session.workingDir})` : parsedName.prefix)
         : (session.workingDir || '');
@@ -4723,14 +4800,18 @@ class CodemanApp {
         ? ` data-tab-state="${richRow.state}" data-tab-meta-sig="${richRow.state}:${richRow.since ? richRow.since.at : 0}:${richRow.createdAt}"`
         : '';
 
+      const inlineSessionActions = this.shouldInlineSessionActions();
+      const tabActionsHtml = `<span class="tab-actions"><span class="tab-gear" onclick="event.stopPropagation(); app.openSessionOptions(${escapeHtml(JSON.stringify(id))})" title="Session options" aria-label="Session options" tabindex="0">&#x2699;</span><span class="tab-detach" onclick="event.stopPropagation(); app.detachSession(${escapeHtml(JSON.stringify(id))})" title="Open in a new window" aria-label="Open session in a new window" tabindex="0">&#x29C9;</span><span class="tab-close" onclick="event.stopPropagation(); app.requestCloseSession(${escapeHtml(JSON.stringify(id))})" title="Close session" aria-label="Close session" tabindex="0">&times;</span><button type="button" class="tab-more" onclick="event.stopPropagation(); app.openTabRailActionMenu(event, ${escapeHtml(JSON.stringify(id))})" title="Session actions" aria-label="Session actions">&#x22EF;</button></span>`;
+
       parts.push(`<div class="session-tab ${isActive ? 'active' : ''}${alertClass}${richClass}${loadState ? ' tab-loading' : ''}${this.hasTabDetachOverride(id) ? ' tab-show-detach' : ''}"${richData} data-id="${id}" data-color="${color}" ${loadState ? `data-load-phase="${escapeHtml(loadState.phase)}"` : ''} onclick="app.handleSessionTabClick(event, ${escapeHtml(JSON.stringify(id))})" oncontextmenu="event.preventDefault(); app.startInlineRename(${escapeHtml(JSON.stringify(id))})" tabindex="0" role="tab" aria-selected="${isActive ? 'true' : 'false'}" aria-busy="${loadState ? 'true' : 'false'}" aria-label="${escapeHtml(name)} session" ${tabTooltip ? `title="${escapeHtml(tabTooltip)}"` : ''}>
           ${_tabIdx < 9 ? '<span class="tab-number">' + (_tabIdx + 1) + '</span>' : ''}
           ${loadState ? '<span class="tab-load-spinner" aria-hidden="true"></span>' : ''}
           <span class="tab-status ${status}" aria-hidden="true"></span>
           <span class="tab-info">
             <span class="tab-name-row">
-              ${mode === 'shell' ? '<span class="tab-mode shell" aria-hidden="true">sh</span>' : mode === 'opencode' ? '<span class="tab-mode opencode" aria-hidden="true">oc</span>' : mode === 'codex' ? '<span class="tab-mode codex" aria-hidden="true">cx</span>' : mode === 'gemini' ? '<span class="tab-mode gemini" aria-hidden="true">gm</span>' : mode === 'antigravity' ? '<span class="tab-mode antigravity" aria-hidden="true">ag</span>' : mode === 'pi' ? '<span class="tab-mode pi" aria-hidden="true">pi</span>' : ''}
-              <span class="tab-name" data-session-id="${id}">${escapeHtml(tabLabel)}</span>
+              ${mode === 'shell' ? '<span class="tab-mode shell" aria-hidden="true">sh</span>' : mode === 'opencode' ? '<span class="tab-mode opencode" aria-hidden="true">oc</span>' : mode === 'codex' ? '<span class="tab-mode codex" aria-hidden="true">cx</span>' : mode === 'gemini' ? '<span class="tab-mode gemini" aria-hidden="true">gm</span>' : mode === 'antigravity' ? '<span class="tab-mode antigravity" aria-hidden="true">ag</span>' : mode === 'pi' ? '<span class="tab-mode pi" aria-hidden="true">pi</span>' : mode === 'grok' ? '<span class="tab-mode grok" aria-hidden="true">gk</span>' : ''}
+              <span class="tab-name" data-session-id="${id}" data-full-name="${escapeHtml(name)}">${tabLabel}</span>
+              ${inlineSessionActions ? tabActionsHtml : ''}
               <span class="tab-detached-badge" aria-hidden="true">detached</span>
             </span>
             ${showFolder ? `<span class="tab-folder">\u{1F4C1} ${escapeHtml(folderName)}</span>` : ''}
@@ -4739,7 +4820,7 @@ class CodemanApp {
           ${hasRunningTasks ? `<span class="tab-badge" onclick="event.stopPropagation(); app.toggleTaskPanel()" aria-label="${taskStats.running} running tasks">${taskStats.running}</span>` : ''}
           ${subagentBadge}
           ${ultracodeBadge}
-          <span class="tab-actions"><span class="tab-gear" onclick="event.stopPropagation(); app.openSessionOptions(${escapeHtml(JSON.stringify(id))})" title="Session options" aria-label="Session options" tabindex="0">&#x2699;</span><span class="tab-detach" onclick="event.stopPropagation(); app.detachSession(${escapeHtml(JSON.stringify(id))})" title="Open in a new window" aria-label="Open session in a new window" tabindex="0">&#x29C9;</span><span class="tab-close" onclick="event.stopPropagation(); app.requestCloseSession(${escapeHtml(JSON.stringify(id))})" title="Close session" aria-label="Close session" tabindex="0">&times;</span></span>
+          ${inlineSessionActions ? '' : tabActionsHtml}
         </div>`);
       _tabIdx++;
     }
@@ -4962,9 +5043,9 @@ class CodemanApp {
         // inside the handler — these listeners survive a layout flip between
         // renders, so capturing the axis at bind time would go stale.
         // drag-over-left/-right keep their names and now read as before/after;
-        // the sidebar CSS just draws them as top/bottom edges.
+        // the sidebar/rail CSS just draws them as top/bottom edges.
         const rect = tab.getBoundingClientRect();
-        const insertBefore = this.isSessionSidebarActive()
+        const insertBefore = this._isVerticalTabList()
           ? e.clientY < rect.top + rect.height / 2
           : e.clientX < rect.left + rect.width / 2;
 
@@ -4988,7 +5069,7 @@ class CodemanApp {
 
         // Determine insertion position (same axis rule as the dragover handler)
         const rect = tab.getBoundingClientRect();
-        const insertBefore = this.isSessionSidebarActive()
+        const insertBefore = this._isVerticalTabList()
           ? e.clientY < rect.top + rect.height / 2
           : e.clientX < rect.left + rect.width / 2;
 
@@ -5272,6 +5353,22 @@ class CodemanApp {
     this.terminal.write('\x1b[3J\x1b[H\x1b[2J');
   }
 
+  _recordTerminalLoadTiming(timing) {
+    this._lastTerminalLoadTiming = timing;
+    console.info('[TERMINAL-PERF]', timing);
+    const resetAndParseMs =
+      (timing.cacheResetAndParseMs || 0) +
+      (timing.freshResetAndParseMs || 0) +
+      (timing.resetAndParseMs || 0);
+    const totalMs = timing.selectDoneMs ?? timing.totalMs ?? timing.selectToReplayCompleteMs ?? 0;
+    _crashDiag.log(
+      `TERMINAL_LOAD: ${timing.trigger} ${timing.full ? 'full' : 'tail'} ${timing.chars} chars ` +
+      `ttfb=${timing.ttfbMs.toFixed(0)}ms body+json=${timing.bodyAndJsonMs.toFixed(0)}ms ` +
+      `reset+parse=${resetAndParseMs.toFixed(0)}ms total=${totalMs.toFixed(0)}ms ` +
+      `server="${timing.serverTiming}"${timing.refused ? ' refused-downgrade' : ''}`
+    );
+  }
+
   /**
    * "Load more history": re-pull the whole tmux scrollback when the user scrolls up
    * while already at the top of what the browser has.
@@ -5300,6 +5397,11 @@ class CodemanApp {
     const sessionId = this.activeSessionId;
     if (!sessionId || this._fullHistoryRepullInFlight || this._isLoadingBuffer) return;
     if (this.detachedSessions?.has(sessionId)) return;
+    const session = this.sessions.get(sessionId);
+    // A shell's full capture can be many megabytes. Replaying it from an
+    // ordinary scroll gesture blocks xterm's main thread, so keep that cost
+    // behind the explicit "Load full history" button.
+    if (!force && session?.mode === 'shell') return;
     const now = Date.now();
     // Momentum scrolling fires this dozens of times per flick, and a burst of new
     // output is the normal reason to want a re-pull, so cooldown rather than latch.
@@ -5311,13 +5413,32 @@ class CodemanApp {
     this._fullHistoryRepullAt.set(sessionId, now);
     this._fullHistoryRepullInFlight = true;
     try {
+      const requestStartedAt = performance.now();
       const res = await fetch(`/api/sessions/${sessionId}/terminal?full=1`);
+      const headersReceivedAt = performance.now();
       const payload = (await res.json())?.data ?? {};
+      const bodyParsedAt = performance.now();
       const buffer = payload.terminalBuffer;
+      const timing = {
+        trigger: force ? 'full-history-button' : 'full-history-scroll',
+        mode: session?.mode || 'unknown',
+        full: true,
+        source: payload.source || 'unknown',
+        chars: buffer?.length || 0,
+        ttfbMs: headersReceivedAt - requestStartedAt,
+        bodyAndJsonMs: bodyParsedAt - headersReceivedAt,
+        resetAndParseMs: 0,
+        totalMs: 0,
+        serverTiming: res.headers?.get?.('server-timing') || '',
+        refused: false,
+      };
       // Bail on a tab switch mid-fetch: writing here would paint another session's
       // history into the terminal the user is now looking at.
       if (!buffer || this.activeSessionId !== sessionId) return;
       if (this._replayWouldShrinkBuffer(buffer)) {
+        timing.refused = true;
+        timing.totalMs = performance.now() - requestStartedAt;
+        this._recordTerminalLoadTiming(timing);
         (this._fullHistoryRepullUseless ||= new Set()).add(sessionId);
         this._logScrollRouting?.('repull-refused-downgrade');
         // The browser already holds more than tmux can give back, so there is
@@ -5328,17 +5449,32 @@ class CodemanApp {
       this._setHistoryTruncation(sessionId, payload);
       this._fullHistoryRepullUseless?.delete(sessionId);
       const rowsBefore = this.terminal.buffer.active.length;
+      const replayStartedAt = performance.now();
       this._resetTerminalForReplay();
-      await this.chunkedTerminalWrite(buffer, TERMINAL_CHUNK_SIZE, sessionId);
-      if (this.activeSessionId !== sessionId) return;
-      this.terminalBufferCache.set(sessionId, buffer);
+      const {
+        parsedAt,
+        bufferLength: parsedBufferLength,
+        completed,
+      } = await this.chunkedTerminalWrite(buffer, TERMINAL_CHUNK_SIZE, sessionId);
+      timing.resetAndParseMs = parsedAt - replayStartedAt;
+      if (!completed || this.activeSessionId !== sessionId) return;
+      // Keep shell tab restores bounded too. A user-triggered full-history pull
+      // may be tens of MB; caching it would replay that whole payload again on
+      // the next tab switch before the normal 1MB tail fetch replaces it.
+      if (this.sessions.get(sessionId)?.mode !== 'shell') {
+        this.terminalBufferCache.set(sessionId, buffer);
+      } else {
+        this.terminalBufferCache.delete(sessionId);
+      }
       // Hold the user's place. The replay is a superset that grew the buffer
       // UPWARD, so what used to be row 0 (what they were looking at) is now `delta`
       // rows down; scrolling there reveals the recovered history above it instead
       // of teleporting them to the bottom the way a normal buffer load does.
-      const delta = this.terminal.buffer.active.length - rowsBefore;
+      const delta = parsedBufferLength - rowsBefore;
       if (delta > 0) this.terminal.scrollToLine(delta);
       else this.terminal.scrollToTop();
+      timing.totalMs = performance.now() - requestStartedAt;
+      this._recordTerminalLoadTiming(timing);
     } catch {
       // Transient (offline, 5xx) — the next scroll-up past the cooldown retries.
     } finally {
@@ -5618,6 +5754,7 @@ class CodemanApp {
     // COD-144: track whether the load painted nothing (empty fetch + no cache).
     // For that just-created-session case we flush (not discard) queued SSE events.
     let bufferWasEmpty = false;
+    let cacheResetAndParseMs = 0;
     try {
       // Fit terminal to container BEFORE writing any buffer data.
       // If the browser was resized while viewing another session, the terminal
@@ -5695,23 +5832,30 @@ class CodemanApp {
       // blank and rewrites with fresh data. Skip the cache and write the fresh
       // buffer once for a single clean transition.
       const cachedBuffer = this.terminalBufferCache.get(sessionId);
-      let clearedForBusy = false;
-      if (cachedBuffer && !sessionIsBusy && !restoredSnapshot) {
+      let clearedBeforeFresh = false;
+      if (cachedBuffer && !sessionIsBusy && !restoredSnapshot && session?.mode !== 'shell') {
         _crashDiag.log(`CACHE_WRITE: ${(cachedBuffer.length/1024).toFixed(0)}KB`);
         this._setTerminalLoadState(sessionId, selectGen, 'replaying');
+        const cacheReplayStartedAt = performance.now();
         this._resetTerminalForReplay();
-        await this.chunkedTerminalWrite(cachedBuffer, TERMINAL_CHUNK_SIZE, bufferLoadOwner);
+        const { parsedAt: cacheParsedAt } = await this.chunkedTerminalWrite(
+          cachedBuffer,
+          TERMINAL_CHUNK_SIZE,
+          bufferLoadOwner
+        );
+        cacheResetAndParseMs = cacheParsedAt - cacheReplayStartedAt;
         if (this._isStaleSelect(selectGen)) {
           this._clearTerminalLoadState(sessionId, selectGen);
           return;
         }
         this.terminal.scrollToBottom();
         _crashDiag.log('CACHE_DONE');
-      } else if (sessionIsBusy) {
-        // Clear stale content immediately — fresh buffer is being fetched
+      } else if (sessionIsBusy || session?.mode === 'shell') {
+        // Busy sessions have stale caches. Shell sessions deliberately skip even
+        // an idle cache so a changed 1MB tail cannot cause two back-to-back parses.
         this._resetTerminalForReplay();
-        clearedForBusy = true;
-        _crashDiag.log('CACHE_SKIP_BUSY');
+        clearedBeforeFresh = true;
+        _crashDiag.log(session?.mode === 'shell' ? 'CACHE_SKIP_SHELL' : 'CACHE_SKIP_BUSY');
       }
 
       // Give TUI sessions a short chance to redraw after resize before the
@@ -5729,26 +5873,29 @@ class CodemanApp {
 
       this._setTerminalLoadState(sessionId, selectGen, 'fetching');
       _crashDiag.log('FETCH_START');
-      // The first load OF EACH SESSION this page load requests the full tmux
-      // scrollback (?full=1, COD-47) so history that scrolled off the server's byte
-      // buffer comes back. Later switches to an already-replayed session keep the
-      // fast ?tail= frame path, which is why this is a Set and not a flag: the flag
-      // version gave the full replay to the auto-selected tab and one frame of
-      // history to every other one (issue #205).
-      const useFullHistory = !this._fullHistoryLoaded.has(sessionId);
+      // TUI sessions still get one canonical full replay per page (COD-47/#205).
+      // A shell can retain hundreds of thousands of plain scrollback lines, so
+      // automatically replaying all of them makes tab selection scale with the
+      // entire session. Load its bounded 1MB tail first; the existing truncation
+      // banner action fetches ?full=1 when the user explicitly asks for it.
+      const useFullHistory = session?.mode !== 'shell' && !this._fullHistoryLoaded.has(sessionId);
       if (useFullHistory) this._fullHistoryLoaded.add(sessionId);
+      const fetchStartedAt = performance.now();
       const res = await fetch(
         useFullHistory
           ? `/api/sessions/${sessionId}/terminal?full=1`
           : `/api/sessions/${sessionId}/terminal?tail=${TERMINAL_TAIL_SIZE}`
       );
+      const headersReceivedAt = performance.now();
       if (this._isStaleSelect(selectGen)) {
         this._clearTerminalLoadState(sessionId, selectGen);
         return;
       }
       const data = (await res.json())?.data ?? {};
+      const bodyParsedAt = performance.now();
       _crashDiag.log(`FETCH_DONE: ${data.terminalBuffer ? (data.terminalBuffer.length/1024).toFixed(0) + 'KB' : 'empty'} truncated=${data.truncated}`);
 
+      let freshResetAndParseMs = 0;
       if (data.terminalBuffer) {
         // Skip rewrite if fresh buffer matches cache — avoids visible clear+rewrite flash.
         // On slow connections (mobile 5G), the gap between clear() and chunkedWrite() is
@@ -5757,10 +5904,11 @@ class CodemanApp {
         // something other than the cache, so the fetched buffer must be
         // replayed even when it byte-matches the cache.
         const needsRewrite =
-          restoredSnapshot || clearedForBusy || data.terminalBuffer !== cachedBuffer;
+          restoredSnapshot || clearedBeforeFresh || data.terminalBuffer !== cachedBuffer;
         if (needsRewrite) {
           _crashDiag.log(`REWRITE: ${(data.terminalBuffer.length/1024).toFixed(0)}KB`);
           this._setTerminalLoadState(sessionId, selectGen, 'replaying');
+          const replayStartedAt = performance.now();
           this._resetTerminalForReplay();
           // Truncation is reported OUT OF BAND (#258). This used to write a grey
           // "... earlier output truncated ..." line into the
@@ -5768,7 +5916,12 @@ class CodemanApp {
           // cannot be actioned, and is indistinguishable from real CLI output.
           this._setHistoryTruncation(sessionId, data);
           // Use chunked write for large buffers to avoid UI jank
-          await this.chunkedTerminalWrite(data.terminalBuffer, TERMINAL_CHUNK_SIZE, bufferLoadOwner);
+          const { parsedAt: freshParsedAt } = await this.chunkedTerminalWrite(
+            data.terminalBuffer,
+            TERMINAL_CHUNK_SIZE,
+            bufferLoadOwner
+          );
+          freshResetAndParseMs = freshParsedAt - replayStartedAt;
           if (this._isStaleSelect(selectGen)) {
             this._clearTerminalLoadState(sessionId, selectGen);
             return;
@@ -5777,22 +5930,42 @@ class CodemanApp {
           this.terminal.scrollToBottom();
         }
 
-        // Update cache (cap at 20 entries)
-        this.terminalBufferCache.set(sessionId, data.terminalBuffer);
-        if (this.terminalBufferCache.size > 20) {
-          // Evict oldest entry (first key in Map iteration order)
-          const oldest = this.terminalBufferCache.keys().next().value;
-          this.terminalBufferCache.delete(oldest);
+        // Shell selection always uses a fresh bounded tail, so retaining its
+        // payload only wastes memory and can evict useful TUI caches.
+        if (session?.mode === 'shell') {
+          this.terminalBufferCache.delete(sessionId);
+        } else {
+          // Update cache (cap at 20 entries)
+          this.terminalBufferCache.set(sessionId, data.terminalBuffer);
+          if (this.terminalBufferCache.size > 20) {
+            // Evict oldest entry (first key in Map iteration order)
+            const oldest = this.terminalBufferCache.keys().next().value;
+            this.terminalBufferCache.delete(oldest);
+          }
         }
-      } else if (!cachedBuffer) {
-        // No fresh buffer and no cache — clear any stale content
-        this._resetTerminalForReplay();
+      } else if (!cachedBuffer || clearedBeforeFresh) {
+        // Nothing was painted. If this path was not already cleared above,
+        // clear stale content now; either way queued live output must be flushed.
+        if (!clearedBeforeFresh) this._resetTerminalForReplay();
         bufferWasEmpty = true;
       }
 
+      const terminalLoadTiming = {
+        trigger: 'session-select',
+        mode: session?.mode || 'unknown',
+        full: useFullHistory,
+        source: data.source || 'unknown',
+        chars: data.terminalBuffer?.length || 0,
+        ttfbMs: headersReceivedAt - fetchStartedAt,
+        bodyAndJsonMs: bodyParsedAt - headersReceivedAt,
+        cacheResetAndParseMs,
+        freshResetAndParseMs,
+        selectToReplayCompleteMs: performance.now() - _selStart,
+        serverTiming: res.headers?.get?.('server-timing') || '',
+      };
       // Buffer load complete — unblock live SSE writes. chunkedTerminalWrite calls
-      // _finishBufferLoad internally (discarding queued events to prevent duplicate
-      // content); if we skipped the write (cache hit or empty), call it here.
+      // _finishBufferLoad after ordering the fetched snapshot in xterm; if we skipped
+      // the write (cache hit or empty), call it here.
       // COD-144: when the load painted nothing, FLUSH the queued events instead of
       // discarding — a new session's prompt arrives only as a queued SSE event.
       if (this._isLoadingBuffer) {
@@ -5921,9 +6094,12 @@ class CodemanApp {
       if (typeof KeyboardHandler !== 'undefined' && KeyboardHandler.keyboardVisible) {
         KeyboardHandler.onKeyboardShow();
       }
+      const selectDoneMs = performance.now() - _selStart;
+      terminalLoadTiming.selectDoneMs = selectDoneMs;
+      this._recordTerminalLoadTiming(terminalLoadTiming);
       this._clearTerminalLoadState(sessionId, selectGen);
-      _crashDiag.log(`SELECT_DONE: ${(performance.now() - _selStart).toFixed(0)}ms`);
-      console.log(`[CRASH-DIAG] selectSession DONE: ${sessionId.slice(0,8)} in ${(performance.now() - _selStart).toFixed(0)}ms`);
+      _crashDiag.log(`SELECT_DONE: ${selectDoneMs.toFixed(0)}ms`);
+      console.log(`[CRASH-DIAG] selectSession DONE: ${sessionId.slice(0,8)} in ${selectDoneMs.toFixed(0)}ms`);
     } catch (err) {
       if (this._isLoadingBuffer) this._finishBufferLoad(bufferLoadOwner);
       this._restoringFlushedState = false;
@@ -5934,6 +6110,7 @@ class CodemanApp {
 
   // Shared cleanup for all session data — called from both closeSession() and session:deleted handler
   _cleanupSessionData(sessionId) {
+    this.closeTabRailActionMenu?.();
     // If the deleted session is currently being renamed, abort the rename
     // so the inline <input> doesn't ghost as a stale tab on screen.
     if (this._activeRename?.sessionId === sessionId) {
@@ -6063,7 +6240,9 @@ class CodemanApp {
               ? 'Kill Tmux & Antigravity'
               : session.mode === 'pi'
                 ? 'Kill Tmux & Pi'
-                : 'Kill Tmux & Claude Code';
+                : session.mode === 'grok'
+                  ? 'Kill Tmux & Grok'
+                  : 'Kill Tmux & Claude Code';
     }
 
     document.getElementById('closeConfirmModal').classList.add('active');

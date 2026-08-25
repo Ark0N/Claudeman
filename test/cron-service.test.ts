@@ -434,6 +434,46 @@ describe('CronService', () => {
   });
 
   describe('runNow', () => {
+    it('awaits layout insertion and stops lifecycle work when registration rejects', async () => {
+      const store = makeStore();
+      const sessions = new Map<string, FakeSession>();
+      let rejectRegistration!: (error: Error) => void;
+      const addSession = vi.fn(
+        () =>
+          new Promise<void>((_resolve, reject) => {
+            rejectRegistration = reject;
+          })
+      );
+      const persistSessionState = vi.fn();
+      const setupSessionListeners = vi.fn(async () => {});
+      const service = new CronService({
+        store,
+        sessions,
+        addSession,
+        persistSessionState,
+        setupSessionListeners,
+        broadcast: vi.fn(),
+        getGlobalNiceConfig: vi.fn(async () => undefined),
+        getModelConfig: vi.fn(async () => null),
+        getClaudeModeConfig: vi.fn(async () => ({})),
+        getCheckpointDefaultEnabled: vi.fn(async () => true),
+        mux: { backend: 'tmux' },
+      } as unknown as CronDeps);
+      const job = service.createJob(mkInput({ enabled: false }));
+
+      const pending = service.runNow(job.id);
+      await vi.waitFor(() => expect(addSession).toHaveBeenCalledTimes(1));
+      expect(persistSessionState).not.toHaveBeenCalled();
+      expect(setupSessionListeners).not.toHaveBeenCalled();
+
+      rejectRegistration(new Error('layout capacity exceeded'));
+      const run = await pending;
+      expect(run!.status).toBe('failed');
+      expect(run!.errorMessage).toMatch(/layout capacity exceeded/);
+      expect(persistSessionState).not.toHaveBeenCalled();
+      expect(setupSessionListeners).not.toHaveBeenCalled();
+    });
+
     it('launches regardless of enabled/schedule state', async () => {
       const job = svc.service.createJob(mkInput({ enabled: false }));
       const run = await svc.service.runNow(job.id);

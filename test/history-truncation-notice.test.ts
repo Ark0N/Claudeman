@@ -122,6 +122,18 @@ describe('the in-terminal truncation line is gone (static guard)', () => {
     expect(app).not.toContain('earlier output truncated for performance');
   });
 
+  it('loads a bounded shell tail first and keeps full history user-triggered', () => {
+    const app = readFileSync(resolve(PUBLIC, 'app.js'), 'utf8');
+    expect(app).toContain("session?.mode !== 'shell' && !this._fullHistoryLoaded.has(sessionId)");
+    expect(app).toContain("!restoredSnapshot && session?.mode !== 'shell'");
+    expect(app).toContain('`/api/sessions/${sessionId}/terminal?tail=${TERMINAL_TAIL_SIZE}`');
+    expect(app).toContain('fetch(`/api/sessions/${sessionId}/terminal?full=1`)');
+    expect(app).toContain("if (this.sessions.get(sessionId)?.mode !== 'shell')");
+    expect(app).toContain("if (session?.mode === 'shell')");
+    expect(app).toContain("if (!force && session?.mode === 'shell') return;");
+    expect(app).toContain("trigger: force ? 'full-history-button' : 'full-history-scroll'");
+  });
+
   it('renders the banner through textContent, never innerHTML', () => {
     const app = readFileSync(resolve(PUBLIC, 'app.js'), 'utf8');
     const start = app.indexOf('_renderHistoryTruncationBanner() {');

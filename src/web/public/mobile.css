@@ -972,6 +972,20 @@ html.mobile-init .file-browser-panel {
     border-color: rgba(244, 114, 182, 0.5) !important;
   }
 
+  /* Grok mode colors on mobile. Same `!important` rationale as the pi block above. */
+  .btn-toolbar.btn-run.mode-grok,
+  .btn-toolbar.btn-run-gear.mode-grok {
+    background: #1c1c1f !important;
+    border-color: rgba(212, 212, 216, 0.3) !important;
+    color: #f4f4f5 !important;
+  }
+
+  .btn-toolbar.btn-run.mode-grok:active,
+  .btn-toolbar.btn-run-gear.mode-grok:active {
+    background: #3f3f46 !important;
+    border-color: rgba(212, 212, 216, 0.5) !important;
+  }
+
   /* Run mode dropdown menu — positioned above toolbar on mobile */
   .run-mode-menu {
     bottom: 100%;
@@ -3060,6 +3074,12 @@ html:is([data-skin="paper-gray"], [data-skin="solarized-light"], [data-skin="cat
 html:is([data-skin="paper-gray"], [data-skin="solarized-light"], [data-skin="catppuccin-latte"], [data-skin="rose-pine-dawn"]) :is(.btn-toolbar.btn-run.mode-pi, .btn-toolbar.btn-run-gear.mode-pi) {
   background: linear-gradient(135deg, #be185d, #db2777);
   border-color: #9d174d;
+  color: #ffffff;
+}
+
+html:is([data-skin="paper-gray"], [data-skin="solarized-light"], [data-skin="catppuccin-latte"], [data-skin="rose-pine-dawn"]) :is(.btn-toolbar.btn-run.mode-grok, .btn-toolbar.btn-run-gear.mode-grok) {
+  background: linear-gradient(135deg, #27272a, #52525b);
+  border-color: #18181b;
   color: #ffffff;
 }
 

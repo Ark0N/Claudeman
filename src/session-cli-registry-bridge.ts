@@ -25,6 +25,7 @@ import type {
   CodexConfig,
   EffortLevel,
   GeminiConfig,
+  GrokConfig,
   OpenCodeConfig,
   PiConfig,
 } from './types/session.js';
@@ -40,6 +41,7 @@ export interface SpawnBridgeOptions {
   geminiConfig?: GeminiConfig;
   antigravityConfig?: AntigravityConfig;
   piConfig?: PiConfig;
+  grokConfig?: GrokConfig;
   resumeSessionId?: string;
   effort?: EffortLevel;
   sessionName?: string;
@@ -72,6 +74,8 @@ function legacyConfigFor(options: SpawnBridgeOptions): Record<string, unknown> |
       return options.antigravityConfig as unknown as Record<string, unknown> | undefined;
     case 'pi':
       return options.piConfig as unknown as Record<string, unknown> | undefined;
+    case 'grok':
+      return options.grokConfig as unknown as Record<string, unknown> | undefined;
     default:
       return undefined;
   }

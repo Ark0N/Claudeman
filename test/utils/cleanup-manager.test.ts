@@ -38,9 +38,11 @@ describe('CleanupManager', () => {
       const cleanup = new CleanupManager();
       let called = false;
 
-      cleanup.setTimeout(() => { called = true; }, 50);
+      cleanup.setTimeout(() => {
+        called = true;
+      }, 50);
 
-      await new Promise(r => setTimeout(r, 100));
+      await new Promise((r) => setTimeout(r, 100));
 
       expect(called).toBe(true);
       cleanup.dispose();
@@ -50,10 +52,12 @@ describe('CleanupManager', () => {
       const cleanup = new CleanupManager();
       let called = false;
 
-      cleanup.setTimeout(() => { called = true; }, 100);
+      cleanup.setTimeout(() => {
+        called = true;
+      }, 100);
       cleanup.dispose();
 
-      await new Promise(r => setTimeout(r, 150));
+      await new Promise((r) => setTimeout(r, 150));
 
       expect(called).toBe(false);
     });
@@ -64,7 +68,7 @@ describe('CleanupManager', () => {
       cleanup.setTimeout(() => {}, 50);
       expect(cleanup.resourceCount).toBe(1);
 
-      await new Promise(r => setTimeout(r, 100));
+      await new Promise((r) => setTimeout(r, 100));
 
       expect(cleanup.resourceCount).toBe(0);
       cleanup.dispose();
@@ -76,9 +80,11 @@ describe('CleanupManager', () => {
       const cleanup = new CleanupManager();
       let count = 0;
 
-      cleanup.setInterval(() => { count++; }, 30);
+      cleanup.setInterval(() => {
+        count++;
+      }, 30);
 
-      await new Promise(r => setTimeout(r, 100));
+      await new Promise((r) => setTimeout(r, 100));
 
       expect(count).toBeGreaterThanOrEqual(2);
       cleanup.dispose();
@@ -88,13 +94,15 @@ describe('CleanupManager', () => {
       const cleanup = new CleanupManager();
       let count = 0;
 
-      cleanup.setInterval(() => { count++; }, 20);
+      cleanup.setInterval(() => {
+        count++;
+      }, 20);
 
-      await new Promise(r => setTimeout(r, 50));
+      await new Promise((r) => setTimeout(r, 50));
       const countAtDispose = count;
       cleanup.dispose();
 
-      await new Promise(r => setTimeout(r, 100));
+      await new Promise((r) => setTimeout(r, 100));
 
       expect(count).toBe(countAtDispose);
     });
@@ -105,7 +113,13 @@ describe('CleanupManager', () => {
       const cleanup = new CleanupManager();
       let cleaned = false;
 
-      cleanup.registerCleanup('watcher', () => { cleaned = true; }, 'test');
+      cleanup.registerCleanup(
+        'watcher',
+        () => {
+          cleaned = true;
+        },
+        'test'
+      );
       cleanup.dispose();
 
       expect(cleaned).toBe(true);
@@ -115,8 +129,20 @@ describe('CleanupManager', () => {
       const cleanup = new CleanupManager();
       let secondCleaned = false;
 
-      cleanup.registerCleanup('watcher', () => { throw new Error('fail'); }, 'first');
-      cleanup.registerCleanup('watcher', () => { secondCleaned = true; }, 'second');
+      cleanup.registerCleanup(
+        'watcher',
+        () => {
+          throw new Error('fail');
+        },
+        'first'
+      );
+      cleanup.registerCleanup(
+        'watcher',
+        () => {
+          secondCleaned = true;
+        },
+        'second'
+      );
 
       // Should not throw
       cleanup.dispose();
@@ -129,7 +155,11 @@ describe('CleanupManager', () => {
     it('should call close() on dispose', () => {
       const cleanup = new CleanupManager();
       let closed = false;
-      const watcher = { close: () => { closed = true; } };
+      const watcher = {
+        close: () => {
+          closed = true;
+        },
+      };
 
       cleanup.registerWatcher(watcher, 'test watcher');
       cleanup.dispose();
@@ -176,7 +206,11 @@ describe('CleanupManager', () => {
     it('should call destroy() on dispose', () => {
       const cleanup = new CleanupManager();
       let destroyed = false;
-      const stream = { destroy: () => { destroyed = true; } };
+      const stream = {
+        destroy: () => {
+          destroyed = true;
+        },
+      };
 
       cleanup.registerStream(stream, 'test stream');
       cleanup.dispose();
@@ -187,7 +221,11 @@ describe('CleanupManager', () => {
     it('should call close() if destroy not available', () => {
       const cleanup = new CleanupManager();
       let closed = false;
-      const stream = { close: () => { closed = true; } };
+      const stream = {
+        close: () => {
+          closed = true;
+        },
+      };
 
       cleanup.registerStream(stream, 'test stream');
       cleanup.dispose();
@@ -201,7 +239,13 @@ describe('CleanupManager', () => {
       const cleanup = new CleanupManager();
       let cleaned = false;
 
-      const id = cleanup.registerCleanup('watcher', () => { cleaned = true; }, 'test');
+      const id = cleanup.registerCleanup(
+        'watcher',
+        () => {
+          cleaned = true;
+        },
+        'test'
+      );
       expect(cleanup.resourceCount).toBe(1);
 
       const result = cleanup.unregister(id);
@@ -228,7 +272,13 @@ describe('CleanupManager', () => {
       const cleanup = new CleanupManager();
       let cleanupCount = 0;
 
-      cleanup.registerCleanup('watcher', () => { cleanupCount++; }, 'test');
+      cleanup.registerCleanup(
+        'watcher',
+        () => {
+          cleanupCount++;
+        },
+        'test'
+      );
 
       cleanup.dispose();
       cleanup.dispose();
@@ -275,7 +325,7 @@ describe('CleanupManager', () => {
       // Dispose before timer fires
       cleanup.dispose();
 
-      await new Promise(r => setTimeout(r, 100));
+      await new Promise((r) => setTimeout(r, 100));
 
       // The callback shouldn't have set this to true
       expect(executedAfterStop).toBe(false);
@@ -292,8 +342,8 @@ describe('CleanupManager', () => {
       const regs = cleanup.getRegistrations();
 
       expect(regs.length).toBe(2);
-      expect(regs.some(r => r.type === 'timer')).toBe(true);
-      expect(regs.some(r => r.type === 'watcher')).toBe(true);
+      expect(regs.some((r) => r.type === 'timer')).toBe(true);
+      expect(regs.some((r) => r.type === 'watcher')).toBe(true);
 
       cleanup.dispose();
     });

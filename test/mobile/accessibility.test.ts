@@ -6,8 +6,10 @@ import { createTestServer, stopTestServer } from './helpers/server.js';
 import { createDevicePage, closeAllBrowsers } from './helpers/browser.js';
 import { showKeyboard, hideKeyboard } from './helpers/keyboard-sim.js';
 import {
-  assertAccessibleTouchTargets, assertFontSizeNoZoom,
-  assertZoomNotDisabled, getCSSProperty,
+  assertAccessibleTouchTargets,
+  assertFontSizeNoZoom,
+  assertZoomNotDisabled,
+  getCSSProperty,
 } from './helpers/assertions.js';
 import { REPRESENTATIVE_DEVICES } from './devices.js';
 import type { WebServer } from '../src/web/server.js';
@@ -247,17 +249,14 @@ describe('Mobile Accessibility', () => {
           const style = getComputedStyle(btn);
           if (style.display === 'none' || style.visibility === 'hidden') continue;
 
-          const name =
-            btn.getAttribute('aria-label') ||
-            btn.getAttribute('title') ||
-            btn.textContent?.trim() ||
-            '';
+          const name = btn.getAttribute('aria-label') || btn.getAttribute('title') || btn.textContent?.trim() || '';
 
           if (!name) {
             const id = btn.id ? `#${btn.id}` : '';
-            const cls = btn.className && typeof btn.className === 'string'
-              ? '.' + btn.className.trim().split(/\s+/).slice(0, 2).join('.')
-              : '';
+            const cls =
+              btn.className && typeof btn.className === 'string'
+                ? '.' + btn.className.trim().split(/\s+/).slice(0, 2).join('.')
+                : '';
             violations.push(`button${id}${cls}`);
           }
         }

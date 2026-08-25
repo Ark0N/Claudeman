@@ -72,7 +72,7 @@ describe('BufferAccumulator', () => {
 
       // Fill buffer beyond max
       buffer.append('a'.repeat(60));
-      buffer.append('b'.repeat(60));  // Total 120, exceeds 100
+      buffer.append('b'.repeat(60)); // Total 120, exceeds 100
 
       // Should have trimmed to 50
       expect(buffer.length).toBe(50);
@@ -85,14 +85,16 @@ describe('BufferAccumulator', () => {
       const buffer = new BufferAccumulator({
         maxSize: 100,
         trimSize: 50,
-        onTrim: (bytes) => { trimmedBytes = bytes; },
+        onTrim: (bytes) => {
+          trimmedBytes = bytes;
+        },
       });
 
       // Fill buffer beyond max
       buffer.append('a'.repeat(60));
-      buffer.append('b'.repeat(60));  // Total 120, trims to 50
+      buffer.append('b'.repeat(60)); // Total 120, trims to 50
 
-      expect(trimmedBytes).toBe(70);  // 120 - 50 = 70
+      expect(trimmedBytes).toBe(70); // 120 - 50 = 70
     });
 
     it('should not call onTrim when no trimming needed', () => {
@@ -100,10 +102,12 @@ describe('BufferAccumulator', () => {
       const buffer = new BufferAccumulator({
         maxSize: 100,
         trimSize: 50,
-        onTrim: () => { trimCalled = true; },
+        onTrim: () => {
+          trimCalled = true;
+        },
       });
 
-      buffer.append('a'.repeat(50));  // Under max
+      buffer.append('a'.repeat(50)); // Under max
 
       expect(trimCalled).toBe(false);
     });
@@ -116,7 +120,7 @@ describe('BufferAccumulator', () => {
 
       expect(buffer.tail(5)).toBe('world');
       expect(buffer.tail(6)).toBe(' world');
-      expect(buffer.tail(100)).toBe('hello world');  // Returns all if n > length
+      expect(buffer.tail(100)).toBe('hello world'); // Returns all if n > length
     });
 
     it('should check endsWith', () => {

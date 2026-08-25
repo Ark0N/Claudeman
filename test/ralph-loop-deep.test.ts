@@ -34,9 +34,7 @@ describe('Ralph Tracker Deep Logic', () => {
 
       // Simulate: Claude shows the prompt containing the completion phrase
       // (first occurrence = from the prompt, NOT actual completion)
-      tracker.processTerminalData(
-        'When done, output exactly: <promise>ALL_TASKS_COMPLETE</promise>\n'
-      );
+      tracker.processTerminalData('When done, output exactly: <promise>ALL_TASKS_COMPLETE</promise>\n');
       tracker.flushPendingEvents();
 
       // BUG: This SHOULD NOT fire, but currently does because of
@@ -237,13 +235,13 @@ describe('Ralph Tracker Deep Logic', () => {
       tracker.processTerminalData('- [ ] Update documentation\n');
       tracker.flushPendingEvents();
 
-      expect(tracker.todos.filter(t => t.status === 'pending')).toHaveLength(3);
+      expect(tracker.todos.filter((t) => t.status === 'pending')).toHaveLength(3);
 
       // Trigger all-complete detection
       tracker.processTerminalData('All tasks completed successfully\n');
       tracker.flushPendingEvents();
 
-      expect(tracker.todos.filter(t => t.status === 'completed')).toHaveLength(3);
+      expect(tracker.todos.filter((t) => t.status === 'completed')).toHaveLength(3);
     });
 
     it('should NOT trigger on long commentary lines', () => {
@@ -251,7 +249,9 @@ describe('Ralph Tracker Deep Logic', () => {
       tracker.flushPendingEvents();
 
       // Long line (>100 chars) should not trigger
-      const longLine = 'Once all tasks are complete, we should run the integration tests to make sure everything works properly and nothing is broken in the deployment pipeline' + '\n';
+      const longLine =
+        'Once all tasks are complete, we should run the integration tests to make sure everything works properly and nothing is broken in the deployment pipeline' +
+        '\n';
       tracker.processTerminalData(longLine);
       tracker.flushPendingEvents();
 
@@ -278,7 +278,7 @@ describe('Ralph Tracker Deep Logic', () => {
       tracker.processTerminalData('All 15 files have been created\n');
       tracker.flushPendingEvents();
 
-      expect(tracker.todos.filter(t => t.status === 'pending')).toHaveLength(2);
+      expect(tracker.todos.filter((t) => t.status === 'pending')).toHaveLength(2);
     });
 
     it('should emit completionDetected if completion phrase is set', () => {
@@ -314,8 +314,12 @@ describe('Ralph Tracker Deep Logic', () => {
       tracker.enable();
 
       // 2 status blocks with no progress
-      tracker.processTerminalData('---RALPH_STATUS---\nSTATUS: IN_PROGRESS\nTASKS_COMPLETED_THIS_LOOP: 0\nFILES_MODIFIED: 0\n---END_RALPH_STATUS---\n');
-      tracker.processTerminalData('---RALPH_STATUS---\nSTATUS: IN_PROGRESS\nTASKS_COMPLETED_THIS_LOOP: 0\nFILES_MODIFIED: 0\n---END_RALPH_STATUS---\n');
+      tracker.processTerminalData(
+        '---RALPH_STATUS---\nSTATUS: IN_PROGRESS\nTASKS_COMPLETED_THIS_LOOP: 0\nFILES_MODIFIED: 0\n---END_RALPH_STATUS---\n'
+      );
+      tracker.processTerminalData(
+        '---RALPH_STATUS---\nSTATUS: IN_PROGRESS\nTASKS_COMPLETED_THIS_LOOP: 0\nFILES_MODIFIED: 0\n---END_RALPH_STATUS---\n'
+      );
       tracker.flushPendingEvents();
 
       expect(tracker.circuitBreakerStatus.state).toBe('HALF_OPEN');
@@ -326,7 +330,9 @@ describe('Ralph Tracker Deep Logic', () => {
 
       // 3 no-progress iterations
       for (let i = 0; i < 3; i++) {
-        tracker.processTerminalData('---RALPH_STATUS---\nSTATUS: IN_PROGRESS\nTASKS_COMPLETED_THIS_LOOP: 0\nFILES_MODIFIED: 0\n---END_RALPH_STATUS---\n');
+        tracker.processTerminalData(
+          '---RALPH_STATUS---\nSTATUS: IN_PROGRESS\nTASKS_COMPLETED_THIS_LOOP: 0\nFILES_MODIFIED: 0\n---END_RALPH_STATUS---\n'
+        );
       }
       tracker.flushPendingEvents();
 
@@ -338,12 +344,16 @@ describe('Ralph Tracker Deep Logic', () => {
 
       // Get to HALF_OPEN
       for (let i = 0; i < 2; i++) {
-        tracker.processTerminalData('---RALPH_STATUS---\nSTATUS: IN_PROGRESS\nTASKS_COMPLETED_THIS_LOOP: 0\nFILES_MODIFIED: 0\n---END_RALPH_STATUS---\n');
+        tracker.processTerminalData(
+          '---RALPH_STATUS---\nSTATUS: IN_PROGRESS\nTASKS_COMPLETED_THIS_LOOP: 0\nFILES_MODIFIED: 0\n---END_RALPH_STATUS---\n'
+        );
       }
       expect(tracker.circuitBreakerStatus.state).toBe('HALF_OPEN');
 
       // Progress detected
-      tracker.processTerminalData('---RALPH_STATUS---\nSTATUS: IN_PROGRESS\nTASKS_COMPLETED_THIS_LOOP: 2\nFILES_MODIFIED: 1\n---END_RALPH_STATUS---\n');
+      tracker.processTerminalData(
+        '---RALPH_STATUS---\nSTATUS: IN_PROGRESS\nTASKS_COMPLETED_THIS_LOOP: 2\nFILES_MODIFIED: 1\n---END_RALPH_STATUS---\n'
+      );
       tracker.flushPendingEvents();
 
       expect(tracker.circuitBreakerStatus.state).toBe('CLOSED');
@@ -352,7 +362,9 @@ describe('Ralph Tracker Deep Logic', () => {
     it('should open on BLOCKED status', () => {
       tracker.enable();
 
-      tracker.processTerminalData('---RALPH_STATUS---\nSTATUS: BLOCKED\nTASKS_COMPLETED_THIS_LOOP: 0\nFILES_MODIFIED: 0\n---END_RALPH_STATUS---\n');
+      tracker.processTerminalData(
+        '---RALPH_STATUS---\nSTATUS: BLOCKED\nTASKS_COMPLETED_THIS_LOOP: 0\nFILES_MODIFIED: 0\n---END_RALPH_STATUS---\n'
+      );
       tracker.flushPendingEvents();
 
       expect(tracker.circuitBreakerStatus.state).toBe('OPEN');
@@ -362,7 +374,9 @@ describe('Ralph Tracker Deep Logic', () => {
       tracker.enable();
 
       for (let i = 0; i < 5; i++) {
-        tracker.processTerminalData('---RALPH_STATUS---\nSTATUS: IN_PROGRESS\nTASKS_COMPLETED_THIS_LOOP: 1\nFILES_MODIFIED: 1\nTESTS_STATUS: FAILING\n---END_RALPH_STATUS---\n');
+        tracker.processTerminalData(
+          '---RALPH_STATUS---\nSTATUS: IN_PROGRESS\nTASKS_COMPLETED_THIS_LOOP: 1\nFILES_MODIFIED: 1\nTESTS_STATUS: FAILING\n---END_RALPH_STATUS---\n'
+        );
       }
       tracker.flushPendingEvents();
 
@@ -375,7 +389,9 @@ describe('Ralph Tracker Deep Logic', () => {
 
       // Get to OPEN state
       for (let i = 0; i < 3; i++) {
-        tracker.processTerminalData('---RALPH_STATUS---\nSTATUS: IN_PROGRESS\nTASKS_COMPLETED_THIS_LOOP: 0\nFILES_MODIFIED: 0\n---END_RALPH_STATUS---\n');
+        tracker.processTerminalData(
+          '---RALPH_STATUS---\nSTATUS: IN_PROGRESS\nTASKS_COMPLETED_THIS_LOOP: 0\nFILES_MODIFIED: 0\n---END_RALPH_STATUS---\n'
+        );
       }
       expect(tracker.circuitBreakerStatus.state).toBe('OPEN');
 
@@ -398,14 +414,14 @@ describe('Ralph Tracker Deep Logic', () => {
 
       tracker.processTerminalData(
         '---RALPH_STATUS---\n' +
-        'STATUS: IN_PROGRESS\n' +
-        'TASKS_COMPLETED_THIS_LOOP: 3\n' +
-        'FILES_MODIFIED: 7\n' +
-        'TESTS_STATUS: PASSING\n' +
-        'WORK_TYPE: IMPLEMENTATION\n' +
-        'EXIT_SIGNAL: false\n' +
-        'RECOMMENDATION: Continue with remaining tasks\n' +
-        '---END_RALPH_STATUS---\n'
+          'STATUS: IN_PROGRESS\n' +
+          'TASKS_COMPLETED_THIS_LOOP: 3\n' +
+          'FILES_MODIFIED: 7\n' +
+          'TESTS_STATUS: PASSING\n' +
+          'WORK_TYPE: IMPLEMENTATION\n' +
+          'EXIT_SIGNAL: false\n' +
+          'RECOMMENDATION: Continue with remaining tasks\n' +
+          '---END_RALPH_STATUS---\n'
       );
       tracker.flushPendingEvents();
 
@@ -425,11 +441,7 @@ describe('Ralph Tracker Deep Logic', () => {
       tracker.on('statusBlockDetected', statusHandler);
       tracker.enable();
 
-      tracker.processTerminalData(
-        '---RALPH_STATUS---\n' +
-        'STATUS: COMPLETE\n' +
-        '---END_RALPH_STATUS---\n'
-      );
+      tracker.processTerminalData('---RALPH_STATUS---\n' + 'STATUS: COMPLETE\n' + '---END_RALPH_STATUS---\n');
 
       expect(statusHandler).toHaveBeenCalled();
       const block = statusHandler.mock.calls[0][0];
@@ -447,9 +459,7 @@ describe('Ralph Tracker Deep Logic', () => {
       tracker.enable();
 
       tracker.processTerminalData(
-        '---RALPH_STATUS---\n' +
-        'TASKS_COMPLETED_THIS_LOOP: 5\n' +
-        '---END_RALPH_STATUS---\n'
+        '---RALPH_STATUS---\n' + 'TASKS_COMPLETED_THIS_LOOP: 5\n' + '---END_RALPH_STATUS---\n'
       );
 
       expect(statusHandler).not.toHaveBeenCalled();
@@ -501,9 +511,7 @@ describe('Ralph Tracker Deep Logic', () => {
       tracker.on('exitGateMet', exitHandler);
       tracker.enable();
 
-      tracker.processTerminalData(
-        '---RALPH_STATUS---\nSTATUS: COMPLETE\nEXIT_SIGNAL: true\n---END_RALPH_STATUS---\n'
-      );
+      tracker.processTerminalData('---RALPH_STATUS---\nSTATUS: COMPLETE\nEXIT_SIGNAL: true\n---END_RALPH_STATUS---\n');
       tracker.flushPendingEvents();
 
       // Only 1 completion indicator, need >= 2
@@ -522,9 +530,7 @@ describe('Ralph Tracker Deep Logic', () => {
       const exitHandler = vi.fn();
       tracker.on('exitGateMet', exitHandler);
 
-      tracker.processTerminalData(
-        '---RALPH_STATUS---\nSTATUS: COMPLETE\nEXIT_SIGNAL: true\n---END_RALPH_STATUS---\n'
-      );
+      tracker.processTerminalData('---RALPH_STATUS---\nSTATUS: COMPLETE\nEXIT_SIGNAL: true\n---END_RALPH_STATUS---\n');
       tracker.flushPendingEvents();
 
       // 2 NL indicators + 1 COMPLETE status = 3 indicators, plus EXIT_SIGNAL
@@ -558,10 +564,10 @@ describe('Ralph Tracker Deep Logic', () => {
       tracker.processTerminalData('✔ Task #1 updated: status → completed\n');
       tracker.flushPendingEvents();
 
-      const caching = tracker.todos.find(t => t.content.includes('caching layer'));
+      const caching = tracker.todos.find((t) => t.content.includes('caching layer'));
       expect(caching?.status).toBe('completed');
 
-      const tests = tracker.todos.find(t => t.content.includes('tests'));
+      const tests = tracker.todos.find((t) => t.content.includes('tests'));
       expect(tests?.status).toBe('pending');
     });
 
@@ -609,7 +615,7 @@ describe('Ralph Tracker Deep Logic', () => {
       tracker.flushPendingEvents();
 
       expect(tracker.todos).toHaveLength(3);
-      expect(tracker.todos.every(t => t.status === 'completed')).toBe(true);
+      expect(tracker.todos.every((t) => t.status === 'completed')).toBe(true);
     });
 
     it('should skip short content in plain checkmark', () => {
@@ -708,7 +714,7 @@ describe('Ralph Tracker Deep Logic', () => {
       tracker.flushPendingEvents();
 
       // The longest version should be kept
-      const matchingTodos = tracker.todos.filter(t => t.content.includes('Fix auth'));
+      const matchingTodos = tracker.todos.filter((t) => t.content.includes('Fix auth'));
       // Due to fuzzy dedup, similar items might get merged
       expect(matchingTodos.length).toBeGreaterThanOrEqual(1);
     });
@@ -750,7 +756,7 @@ describe('Ralph Tracker Deep Logic', () => {
       expect(tracker2.todos).toHaveLength(3);
 
       // Verify statuses are preserved
-      const completed = tracker2.todos.filter(t => t.status === 'completed');
+      const completed = tracker2.todos.filter((t) => t.status === 'completed');
       expect(completed).toHaveLength(1);
       expect(completed[0].content).toContain('CI pipeline');
 
@@ -778,14 +784,14 @@ describe('Ralph Tracker Deep Logic', () => {
 
       expect(count).toBe(5);
 
-      const p0 = tracker.todos.filter(t => t.priority === 'P0');
+      const p0 = tracker.todos.filter((t) => t.priority === 'P0');
       expect(p0).toHaveLength(2);
 
-      const p1 = tracker.todos.filter(t => t.priority === 'P1');
+      const p1 = tracker.todos.filter((t) => t.priority === 'P1');
       expect(p1).toHaveLength(1);
       expect(p1[0].status).toBe('in_progress');
 
-      const completed = tracker.todos.filter(t => t.status === 'completed');
+      const completed = tracker.todos.filter((t) => t.status === 'completed');
       expect(completed).toHaveLength(1);
     });
   });
@@ -859,10 +865,7 @@ describe('Ralph Tracker Deep Logic', () => {
     it('should give high confidence with promise tag + matching phrase + active loop', () => {
       tracker.startLoop('TARGET_PHRASE');
 
-      const confidence = tracker.calculateCompletionConfidence(
-        'TARGET_PHRASE',
-        '<promise>TARGET_PHRASE</promise>'
-      );
+      const confidence = tracker.calculateCompletionConfidence('TARGET_PHRASE', '<promise>TARGET_PHRASE</promise>');
 
       // hasPromiseTag(30) + matchesExpected(25) + contextAppropriate(10) + loopActive(10) = 75+
       expect(confidence.score).toBeGreaterThanOrEqual(65);
@@ -1019,12 +1022,12 @@ describe('Ralph Tracker Deep Logic', () => {
       // Step 4: Status block
       tracker.processTerminalData(
         '---RALPH_STATUS---\n' +
-        'STATUS: IN_PROGRESS\n' +
-        'TASKS_COMPLETED_THIS_LOOP: 1\n' +
-        'FILES_MODIFIED: 3\n' +
-        'TESTS_STATUS: PASSING\n' +
-        'EXIT_SIGNAL: false\n' +
-        '---END_RALPH_STATUS---\n'
+          'STATUS: IN_PROGRESS\n' +
+          'TASKS_COMPLETED_THIS_LOOP: 1\n' +
+          'FILES_MODIFIED: 3\n' +
+          'TESTS_STATUS: PASSING\n' +
+          'EXIT_SIGNAL: false\n' +
+          '---END_RALPH_STATUS---\n'
       );
       tracker.flushPendingEvents();
 
@@ -1088,9 +1091,7 @@ describe('Ralph Tracker Deep Logic', () => {
       tracker.setWorkingDir(tmpDir);
 
       // Manually import todos (simulating fix_plan.md loaded)
-      tracker.importFixPlanMarkdown(
-        '# Fix Plan\n\n## Tasks\n- [ ] Pending task from file\n'
-      );
+      tracker.importFixPlanMarkdown('# Fix Plan\n\n## Tasks\n- [ ] Pending task from file\n');
 
       expect(tracker.todos).toHaveLength(1);
       expect(tracker.todos[0].status).toBe('pending');

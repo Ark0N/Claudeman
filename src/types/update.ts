@@ -98,3 +98,52 @@ export interface UpdateCheckResult {
   source: 'github-api' | 'git-ls-remote' | 'none';
   error?: string;
 }
+
+/**
+ * Role of a remote in the repository-status view.
+ * - `tracking`: the current branch's `@{upstream}` remote (where `git pull` goes).
+ * - `upstream`: the canonical project (a remote named `origin`/`upstream` that is
+ *   not the tracking remote).
+ * - `other`: anything else explicitly requested via `CODEMAN_UPDATE_REMOTES`.
+ */
+export type RepoRemoteRole = 'tracking' | 'upstream' | 'other';
+
+/** A single incoming commit — present on the remote ref but not in local HEAD. */
+export interface RepoIncomingCommit {
+  /** Abbreviated SHA. */
+  sha: string;
+  /** Commit subject (first line). */
+  subject: string;
+}
+
+/** Ahead/behind + incoming summary for local HEAD vs one remote's compare ref. */
+export interface RepoRemoteStatus {
+  /** Remote name, e.g. `origin`, `bitbucket`. */
+  name: string;
+  /** Remote URL (best-effort; empty if unresolved). */
+  url: string;
+  role: RepoRemoteRole;
+  /** Ref HEAD is compared against, e.g. `origin/master`, `bitbucket/local`. */
+  compareRef: string;
+  /** Commits in local HEAD not on the remote ref (local-only / unpushed). */
+  ahead: number;
+  /** Commits on the remote ref not in local HEAD (incoming). */
+  behind: number;
+  /** Up to N most recent incoming commits (newest first). */
+  incoming: RepoIncomingCommit[];
+  /** Set when this remote could not be fetched/compared. */
+  error?: string;
+}
+
+/** Result of the repository-status check across the configured remotes. */
+export interface RepositoryStatusResult {
+  /** epoch ms of the check. */
+  checkedAt: number;
+  /** False when this is not a git install (then `remotes` is empty + `error` set). */
+  isGit: boolean;
+  /** Current running version, for display. */
+  currentVersion: string;
+  remotes: RepoRemoteStatus[];
+  /** Top-level error (e.g. not a git install, or no remotes resolved). */
+  error?: string;
+}

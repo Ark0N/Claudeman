@@ -4,16 +4,8 @@
     "label": "Claude",
     "stock": true,
     "discovery": {
-      "binaries": [
-        "claude"
-      ],
-      "searchDirs": [
-        "~/.local/bin",
-        "~/.claude/local",
-        "/usr/local/bin",
-        "~/.npm-global/bin",
-        "~/bin"
-      ],
+      "binaries": ["claude"],
+      "searchDirs": ["~/.local/bin", "~/.claude/local", "/usr/local/bin", "~/.npm-global/bin", "~/bin"],
       "version": {
         "arg": "--version",
         "regex": "(\\d+\\.\\d+\\.\\d+)",
@@ -47,9 +39,7 @@
     "label": "OpenCode",
     "stock": true,
     "discovery": {
-      "binaries": [
-        "opencode"
-      ],
+      "binaries": ["opencode"],
       "searchDirs": [
         "~/.opencode/bin",
         "~/.local/bin",
@@ -78,17 +68,8 @@
     "label": "Codex",
     "stock": true,
     "discovery": {
-      "binaries": [
-        "codex"
-      ],
-      "searchDirs": [
-        "~/.codex/bin",
-        "~/.local/bin",
-        "/usr/local/bin",
-        "~/.bun/bin",
-        "~/.npm-global/bin",
-        "~/bin"
-      ],
+      "binaries": ["codex"],
+      "searchDirs": ["~/.codex/bin", "~/.local/bin", "/usr/local/bin", "~/.bun/bin", "~/.npm-global/bin", "~/bin"],
       "version": {
         "arg": "--version",
         "regex": "(\\d+\\.\\d+\\.\\d+)"
@@ -108,17 +89,8 @@
     "label": "Gemini",
     "stock": true,
     "discovery": {
-      "binaries": [
-        "gemini"
-      ],
-      "searchDirs": [
-        "~/.gemini/bin",
-        "~/.local/bin",
-        "/usr/local/bin",
-        "~/.bun/bin",
-        "~/.npm-global/bin",
-        "~/bin"
-      ],
+      "binaries": ["gemini"],
+      "searchDirs": ["~/.gemini/bin", "~/.local/bin", "/usr/local/bin", "~/.bun/bin", "~/.npm-global/bin", "~/bin"],
       "version": {
         "arg": "--version",
         "regex": "(\\d+\\.\\d+\\.\\d+)"
@@ -138,15 +110,8 @@
     "label": "Antigravity",
     "stock": true,
     "discovery": {
-      "binaries": [
-        "agy"
-      ],
-      "searchDirs": [
-        "~/.local/bin",
-        "~/.antigravity/bin",
-        "/usr/local/bin",
-        "~/bin"
-      ],
+      "binaries": ["agy"],
+      "searchDirs": ["~/.local/bin", "~/.antigravity/bin", "/usr/local/bin", "~/bin"],
       "version": {
         "arg": "--version",
         "regex": "(\\d+\\.\\d+\\.\\d+)"
@@ -165,16 +130,8 @@
     "label": "Pi",
     "stock": true,
     "discovery": {
-      "binaries": [
-        "pi"
-      ],
-      "searchDirs": [
-        "~/.local/bin",
-        "/usr/local/bin",
-        "~/.bun/bin",
-        "~/.npm-global/bin",
-        "~/bin"
-      ],
+      "binaries": ["pi"],
+      "searchDirs": ["~/.local/bin", "/usr/local/bin", "~/.bun/bin", "~/.npm-global/bin", "~/bin"],
       "version": {
         "arg": "--version",
         "regex": "(?:^|\\s)(\\d+\\.\\d+\\.\\d+)",
@@ -195,15 +152,8 @@
     "label": "GitHub Copilot",
     "stock": true,
     "discovery": {
-      "binaries": [
-        "copilot"
-      ],
-      "searchDirs": [
-        "~/.local/bin",
-        "/usr/local/bin",
-        "~/.npm-global/bin",
-        "~/bin"
-      ],
+      "binaries": ["copilot"],
+      "searchDirs": ["~/.local/bin", "/usr/local/bin", "~/.npm-global/bin", "~/bin"],
       "version": {
         "arg": "--version",
         "regex": "(\\d+\\.\\d+\\.\\d+)"
@@ -223,15 +173,8 @@
     "label": "Grok",
     "stock": true,
     "discovery": {
-      "binaries": [
-        "grok"
-      ],
-      "searchDirs": [
-        "~/.grok/bin",
-        "~/.local/bin",
-        "/usr/local/bin",
-        "~/bin"
-      ],
+      "binaries": ["grok"],
+      "searchDirs": ["~/.grok/bin", "~/.local/bin", "/usr/local/bin", "~/bin"],
       "version": {
         "arg": "--version",
         "regex": "(?:^|\\s)(\\d+\\.\\d+\\.\\d+)",

@@ -30,9 +30,7 @@ describe('Visual Regression', () => {
 
   // ─── Breakpoint Screenshots ───────────────────────────────────────────────
 
-  describe.each(
-    KEY_BREAKPOINTS.map(w => [w] as [number]),
-  )('Width %ipx', (width) => {
+  describe.each(KEY_BREAKPOINTS.map((w) => [w] as [number]))('Width %ipx', (width) => {
     const height = 812; // Standard phone height for consistency
 
     it('landing page (no sessions)', async () => {
@@ -44,7 +42,10 @@ describe('Visual Regression', () => {
         isMobile: width < 768,
         hasTouch: width < 768,
         userAgent: 'Mozilla/5.0 (iPhone; CPU iPhone OS 18_0 like Mac OS X) AppleWebKit/605.1.15',
-        expectedBreakpoint: (width < 430 ? 'phone' : width < 768 ? 'tablet' : 'desktop') as 'phone' | 'tablet' | 'desktop',
+        expectedBreakpoint: (width < 430 ? 'phone' : width < 768 ? 'tablet' : 'desktop') as
+          | 'phone'
+          | 'tablet'
+          | 'desktop',
         isIOS: true,
         defaultBrowserType: 'chromium' as const,
       };
@@ -71,7 +72,10 @@ describe('Visual Regression', () => {
         isMobile: width < 768,
         hasTouch: width < 768,
         userAgent: 'Mozilla/5.0 (iPhone; CPU iPhone OS 18_0 like Mac OS X) AppleWebKit/605.1.15',
-        expectedBreakpoint: (width < 430 ? 'phone' : width < 768 ? 'tablet' : 'desktop') as 'phone' | 'tablet' | 'desktop',
+        expectedBreakpoint: (width < 430 ? 'phone' : width < 768 ? 'tablet' : 'desktop') as
+          | 'phone'
+          | 'tablet'
+          | 'desktop',
         isIOS: true,
         defaultBrowserType: 'chromium' as const,
       };
@@ -104,7 +108,10 @@ describe('Visual Regression', () => {
         isMobile: width < 768,
         hasTouch: width < 768,
         userAgent: 'Mozilla/5.0 (iPhone; CPU iPhone OS 18_0 like Mac OS X) AppleWebKit/605.1.15',
-        expectedBreakpoint: (width < 430 ? 'phone' : width < 768 ? 'tablet' : 'desktop') as 'phone' | 'tablet' | 'desktop',
+        expectedBreakpoint: (width < 430 ? 'phone' : width < 768 ? 'tablet' : 'desktop') as
+          | 'phone'
+          | 'tablet'
+          | 'desktop',
         isIOS: true,
         defaultBrowserType: 'chromium' as const,
       };
@@ -116,7 +123,7 @@ describe('Visual Regression', () => {
         // Open settings modal - try mobile button first, then desktop
         const mobileBtn = page.locator(SELECTORS.SETTINGS_MOBILE);
         const isPhone = width < 430;
-        if (isPhone && await mobileBtn.isVisible()) {
+        if (isPhone && (await mobileBtn.isVisible())) {
           await mobileBtn.click();
         } else {
           // Try clicking a desktop settings trigger if available

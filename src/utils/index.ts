@@ -35,5 +35,6 @@ export { resolveCodexDir, isCodexAvailable } from './codex-cli-resolver.js';
 export { resolveGeminiDir, isGeminiAvailable } from './gemini-cli-resolver.js';
 export { resolveAntigravityDir, isAntigravityAvailable } from './antigravity-cli-resolver.js';
 export { resolvePiDir, isPiAvailable, getPiCliVersion } from './pi-cli-resolver.js';
+export { resolveGrokDir, isGrokAvailable, getGrokCliVersion } from './grok-cli-resolver.js';
 export { compileFileQuery, matchFileQuery } from './file-query.js';
 export type { FileQueryMatcher } from './file-query.js';

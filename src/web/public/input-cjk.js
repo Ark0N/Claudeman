@@ -27,8 +27,8 @@
  *
  * Solution: outside composition, flush is DEBOUNCED (200ms). The entire
  * delete→reinsert cycle collapses into one flush of the final textarea value.
- * Keyboard typing of single printable characters still goes through the
- * keydown handler (immediate, no debounce).
+ * Physical-keyboard commits are flushed immediately after the input event
+ * exposes the final browser/IME text; keydown never guesses that text.
  *
  * ## Phantom character for Android backspace
  *
@@ -56,8 +56,7 @@ const CjkInput = (() => {
   let _compositionFlushTimer = null;
   let _dictationActive = false;
   let _dictationDecayTimer = null;
-  let _keydownSentAt = 0;
-  let _keydownSentText = '';
+  let _printableKeydownAt = null;
   const _listeners = {};
 
   const PHANTOM = '​';
@@ -197,6 +196,7 @@ const CjkInput = (() => {
 
       _send = send;
       _composing = false;
+      _printableKeydownAt = null;
       _flushTimer = null;
       _textarea = document.getElementById('cjkInput');
       if (!_textarea) return this;
@@ -234,6 +234,7 @@ const CjkInput = (() => {
       };
       _listeners.blur = () => {
         _t(`blur composing=${_composing} ${_vdesc(_textarea.value)}`);
+        _printableKeydownAt = null;
         // Keep cjkActive while CJK input is visible — iOS dictation and system
         // UI may steal focus temporarily, and clearing the flag during that
         // window lets xterm's onData process duplicated input.
@@ -253,6 +254,7 @@ const CjkInput = (() => {
       _listeners.compositionstart = () => {
         _t(`compstart ${_vdesc(_textarea.value)}`);
         _composing = true;
+        _printableKeydownAt = null;
         _cancelDebouncedFlush();
         // Leave textarea.value untouched — programmatic changes during
         // compositionstart cancel the IME composition on iOS Safari.
@@ -277,6 +279,7 @@ const CjkInput = (() => {
       // ── Keydown: special keys work REGARDLESS of composition state ──
       _listeners.keydown = (e) => {
         _t(`keydown ${_kdesc(e.key)} kc=${e.keyCode} ic=${e.isComposing} c=${_composing}`);
+        _printableKeydownAt = null;
         if (e.key === 'Enter') {
           e.preventDefault();
           _composing = false;
@@ -325,16 +328,11 @@ const CjkInput = (() => {
           return;
         }
 
-        // Single printable character: send immediately to PTY.
-        // Third-party IMEs on iOS may ignore preventDefault, so the char
-        // still enters the textarea and fires an input event — _keydownSentAt
-        // tells the input handler to skip that echo.
+        // A printable KeyboardEvent.key is the physical key, not necessarily
+        // the committed text. Let the browser/IME produce the input event so
+        // full-width punctuation and other layout transforms are preserved.
         if (e.key.length === 1 && !e.ctrlKey && !e.altKey && !e.metaKey && _isEffectivelyEmpty()) {
-          e.preventDefault();
-          _send(e.key);
-          _keydownSentAt = performance.now();
-          _keydownSentText = e.key;
-          _resetToPhantom();
+          _printableKeydownAt = performance.now();
           return;
         }
       };
@@ -343,6 +341,8 @@ const CjkInput = (() => {
       // ── Input event: primary path for virtual keyboards + dictation ──
       _listeners.input = (e) => {
         _t(`input ${e.inputType || '?'} ic=${e.isComposing} c=${_composing} ${_vdesc(_textarea.value)}`);
+        const printableKeydownAt = _printableKeydownAt;
+        _printableKeydownAt = null;
         // ── Stuck-composition recovery ──
         // Some IMEs (WeChat/Sogou keyboards) fire compositionstart without a
         // matching compositionend. A stale _composing=true blocks every flush
@@ -388,18 +388,18 @@ const CjkInput = (() => {
 
         if (_composing) return;
 
-        // Keydown handler already sent this character — clear the textarea
-        // echo that the IME inserted despite preventDefault. Content-checked:
-        // only a value matching the sent char is an echo. Anything else (e.g.
-        // an IME committing CJK text right after a keydown-sent char) is real
-        // input and must flow through to the debounced flush, not be dropped.
-        if (performance.now() - _keydownSentAt < 100) {
-          const cur = _strip(_textarea.value);
-          if (cur === '' || cur === _keydownSentText) {
-            _t('echo-drop');
-            _resetToPhantom();
-            return;
-          }
+        // A recent physical printable key makes this insertText a keyboard
+        // commit, so keep the old zero-latency path. Send the textarea's final
+        // Unicode value, never KeyboardEvent.key, because the IME may have
+        // transformed punctuation or the active layout may differ.
+        if (
+          e.inputType === 'insertText' &&
+          printableKeydownAt !== null &&
+          performance.now() - printableKeydownAt < 100
+        ) {
+          _cancelDebouncedFlush();
+          _flush();
+          return;
         }
 
         // Outside composition: keyboard typing or voice dictation.
@@ -425,6 +425,7 @@ const CjkInput = (() => {
       clearTimeout(_compositionFlushTimer);
       _compositionFlushTimer = null;
       _composing = false;
+      _printableKeydownAt = null;
       _resetToPhantom();
     },
 
@@ -446,6 +447,7 @@ const CjkInput = (() => {
       }
       window.cjkActive = false;
       _composing = false;
+      _printableKeydownAt = null;
       for (const key of Object.keys(_listeners)) delete _listeners[key];
       _initialized = false;
     },

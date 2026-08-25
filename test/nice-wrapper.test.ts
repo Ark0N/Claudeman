@@ -12,15 +12,13 @@ import type { NiceConfig } from '../src/types.js';
 describe('wrapWithNice', () => {
   it('should return command unchanged when disabled', () => {
     const config: NiceConfig = { enabled: false, niceValue: 10 };
-    expect(wrapWithNice('claude --dangerously-skip-permissions', config)).toBe(
-      'claude --dangerously-skip-permissions',
-    );
+    expect(wrapWithNice('claude --dangerously-skip-permissions', config)).toBe('claude --dangerously-skip-permissions');
   });
 
   it('should wrap command with nice when enabled', () => {
     const config: NiceConfig = { enabled: true, niceValue: 10 };
     expect(wrapWithNice('claude --dangerously-skip-permissions', config)).toBe(
-      'nice -n 10 claude --dangerously-skip-permissions',
+      'nice -n 10 claude --dangerously-skip-permissions'
     );
   });
 

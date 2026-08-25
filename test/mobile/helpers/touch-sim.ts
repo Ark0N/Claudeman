@@ -19,16 +19,8 @@ export interface SwipeOptions {
 
 /** Perform a swipe gesture via CDP Input.dispatchTouchEvent (trusted, Chromium only).
  *  Target element defaults to '.main' (where SwipeHandler listens). */
-export async function swipeViaCDP(
-  page: Page,
-  direction: SwipeDirection,
-  options: SwipeOptions = {},
-): Promise<void> {
-  const {
-    distance = SWIPE.MIN_DISTANCE + 20,
-    duration = 150,
-    steps = 5,
-  } = options;
+export async function swipeViaCDP(page: Page, direction: SwipeDirection, options: SwipeOptions = {}): Promise<void> {
+  const { distance = SWIPE.MIN_DISTANCE + 20, duration = 150, steps = 5 } = options;
 
   const cdp = await getCDP(page);
   const targetSelector = '.main';
@@ -91,13 +83,9 @@ export async function swipeViaCDP(
 export async function swipeViaSynthetic(
   page: Page,
   direction: SwipeDirection,
-  options: SwipeOptions = {},
+  options: SwipeOptions = {}
 ): Promise<void> {
-  const {
-    distance = SWIPE.MIN_DISTANCE + 20,
-    duration = 150,
-    steps = 5,
-  } = options;
+  const { distance = SWIPE.MIN_DISTANCE + 20, duration = 150, steps = 5 } = options;
 
   await page.evaluate(
     ({ dir, dist, dur, numSteps }) => {
@@ -139,12 +127,14 @@ export async function swipeViaSynthetic(
       }
 
       // touchstart
-      main.dispatchEvent(new TouchEvent('touchstart', {
-        touches: [createTouch(startX, startY)],
-        changedTouches: [createTouch(startX, startY)],
-        bubbles: true,
-        cancelable: true,
-      }));
+      main.dispatchEvent(
+        new TouchEvent('touchstart', {
+          touches: [createTouch(startX, startY)],
+          changedTouches: [createTouch(startX, startY)],
+          bubbles: true,
+          cancelable: true,
+        })
+      );
 
       // Intermediate moves
       const stepDelay = dur / numSteps;
@@ -153,26 +143,30 @@ export async function swipeViaSynthetic(
         const x = startX + (endX - startX) * progress;
         const y = startY + (endY - startY) * progress;
         setTimeout(() => {
-          main.dispatchEvent(new TouchEvent('touchmove', {
-            touches: [createTouch(x, y)],
-            changedTouches: [createTouch(x, y)],
-            bubbles: true,
-            cancelable: true,
-          }));
+          main.dispatchEvent(
+            new TouchEvent('touchmove', {
+              touches: [createTouch(x, y)],
+              changedTouches: [createTouch(x, y)],
+              bubbles: true,
+              cancelable: true,
+            })
+          );
         }, stepDelay * i);
       }
 
       // touchend
       setTimeout(() => {
-        main.dispatchEvent(new TouchEvent('touchend', {
-          touches: [],
-          changedTouches: [createTouch(endX, endY)],
-          bubbles: true,
-          cancelable: true,
-        }));
+        main.dispatchEvent(
+          new TouchEvent('touchend', {
+            touches: [],
+            changedTouches: [createTouch(endX, endY)],
+            bubbles: true,
+            cancelable: true,
+          })
+        );
       }, dur + 10);
     },
-    { dir: direction, dist: distance, dur: duration, numSteps: steps },
+    { dir: direction, dist: distance, dur: duration, numSteps: steps }
   );
 
   // Wait for the full gesture + a little buffer
@@ -186,7 +180,7 @@ export async function swipeViaSynthetic(
 export async function swipe(
   page: Page,
   direction: SwipeDirection,
-  options: SwipeOptions & { isChromium?: boolean } = {},
+  options: SwipeOptions & { isChromium?: boolean } = {}
 ): Promise<void> {
   const { isChromium = true, ...swipeOpts } = options;
 
@@ -230,25 +224,25 @@ export async function tapViaSynthetic(page: Page, selector: string): Promise<voi
       clientX: x,
       clientY: y,
     });
-    el.dispatchEvent(new TouchEvent('touchstart', {
-      touches: [touch],
-      changedTouches: [touch],
-      bubbles: true,
-    }));
-    el.dispatchEvent(new TouchEvent('touchend', {
-      touches: [],
-      changedTouches: [touch],
-      bubbles: true,
-    }));
+    el.dispatchEvent(
+      new TouchEvent('touchstart', {
+        touches: [touch],
+        changedTouches: [touch],
+        bubbles: true,
+      })
+    );
+    el.dispatchEvent(
+      new TouchEvent('touchend', {
+        touches: [],
+        changedTouches: [touch],
+        bubbles: true,
+      })
+    );
   }, selector);
 }
 
 /** Tap using the best available method */
-export async function tap(
-  page: Page,
-  selector: string,
-  options: { isChromium?: boolean } = {},
-): Promise<void> {
+export async function tap(page: Page, selector: string, options: { isChromium?: boolean } = {}): Promise<void> {
   if (options.isChromium !== false) {
     try {
       await tapViaCDP(page, selector);

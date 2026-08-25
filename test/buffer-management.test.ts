@@ -10,7 +10,7 @@ import { describe, it, expect } from 'vitest';
 describe('Buffer Management', () => {
   describe('Terminal Buffer Limits', () => {
     const MAX_TERMINAL_BUFFER = 2 * 1024 * 1024; // 2MB
-    const TRIM_TERMINAL_TO = 1.5 * 1024 * 1024;  // 1.5MB
+    const TRIM_TERMINAL_TO = 1.5 * 1024 * 1024; // 1.5MB
 
     class TerminalBuffer {
       private buffer = '';
@@ -75,7 +75,7 @@ describe('Buffer Management', () => {
 
   describe('Text Output Buffer Limits', () => {
     const MAX_TEXT_BUFFER = 1 * 1024 * 1024; // 1MB
-    const TRIM_TEXT_TO = 768 * 1024;         // 768KB
+    const TRIM_TEXT_TO = 768 * 1024; // 768KB
 
     class TextBuffer {
       private buffer = '';
@@ -226,7 +226,7 @@ describe('Buffer Management', () => {
 
   describe('Respawn Buffer Limits', () => {
     const MAX_RESPAWN_BUFFER = 1 * 1024 * 1024; // 1MB
-    const TRIM_RESPAWN_TO = 512 * 1024;         // 512KB
+    const TRIM_RESPAWN_TO = 512 * 1024; // 512KB
 
     class RespawnBuffer {
       private buffer = '';

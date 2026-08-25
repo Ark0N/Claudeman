@@ -257,7 +257,15 @@ const capabilitiesSchema = z
       .object({ source: z.enum(['flag', 'claude-settings-file', 'none']), param: z.string().optional() })
       .strict(),
     privilegedParams: z
-      .array(z.object({ param: z.string(), clampTo: z.union([z.boolean(), z.string()]) }).strict())
+      .array(
+        z
+          .object({
+            param: z.string(),
+            clampTo: z.union([z.boolean(), z.string()]),
+            materializeWhenAbsent: z.boolean().optional(),
+          })
+          .strict()
+      )
       .max(8),
     gates: z.record(z.string(), z.object({ minVersion: z.string().max(20), failClosed: z.boolean() }).strict()),
     maxFrameBytes: z.number().int().positive().optional(),

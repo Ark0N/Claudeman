@@ -65,7 +65,7 @@
        app.js, NOT the handheld storage-key test `m`. Use a different predicate
        here and boot will contradict this value, animating the drawer open by
        itself on every load between 768 and 1023px. -->
-  <script>try{var m=window.innerWidth<768||(('ontouchstart' in window||navigator.maxTouchPoints>0)&&window.innerWidth<1024);var k=m?'codeman-app-settings-mobile':'codeman-app-settings';var L=JSON.parse(localStorage.getItem(k)||'{}').sessionListLayout;var solo=/^\/session\//.test(location.pathname);var C=localStorage.getItem('codeman-sidebar-collapsed');var S=(L==='sidebar'||L==='sidebar-rich')&&!solo;document.documentElement.dataset.sessionList=S?'sidebar':'header';document.documentElement.dataset.sidebarDetail=(S&&L==='sidebar-rich')?'rich':'simple';document.documentElement.dataset.sidebar=(C===null?window.innerWidth<1024:C==='1')?'collapsed':'expanded';}catch(e){document.documentElement.dataset.sessionList='header';document.documentElement.dataset.sidebarDetail='simple';document.documentElement.dataset.sidebar='expanded';}</script>
+  <script>try{var m=window.innerWidth<768||(('ontouchstart' in window||navigator.maxTouchPoints>0)&&window.innerWidth<1024);var k=m?'codeman-app-settings-mobile':'codeman-app-settings';var A=JSON.parse(localStorage.getItem(k)||'{}');var L=A.sessionListLayout;var F=Number(A.sessionSidebarFontSize);var solo=/^\/session\//.test(location.pathname);var C=localStorage.getItem('codeman-sidebar-collapsed');var S=(L==='sidebar'||L==='sidebar-rich')&&!solo;document.documentElement.dataset.sessionList=S?'sidebar':'header';document.documentElement.dataset.sidebarDetail=(S&&L==='sidebar-rich')?'rich':'simple';document.documentElement.dataset.sidebar=(C===null?window.innerWidth<1024:C==='1')?'collapsed':'expanded';var V=A.tabOrientation==='vertical'&&!S&&!solo&&window.innerWidth>=768;document.documentElement.dataset.tabOrientation=V?'vertical':'horizontal';var W=Number(A.tabRailWidth);if(V&&Number.isInteger(W)&&W>=208&&W<=360)document.documentElement.style.setProperty('--tab-rail-width',W+'px');if(Number.isInteger(F)&&F>=11&&F<=18)document.documentElement.style.setProperty('--session-sidebar-name-font-size',F+'px');}catch(e){document.documentElement.dataset.sessionList='header';document.documentElement.dataset.sidebarDetail='simple';document.documentElement.dataset.sidebar='expanded';document.documentElement.dataset.tabOrientation='horizontal';}</script>
   <!-- Inline critical CSS for instant skeleton paint (before styles.css loads) -->
   <style>
     .loading-skeleton{display:flex;flex-direction:column;height:100vh;height:100dvh;background:var(--bg-dark,#11151c)}
@@ -358,6 +358,20 @@
 
     <!-- Main Terminal Area -->
     <main class="main">
+      <aside class="tab-rail" id="tabRail" aria-label="Session navigation">
+        <div
+          id="tabRailResizeHandle"
+          class="tab-rail-resize-handle"
+          role="separator"
+          aria-orientation="vertical"
+          aria-label="Resize session rail"
+          aria-valuemin="208"
+          aria-valuemax="360"
+          aria-valuenow="256"
+          tabindex="0"
+        ></div>
+      </aside>
+
       <!-- Collapsible session sidebar (opt-in layout). Deliberately EMPTY in
            markup: applySessionListLayout() moves #sessionTabs in here, so the
            vertical list is the exact same DOM node as the header strip and every
@@ -520,6 +534,7 @@
            desktop (which never loads mobile.css) can never render it. -->
       <div class="mobile-overview" id="mobileOverview" hidden></div>
     </main>
+    <div class="tab-rail-resize-shield" id="tabRailResizeShield" aria-hidden="true" hidden></div>
 
     <!-- Project Insights Panel (shows file-viewing Bash commands) -->
     <div class="project-insights-panel" id="projectInsightsPanel">
@@ -559,6 +574,7 @@
           <div class="file-preview-actions">
             <button class="btn-icon-sm file-preview-edit-btn" id="filePreviewEditBtn" onclick="app.enterFilePreviewEdit()" title="Edit file" aria-label="Edit file" hidden><svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M17 3a2.85 2.83 0 1 1 4 4L7.5 20.5 2 22l1.5-5.5z"/></svg></button>
             <button class="btn-icon-sm" onclick="app.copyFilePreviewContent()" title="Copy content">&#x2398;</button>
+            <button class="btn-icon-sm" id="filePreviewDetachBtn" onclick="app.detachFilePreview()" title="Open in new tab" aria-label="Open in new tab" hidden><svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M18 13v6a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2V8a2 2 0 0 1 2-2h6"/><polyline points="15 3 21 3 21 9"/><line x1="10" y1="14" x2="21" y2="3"/></svg></button>
             <button class="btn-icon-sm" onclick="app.closeFilePreview()" title="Close">&times;</button>
           </div>
         </div>
@@ -905,6 +921,7 @@
                 <option value="gemini">Gemini</option>
                 <option value="antigravity">Antigravity</option>
                 <option value="pi">Pi</option>
+                <option value="grok">Grok</option>
               </select>
             </div>
             <div class="form-row"><label>Working Directory</label><input type="text" id="schWorkingDir" placeholder="/absolute/path"></div>
@@ -1649,6 +1666,19 @@
               </div>
 
               <div class="set-group">
+                <div class="set-group-head"><h4>Selection &amp; clipboard</h4><span class="set-scope">device</span></div>
+                <div class="set-group-body">
+                  <div class="set-row" data-search="auto copy selection clipboard highlight copy on select mouse">
+                    <div class="set-row-text">
+                      <span class="set-row-label">Auto Copy Selection</span>
+                      <span class="set-row-desc">Put highlighted terminal text on the clipboard as soon as you finish selecting it, with mouse, double-click or long-press. Ctrl+C still copies on demand, and nothing outside the terminal is copied.</span>
+                    </div>
+                    <label class="switch switch-sm"><input type="checkbox" id="appSettingsAutoCopySelection"><span class="slider"></span></label>
+                  </div>
+                </div>
+              </div>
+
+              <div class="set-group">
                 <div class="set-group-head"><h4>Font</h4><span class="set-scope">device</span></div>
                 <div class="set-group-body">
                   <div class="set-row has-field" data-search="terminal font family nerd custom typeface">
@@ -1877,6 +1907,29 @@
               <div class="set-group">
                 <div class="set-group-head"><h4>Tabs</h4><span class="set-scope">device</span></div>
                 <div class="set-group-body">
+                  <div class="set-row has-field" data-search="tab orientation horizontal vertical side rail">
+                    <div class="set-row-text">
+                      <span class="set-row-label">Tab Orientation</span>
+                      <span class="set-row-desc">Keep tabs in the header or place them beside the terminal. Phones stay horizontal.</span>
+                    </div>
+                    <select id="appSettingsTabOrientation" class="set-select">
+                      <option value="horizontal">Horizontal (top)</option>
+                      <option value="vertical">Vertical (side rail)</option>
+                    </select>
+                  </div>
+                  <div class="set-row has-field" data-search="tab rail width resize compact wide maximum">
+                    <div class="set-row-text">
+                      <span class="set-row-label">Vertical Rail Width</span>
+                      <span class="set-row-desc">Set the preferred rail width for this device.</span>
+                    </div>
+                    <select id="appSettingsTabRailWidth" class="set-select">
+                      <option value="208">Compact (208px)</option>
+                      <option value="256">Default (256px)</option>
+                      <option value="320">Wide (320px)</option>
+                      <option value="360">Maximum (360px)</option>
+                      <option value="custom" disabled>Custom</option>
+                    </select>
+                  </div>
                   <div class="set-row has-field" data-search="session list layout sidebar tab strip vertical">
                     <div class="set-row-text">
                       <span class="set-row-label">Session List Layout</span>
@@ -1887,6 +1940,18 @@
                       <option value="sidebar">Left sidebar simple</option>
                       <option value="sidebar-rich">Left sidebar</option>
                     </select>
+                  </div>
+                  <div class="set-row has-field" data-search="session sidebar name font size text">
+                    <div class="set-row-text">
+                      <span class="set-row-label" id="appSettingsSessionSidebarFontSizeLabel">Session Name Font Size</span>
+                      <span class="set-row-desc">Adjust only session names in the vertical sidebar.</span>
+                    </div>
+                    <label class="set-range-field" for="appSettingsSessionSidebarFontSize">
+                      <input type="range" id="appSettingsSessionSidebarFontSize" min="11" max="18" step="1" value="12"
+                        aria-labelledby="appSettingsSessionSidebarFontSizeLabel"
+                        oninput="document.getElementById('appSettingsSessionSidebarFontSizeValue').textContent=this.value+' px'">
+                      <output id="appSettingsSessionSidebarFontSizeValue" for="appSettingsSessionSidebarFontSize">12 px</output>
+                    </label>
                   </div>
                   <div class="set-row" data-search="tall tabs folder name two rows">
                     <div class="set-row-text">
@@ -2655,6 +2720,7 @@
                 <option value="opencode" data-cli="opencode">OpenCode</option>
                 <option value="antigravity" data-cli="antigravity">Antigravity</option>
                 <option value="pi" data-cli="pi">Pi</option>
+                <option value="grok" data-cli="grok">Grok</option>
                 <option value="shell">Shell (no agent)</option>
               </select>
               <span class="form-hint">Which CLI to point the Run button at once the clone finishes. Changeable any time from the Run dropdown.</span>
@@ -2795,7 +2861,7 @@
             <div class="form-row">
               <label>Image</label>
               <input type="text" id="dockerImage" placeholder="codeman/agent:base" autocomplete="off" autocapitalize="off" spellcheck="false">
-              <span class="form-hint">Build it once with <code>node scripts/build-agent-image.mjs</code>. Contains node + claude/codex/gemini/opencode/agy/pi + tmux.</span>
+              <span class="form-hint">Build it once with <code>node scripts/build-agent-image.mjs</code>. Contains node + claude/codex/gemini/opencode/agy/pi/grok + tmux.</span>
             </div>
             <div class="form-row">
               <label>Network</label>
@@ -3362,6 +3428,7 @@
   <!-- Hardened markdown HTML sanitizer (wires DOMPurify). Must precede app.js. -->
   <script defer src="sanitize-html.js"></script>
   <script defer src="app.js"></script>
+  <script defer src="tab-rail-resize.js"></script>
   <script defer src="terminal-ui.js"></script>
   <script defer src="respawn-ui.js"></script>
   <script defer src="ralph-panel.js"></script>

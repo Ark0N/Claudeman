@@ -343,14 +343,14 @@ on the user's disk) if missing, do not retry it in a loop, and remember the name
 ⚠️ A `mode` whose CLI is **not installed on the server** fails the spawn with
 `OPERATION_FAILED`; it never falls back to claude. Probe first whenever you did not pick
 the mode yourself: `GET /api/v1/claude/status`, `GET /api/v1/opencode/status`,
-`GET /api/v1/codex/status`, `GET /api/v1/gemini/status`, `GET /api/v1/antigravity/status`
+`GET /api/v1/codex/status`, `GET /api/v1/gemini/status` and `GET /api/v1/antigravity/status`
 and `GET /api/v1/pi/status` each return `.data.{available, path}` (no session needed).
 `grok` has no legacy per-mode alias — use the generic `GET /api/v1/cli/grok/status`
 instead, same response shape. Pi's and grok's both also carry `.data.version`, because
 `pi`/`grok` are short generic names an unrelated binary on `$PATH` can shadow: the
-resolver rejects one whose `--version` is not
-semver-shaped, so `available:false` there can mean "a different `pi` is in front" rather
-than "nothing is installed". `shell` has no CLI to probe.
+resolver rejects one whose `--version` is not semver-shaped, so `available:false` there
+can mean "a different `pi`/`grok` is in front" rather than "nothing is installed". `shell`
+has no CLI to probe.
 
 ⚠️ **Branch on `.success` before reading `.data.sessionId`.** On any failure the field
 is absent, `jq -r` prints the literal string `null`, and every later call then targets
@@ -464,10 +464,11 @@ Quirks that will bite you:
   session answers with an empty timeline rather than a 404.
 - ⚠️ **`active-tools` proves presence, never absence.** It is fed by the BashToolParser,
   which reads Claude's rendered `● Bash(…)` lines, and `_processExpensiveParsers`
-  returns early for every external CLI mode (`session.ts:2136`), so it is permanently
+  returns early for every external CLI mode (`session.ts:2227`), so it is permanently
   `[]` on `opencode`/`codex`/`gemini`/`antigravity`/`pi`/`grok`. ⚠️ **`shell` is NOT one of those**
-  (`isExternalCliMode`, `session.ts:165-167`, lists only those five), so the parser does
-  run on a shell worker, and `TEXT_COMMAND_PATTERN` (`bash-tool-parser.ts:88`) matches
+  (`isExternalCliMode`, `session.ts:180`, reads the CLI registry's `capabilities.external`
+  flag rather than a hardcoded list, and `shell`'s entry has it `false`), so the parser does
+  run on a shell worker, and `TEXT_COMMAND_PATTERN` (`bash-tool-parser.ts:89`) matches
   bare `tail|cat|head|less|grep|watch|multitail <path>` lines with no `● Bash(` wrapper:
   a shell worker running `cat build.log` really does populate this. In practice it stays
   empty for most shell work. It also never sees non-Bash

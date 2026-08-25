@@ -57,7 +57,7 @@ describe('LRUMap', () => {
       map.set('a', 1);
       map.set('b', 2);
       map.set('c', 3);
-      map.set('d', 4);  // Should evict 'a'
+      map.set('d', 4); // Should evict 'a'
 
       expect(map.size).toBe(3);
       expect(map.has('a')).toBe(false);
@@ -75,10 +75,13 @@ describe('LRUMap', () => {
 
       map.set('a', 1);
       map.set('b', 2);
-      map.set('c', 3);  // Evicts 'a'
-      map.set('d', 4);  // Evicts 'b'
+      map.set('c', 3); // Evicts 'a'
+      map.set('d', 4); // Evicts 'b'
 
-      expect(evicted).toEqual([['a', 1], ['b', 2]]);
+      expect(evicted).toEqual([
+        ['a', 1],
+        ['b', 2],
+      ]);
     });
 
     it('should refresh position on get()', () => {
@@ -93,7 +96,7 @@ describe('LRUMap', () => {
       // Add 'd' which should evict 'b' (now oldest)
       map.set('d', 4);
 
-      expect(map.has('a')).toBe(true);  // 'a' was refreshed
+      expect(map.has('a')).toBe(true); // 'a' was refreshed
       expect(map.has('b')).toBe(false); // 'b' was evicted
       expect(map.has('c')).toBe(true);
       expect(map.has('d')).toBe(true);
@@ -161,14 +164,17 @@ describe('LRUMap', () => {
 
   describe('expireOlderThan', () => {
     it('should expire entries older than maxAge', () => {
-      interface Entry { value: number; timestamp: number }
+      interface Entry {
+        value: number;
+        timestamp: number;
+      }
       const map = new LRUMap<string, Entry>({ maxSize: 10 });
 
       const now = Date.now();
-      map.set('old1', { value: 1, timestamp: now - 10000 });  // 10s old
-      map.set('old2', { value: 2, timestamp: now - 8000 });   // 8s old
-      map.set('new1', { value: 3, timestamp: now - 2000 });   // 2s old
-      map.set('new2', { value: 4, timestamp: now - 1000 });   // 1s old
+      map.set('old1', { value: 1, timestamp: now - 10000 }); // 10s old
+      map.set('old2', { value: 2, timestamp: now - 8000 }); // 8s old
+      map.set('new1', { value: 3, timestamp: now - 2000 }); // 2s old
+      map.set('new2', { value: 4, timestamp: now - 1000 }); // 1s old
 
       const evicted = map.expireOlderThan(5000, (v) => v.timestamp);
 
@@ -181,7 +187,10 @@ describe('LRUMap', () => {
     });
 
     it('should call onEvict for expired entries', () => {
-      interface Entry { value: number; timestamp: number }
+      interface Entry {
+        value: number;
+        timestamp: number;
+      }
       const evicted: string[] = [];
       const map = new LRUMap<string, Entry>({
         maxSize: 10,

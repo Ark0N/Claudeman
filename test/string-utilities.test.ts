@@ -80,9 +80,7 @@ describe('String Utilities', () => {
 
   describe('Case Conversion', () => {
     const toCamelCase = (str: string): string => {
-      return str
-        .toLowerCase()
-        .replace(/[-_\s]+(.)?/g, (_, c) => c ? c.toUpperCase() : '');
+      return str.toLowerCase().replace(/[-_\s]+(.)?/g, (_, c) => (c ? c.toUpperCase() : ''));
     };
 
     const toSnakeCase = (str: string): string => {
@@ -140,7 +138,7 @@ describe('String Utilities', () => {
         '"': '&quot;',
         "'": '&#39;',
       };
-      return str.replace(/[&<>"']/g, char => htmlEscapes[char]);
+      return str.replace(/[&<>"']/g, (char) => htmlEscapes[char]);
     };
 
     const escapeRegex = (str: string): string => {
@@ -154,7 +152,7 @@ describe('String Utilities', () => {
     it('should escape HTML entities', () => {
       expect(escapeHtml('<script>alert("xss")</script>')).toBe('&lt;script&gt;alert(&quot;xss&quot;)&lt;/script&gt;');
       expect(escapeHtml('a & b')).toBe('a &amp; b');
-      expect(escapeHtml("it's")).toBe("it&#39;s");
+      expect(escapeHtml("it's")).toBe('it&#39;s');
     });
 
     it('should escape regex special chars', () => {
@@ -220,7 +218,7 @@ describe('String Utilities', () => {
 
   describe('Word Processing', () => {
     const splitWords = (str: string): string[] => {
-      return str.split(/\s+/).filter(w => w.length > 0);
+      return str.split(/\s+/).filter((w) => w.length > 0);
     };
 
     const countWords = (str: string): number => {
@@ -232,7 +230,7 @@ describe('String Utilities', () => {
     };
 
     const capitalizeWords = (str: string): string => {
-      return str.replace(/\b\w/g, c => c.toUpperCase());
+      return str.replace(/\b\w/g, (c) => c.toUpperCase());
     };
 
     it('should split words', () => {
@@ -458,12 +456,18 @@ describe('String Utilities', () => {
     };
 
     const trimLines = (str: string): string => {
-      return str.split('\n').map(line => line.trim()).join('\n');
+      return str
+        .split('\n')
+        .map((line) => line.trim())
+        .join('\n');
     };
 
     const indentLines = (str: string, spaces: number): string => {
       const indent = ' '.repeat(spaces);
-      return str.split('\n').map(line => indent + line).join('\n');
+      return str
+        .split('\n')
+        .map((line) => indent + line)
+        .join('\n');
     };
 
     it('should normalize whitespace', () => {
@@ -538,11 +542,7 @@ describe('String Utilities', () => {
           if (b.charAt(i - 1) === a.charAt(j - 1)) {
             matrix[i][j] = matrix[i - 1][j - 1];
           } else {
-            matrix[i][j] = Math.min(
-              matrix[i - 1][j - 1] + 1,
-              matrix[i][j - 1] + 1,
-              matrix[i - 1][j] + 1
-            );
+            matrix[i][j] = Math.min(matrix[i - 1][j - 1] + 1, matrix[i][j - 1] + 1, matrix[i - 1][j] + 1);
           }
         }
       }
@@ -575,8 +575,8 @@ describe('String Utilities', () => {
 
     const generateUUID = (): string => {
       return 'xxxxxxxx-xxxx-4xxx-yxxx-xxxxxxxxxxxx'.replace(/[xy]/g, (c) => {
-        const r = Math.random() * 16 | 0;
-        const v = c === 'x' ? r : (r & 0x3 | 0x8);
+        const r = (Math.random() * 16) | 0;
+        const v = c === 'x' ? r : (r & 0x3) | 0x8;
         return v.toString(16);
       });
     };

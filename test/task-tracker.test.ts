@@ -46,16 +46,18 @@ describe('TaskTracker', () => {
 
       tracker.processMessage({
         message: {
-          content: [{
-            type: 'tool_use',
-            id: 'task-123',
-            name: 'Task',
-            input: {
-              description: 'Test task',
-              subagent_type: 'explore',
-              prompt: 'Find all test files',
+          content: [
+            {
+              type: 'tool_use',
+              id: 'task-123',
+              name: 'Task',
+              input: {
+                description: 'Test task',
+                subagent_type: 'explore',
+                prompt: 'Find all test files',
+              },
             },
-          }],
+          ],
         },
       });
 
@@ -70,15 +72,17 @@ describe('TaskTracker', () => {
     it('should use prompt as description fallback', () => {
       tracker.processMessage({
         message: {
-          content: [{
-            type: 'tool_use',
-            id: 'task-456',
-            name: 'Task',
-            input: {
-              prompt: 'This is a very long prompt that should be truncated for the description',
-              subagent_type: 'general-purpose',
+          content: [
+            {
+              type: 'tool_use',
+              id: 'task-456',
+              name: 'Task',
+              input: {
+                prompt: 'This is a very long prompt that should be truncated for the description',
+                subagent_type: 'general-purpose',
+              },
             },
-          }],
+          ],
         },
       });
 
@@ -90,12 +94,14 @@ describe('TaskTracker', () => {
     it('should use default description when none provided', () => {
       tracker.processMessage({
         message: {
-          content: [{
-            type: 'tool_use',
-            id: 'task-789',
-            name: 'Task',
-            input: {},
-          }],
+          content: [
+            {
+              type: 'tool_use',
+              id: 'task-789',
+              name: 'Task',
+              input: {},
+            },
+          ],
         },
       });
 
@@ -107,12 +113,14 @@ describe('TaskTracker', () => {
     it('should not process non-Task tool_use', () => {
       tracker.processMessage({
         message: {
-          content: [{
-            type: 'tool_use',
-            id: 'tool-123',
-            name: 'Read',
-            input: { file_path: '/test.txt' },
-          }],
+          content: [
+            {
+              type: 'tool_use',
+              id: 'tool-123',
+              name: 'Read',
+              input: { file_path: '/test.txt' },
+            },
+          ],
         },
       });
 
@@ -128,24 +136,28 @@ describe('TaskTracker', () => {
       // Create task first
       tracker.processMessage({
         message: {
-          content: [{
-            type: 'tool_use',
-            id: 'task-123',
-            name: 'Task',
-            input: { description: 'Test task', subagent_type: 'explore' },
-          }],
+          content: [
+            {
+              type: 'tool_use',
+              id: 'task-123',
+              name: 'Task',
+              input: { description: 'Test task', subagent_type: 'explore' },
+            },
+          ],
         },
       });
 
       // Complete it
       tracker.processMessage({
         message: {
-          content: [{
-            type: 'tool_result',
-            tool_use_id: 'task-123',
-            is_error: false,
-            content: 'Task completed successfully',
-          }],
+          content: [
+            {
+              type: 'tool_result',
+              tool_use_id: 'task-123',
+              is_error: false,
+              content: 'Task completed successfully',
+            },
+          ],
         },
       });
 
@@ -163,24 +175,28 @@ describe('TaskTracker', () => {
       // Create task first
       tracker.processMessage({
         message: {
-          content: [{
-            type: 'tool_use',
-            id: 'task-fail',
-            name: 'Task',
-            input: { description: 'Failing task', subagent_type: 'bash' },
-          }],
+          content: [
+            {
+              type: 'tool_use',
+              id: 'task-fail',
+              name: 'Task',
+              input: { description: 'Failing task', subagent_type: 'bash' },
+            },
+          ],
         },
       });
 
       // Fail it
       tracker.processMessage({
         message: {
-          content: [{
-            type: 'tool_result',
-            tool_use_id: 'task-fail',
-            is_error: true,
-            content: 'Command failed with exit code 1',
-          }],
+          content: [
+            {
+              type: 'tool_result',
+              tool_use_id: 'task-fail',
+              is_error: true,
+              content: 'Command failed with exit code 1',
+            },
+          ],
         },
       });
 
@@ -195,23 +211,27 @@ describe('TaskTracker', () => {
     it('should handle object content in tool_result', () => {
       tracker.processMessage({
         message: {
-          content: [{
-            type: 'tool_use',
-            id: 'task-obj',
-            name: 'Task',
-            input: { description: 'Object result task', subagent_type: 'explore' },
-          }],
+          content: [
+            {
+              type: 'tool_use',
+              id: 'task-obj',
+              name: 'Task',
+              input: { description: 'Object result task', subagent_type: 'explore' },
+            },
+          ],
         },
       });
 
       tracker.processMessage({
         message: {
-          content: [{
-            type: 'tool_result',
-            tool_use_id: 'task-obj',
-            is_error: false,
-            content: { files: ['a.ts', 'b.ts'], count: 2 },
-          }],
+          content: [
+            {
+              type: 'tool_result',
+              tool_use_id: 'task-obj',
+              is_error: false,
+              content: { files: ['a.ts', 'b.ts'], count: 2 },
+            },
+          ],
         },
       });
 
@@ -225,24 +245,28 @@ describe('TaskTracker', () => {
       // Parent task
       tracker.processMessage({
         message: {
-          content: [{
-            type: 'tool_use',
-            id: 'parent-task',
-            name: 'Task',
-            input: { description: 'Parent task', subagent_type: 'general-purpose' },
-          }],
+          content: [
+            {
+              type: 'tool_use',
+              id: 'parent-task',
+              name: 'Task',
+              input: { description: 'Parent task', subagent_type: 'general-purpose' },
+            },
+          ],
         },
       });
 
       // Child task (while parent is running)
       tracker.processMessage({
         message: {
-          content: [{
-            type: 'tool_use',
-            id: 'child-task',
-            name: 'Task',
-            input: { description: 'Child task', subagent_type: 'explore' },
-          }],
+          content: [
+            {
+              type: 'tool_use',
+              id: 'child-task',
+              name: 'Task',
+              input: { description: 'Child task', subagent_type: 'explore' },
+            },
+          ],
         },
       });
 
@@ -257,36 +281,42 @@ describe('TaskTracker', () => {
       // Level 1
       tracker.processMessage({
         message: {
-          content: [{
-            type: 'tool_use',
-            id: 'level-1',
-            name: 'Task',
-            input: { description: 'Level 1', subagent_type: 'general' },
-          }],
+          content: [
+            {
+              type: 'tool_use',
+              id: 'level-1',
+              name: 'Task',
+              input: { description: 'Level 1', subagent_type: 'general' },
+            },
+          ],
         },
       });
 
       // Level 2
       tracker.processMessage({
         message: {
-          content: [{
-            type: 'tool_use',
-            id: 'level-2',
-            name: 'Task',
-            input: { description: 'Level 2', subagent_type: 'general' },
-          }],
+          content: [
+            {
+              type: 'tool_use',
+              id: 'level-2',
+              name: 'Task',
+              input: { description: 'Level 2', subagent_type: 'general' },
+            },
+          ],
         },
       });
 
       // Level 3
       tracker.processMessage({
         message: {
-          content: [{
-            type: 'tool_use',
-            id: 'level-3',
-            name: 'Task',
-            input: { description: 'Level 3', subagent_type: 'general' },
-          }],
+          content: [
+            {
+              type: 'tool_use',
+              id: 'level-3',
+              name: 'Task',
+              input: { description: 'Level 3', subagent_type: 'general' },
+            },
+          ],
         },
       });
 
@@ -299,48 +329,56 @@ describe('TaskTracker', () => {
       // Task A
       tracker.processMessage({
         message: {
-          content: [{
-            type: 'tool_use',
-            id: 'task-a',
-            name: 'Task',
-            input: { description: 'Task A', subagent_type: 'general' },
-          }],
+          content: [
+            {
+              type: 'tool_use',
+              id: 'task-a',
+              name: 'Task',
+              input: { description: 'Task A', subagent_type: 'general' },
+            },
+          ],
         },
       });
 
       // Task B (child of A)
       tracker.processMessage({
         message: {
-          content: [{
-            type: 'tool_use',
-            id: 'task-b',
-            name: 'Task',
-            input: { description: 'Task B', subagent_type: 'general' },
-          }],
+          content: [
+            {
+              type: 'tool_use',
+              id: 'task-b',
+              name: 'Task',
+              input: { description: 'Task B', subagent_type: 'general' },
+            },
+          ],
         },
       });
 
       // Complete Task B
       tracker.processMessage({
         message: {
-          content: [{
-            type: 'tool_result',
-            tool_use_id: 'task-b',
-            is_error: false,
-            content: 'Done',
-          }],
+          content: [
+            {
+              type: 'tool_result',
+              tool_use_id: 'task-b',
+              is_error: false,
+              content: 'Done',
+            },
+          ],
         },
       });
 
       // Task C should now be child of A (not B)
       tracker.processMessage({
         message: {
-          content: [{
-            type: 'tool_use',
-            id: 'task-c',
-            name: 'Task',
-            input: { description: 'Task C', subagent_type: 'general' },
-          }],
+          content: [
+            {
+              type: 'tool_use',
+              id: 'task-c',
+              name: 'Task',
+              input: { description: 'Task C', subagent_type: 'general' },
+            },
+          ],
         },
       });
 
@@ -353,66 +391,76 @@ describe('TaskTracker', () => {
       // Root task
       tracker.processMessage({
         message: {
-          content: [{
-            type: 'tool_use',
-            id: 'root-1',
-            name: 'Task',
-            input: { description: 'Root 1', subagent_type: 'general' },
-          }],
+          content: [
+            {
+              type: 'tool_use',
+              id: 'root-1',
+              name: 'Task',
+              input: { description: 'Root 1', subagent_type: 'general' },
+            },
+          ],
         },
       });
 
       // Child task
       tracker.processMessage({
         message: {
-          content: [{
-            type: 'tool_use',
-            id: 'child-1',
-            name: 'Task',
-            input: { description: 'Child 1', subagent_type: 'general' },
-          }],
+          content: [
+            {
+              type: 'tool_use',
+              id: 'child-1',
+              name: 'Task',
+              input: { description: 'Child 1', subagent_type: 'general' },
+            },
+          ],
         },
       });
 
       // Complete child, start another root
       tracker.processMessage({
         message: {
-          content: [{
-            type: 'tool_result',
-            tool_use_id: 'child-1',
-            is_error: false,
-            content: 'Done',
-          }],
+          content: [
+            {
+              type: 'tool_result',
+              tool_use_id: 'child-1',
+              is_error: false,
+              content: 'Done',
+            },
+          ],
         },
       });
 
       tracker.processMessage({
         message: {
-          content: [{
-            type: 'tool_result',
-            tool_use_id: 'root-1',
-            is_error: false,
-            content: 'Done',
-          }],
+          content: [
+            {
+              type: 'tool_result',
+              tool_use_id: 'root-1',
+              is_error: false,
+              content: 'Done',
+            },
+          ],
         },
       });
 
       tracker.processMessage({
         message: {
-          content: [{
-            type: 'tool_use',
-            id: 'root-2',
-            name: 'Task',
-            input: { description: 'Root 2', subagent_type: 'general' },
-          }],
+          content: [
+            {
+              type: 'tool_use',
+              id: 'root-2',
+              name: 'Task',
+              input: { description: 'Root 2', subagent_type: 'general' },
+            },
+          ],
         },
       });
 
       const tree = tracker.getTaskTree();
       expect(tree).toHaveLength(2);
-      expect(tree.map(t => t.id)).toContain('root-1');
-      expect(tree.map(t => t.id)).toContain('root-2');
-      expect(tree.map(t => t.id)).not.toContain('child-1');
+      expect(tree.map((t) => t.id)).toContain('root-1');
+      expect(tree.map((t) => t.id)).toContain('root-2');
+      expect(tree.map((t) => t.id)).not.toContain('child-1');
     });
   });
 
@@ -481,7 +529,12 @@ describe('TaskTracker', () => {
       tracker.processMessage({
         message: {
           content: [
-            { type: 'tool_use', id: 'task-1', name: 'Task', input: { description: 'Task 1', subagent_type: 'explore' } },
+            {
+              type: 'tool_use',
+              id: 'task-1',
+              name: 'Task',
+              input: { description: 'Task 1', subagent_type: 'explore' },
+            },
             { type: 'tool_use', id: 'task-2', name: 'Task', input: { description: 'Task 2', subagent_type: 'bash' } },
           ],
         },
@@ -495,16 +548,19 @@ describe('TaskTracker', () => {
       tracker.processMessage({
         message: {
           content: [
-            { type: 'tool_use', id: 'task-1', name: 'Task', input: { description: 'Task 1', subagent_type: 'explore' } },
+            {
+              type: 'tool_use',
+              id: 'task-1',
+              name: 'Task',
+              input: { description: 'Task 1', subagent_type: 'explore' },
+            },
           ],
         },
       });
 
       tracker.processMessage({
         message: {
-          content: [
-            { type: 'tool_result', tool_use_id: 'task-1', is_error: false, content: 'Done' },
-          ],
+          content: [{ type: 'tool_result', tool_use_id: 'task-1', is_error: false, content: 'Done' }],
         },
       });
 
@@ -518,16 +574,19 @@ describe('TaskTracker', () => {
 
       tracker.processMessage({
         message: {
-          content: [
-            { type: 'tool_result', tool_use_id: 'task-2', is_error: true, content: 'Failed' },
-          ],
+          content: [{ type: 'tool_result', tool_use_id: 'task-2', is_error: true, content: 'Failed' }],
         },
       });
 
       tracker.processMessage({
         message: {
           content: [
-            { type: 'tool_use', id: 'task-3', name: 'Task', input: { description: 'Task 3', subagent_type: 'general' } },
+            {
+              type: 'tool_use',
+              id: 'task-3',
+              name: 'Task',
+              input: { description: 'Task 3', subagent_type: 'general' },
+            },
           ],
         },
       });
@@ -545,7 +604,12 @@ describe('TaskTracker', () => {
       tracker.processMessage({
         message: {
           content: [
-            { type: 'tool_use', id: 'task-1', name: 'Task', input: { description: 'Task 1', subagent_type: 'explore' } },
+            {
+              type: 'tool_use',
+              id: 'task-1',
+              name: 'Task',
+              input: { description: 'Task 1', subagent_type: 'explore' },
+            },
             { type: 'tool_use', id: 'task-2', name: 'Task', input: { description: 'Task 2', subagent_type: 'bash' } },
           ],
         },
@@ -582,12 +646,14 @@ describe('TaskTracker', () => {
       expect(() => {
         tracker.processMessage({
           message: {
-            content: [{
-              type: 'tool_result',
-              tool_use_id: 'unknown-task',
-              is_error: false,
-              content: 'Done',
-            }],
+            content: [
+              {
+                type: 'tool_result',
+                tool_use_id: 'unknown-task',
+                is_error: false,
+                content: 'Done',
+              },
+            ],
           },
         });
       }).not.toThrow();
@@ -610,12 +676,14 @@ describe('TaskTracker', () => {
       for (let i = 0; i < 150; i++) {
         tracker.processMessage({
           message: {
-            content: [{
-              type: 'tool_use',
-              id: `task-${i}`,
-              name: 'Task',
-              input: { description: `Task ${i}`, subagent_type: 'general' },
-            }],
+            content: [
+              {
+                type: 'tool_use',
+                id: `task-${i}`,
+                name: 'Task',
+                input: { description: `Task ${i}`, subagent_type: 'general' },
+              },
+            ],
           },
         });
       }
@@ -630,22 +698,26 @@ describe('TaskTracker', () => {
       for (let i = 0; i < 120; i++) {
         tracker.processMessage({
           message: {
-            content: [{
-              type: 'tool_use',
-              id: `task-${i}`,
-              name: 'Task',
-              input: { description: `Task ${i}`, subagent_type: 'general' },
-            }],
+            content: [
+              {
+                type: 'tool_use',
+                id: `task-${i}`,
+                name: 'Task',
+                input: { description: `Task ${i}`, subagent_type: 'general' },
+              },
+            ],
           },
         });
         tracker.processMessage({
           message: {
-            content: [{
-              type: 'tool_result',
-              tool_use_id: `task-${i}`,
-              is_error: false,
-              content: 'Done',
-            }],
+            content: [
+              {
+                type: 'tool_result',
+                tool_use_id: `task-${i}`,
+                is_error: false,
+                content: 'Done',
+              },
+            ],
           },
         });
       }
@@ -659,12 +731,14 @@ describe('TaskTracker', () => {
     it('should have all required fields', () => {
       tracker.processMessage({
         message: {
-          content: [{
-            type: 'tool_use',
-            id: 'full-task',
-            name: 'Task',
-            input: { description: 'Full task', subagent_type: 'explore' },
-          }],
+          content: [
+            {
+              type: 'tool_use',
+              id: 'full-task',
+              name: 'Task',
+              input: { description: 'Full task', subagent_type: 'explore' },
+            },
+          ],
         },
       });
 
@@ -684,12 +758,14 @@ describe('TaskTracker', () => {
     it('should update endTime and output on completion', () => {
       tracker.processMessage({
         message: {
-          content: [{
-            type: 'tool_use',
-            id: 'completing-task',
-            name: 'Task',
-            input: { description: 'Completing task', subagent_type: 'bash' },
-          }],
+          content: [
+            {
+              type: 'tool_use',
+              id: 'completing-task',
+              name: 'Task',
+              input: { description: 'Completing task', subagent_type: 'bash' },
+            },
+          ],
         },
       });
 
@@ -698,12 +774,14 @@ describe('TaskTracker', () => {
 
       tracker.processMessage({
         message: {
-          content: [{
-            type: 'tool_result',
-            tool_use_id: 'completing-task',
-            is_error: false,
-            content: 'Task output here',
-          }],
+          content: [
+            {
+              type: 'tool_result',
+              tool_use_id: 'completing-task',
+              is_error: false,
+              content: 'Task output here',
+            },
+          ],
         },
       });
 
@@ -726,7 +804,7 @@ describe('TaskTracker', () => {
       const tasks = Array.from(tracker.getAllTasks().values());
       expect(tasks).toHaveLength(2);
 
-      const ids = tasks.map(t => t.id);
+      const ids = tasks.map((t) => t.id);
       expect(ids[0]).not.toBe(ids[1]);
       expect(ids[0]).toMatch(/^terminal-/);
       expect(ids[1]).toMatch(/^terminal-/);
@@ -771,9 +849,19 @@ describe('TaskTracker', () => {
       tracker.processMessage({
         message: {
           content: [
-            { type: 'tool_use', id: 'task-1', name: 'Task', input: { description: 'Task 1', subagent_type: 'explore' } },
+            {
+              type: 'tool_use',
+              id: 'task-1',
+              name: 'Task',
+              input: { description: 'Task 1', subagent_type: 'explore' },
+            },
             { type: 'tool_use', id: 'task-2', name: 'Task', input: { description: 'Task 2', subagent_type: 'bash' } },
-            { type: 'tool_use', id: 'task-3', name: 'Task', input: { description: 'Task 3', subagent_type: 'general' } },
+            {
+              type: 'tool_use',
+              id: 'task-3',
+              name: 'Task',
+              input: { description: 'Task 3', subagent_type: 'general' },
+            },
           ],
         },
       });
@@ -786,7 +874,12 @@ describe('TaskTracker', () => {
       tracker.processMessage({
         message: {
           content: [
-            { type: 'tool_use', id: 'task-1', name: 'Task', input: { description: 'Task 1', subagent_type: 'explore' } },
+            {
+              type: 'tool_use',
+              id: 'task-1',
+              name: 'Task',
+              input: { description: 'Task 1', subagent_type: 'explore' },
+            },
             { type: 'text', text: 'Some text response' },
             { type: 'tool_use', id: 'read-1', name: 'Read', input: { file_path: '/test.txt' } },
           ],
@@ -805,22 +898,26 @@ describe('TaskTracker', () => {
 
       tracker.processMessage({
         message: {
-          content: [{
-            type: 'tool_use',
-            id: 'event-task',
-            name: 'Task',
-            input: { description: 'Event test', subagent_type: 'explore' },
-          }],
+          content: [
+            {
+              type: 'tool_use',
+              id: 'event-task',
+              name: 'Task',
+              input: { description: 'Event test', subagent_type: 'explore' },
+            },
+          ],
         },
       });
 
       expect(handler).toHaveBeenCalledTimes(1);
-      expect(handler).toHaveBeenCalledWith(expect.objectContaining({
-        id: 'event-task',
-        description: 'Event test',
-        subagentType: 'explore',
-        status: 'running',
-      }));
+      expect(handler).toHaveBeenCalledWith(
+        expect.objectContaining({
+          id: 'event-task',
+          description: 'Event test',
+          subagentType: 'explore',
+          status: 'running',
+        })
+      );
     });
 
     it('should emit taskCompleted with completed task', () => {
@@ -829,32 +926,38 @@ describe('TaskTracker', () => {
 
       tracker.processMessage({
         message: {
-          content: [{
-            type: 'tool_use',
-            id: 'complete-event',
-            name: 'Task',
-            input: { description: 'Completing', subagent_type: 'bash' },
-          }],
+          content: [
+            {
+              type: 'tool_use',
+              id: 'complete-event',
+              name: 'Task',
+              input: { description: 'Completing', subagent_type: 'bash' },
+            },
+          ],
         },
       });
 
       tracker.processMessage({
         message: {
-          content: [{
-            type: 'tool_result',
-            tool_use_id: 'complete-event',
-            is_error: false,
-            content: 'Result',
-          }],
+          content: [
+            {
+              type: 'tool_result',
+              tool_use_id: 'complete-event',
+              is_error: false,
+              content: 'Result',
+            },
+          ],
         },
       });
 
       expect(handler).toHaveBeenCalledTimes(1);
-      expect(handler).toHaveBeenCalledWith(expect.objectContaining({
-        id: 'complete-event',
-        status: 'completed',
-        output: 'Result',
-      }));
+      expect(handler).toHaveBeenCalledWith(
+        expect.objectContaining({
+          id: 'complete-event',
+          status: 'completed',
+          output: 'Result',
+        })
+      );
     });
 
     it('should emit taskFailed with error message', () => {
@@ -863,23 +966,27 @@ describe('TaskTracker', () => {
 
       tracker.processMessage({
         message: {
-          content: [{
-            type: 'tool_use',
-            id: 'fail-event',
-            name: 'Task',
-            input: { description: 'Failing', subagent_type: 'bash' },
-          }],
+          content: [
+            {
+              type: 'tool_use',
+              id: 'fail-event',
+              name: 'Task',
+              input: { description: 'Failing', subagent_type: 'bash' },
+            },
+          ],
         },
       });
 
       tracker.processMessage({
         message: {
-          content: [{
-            type: 'tool_result',
-            tool_use_id: 'fail-event',
-            is_error: true,
-            content: 'Error message',
-          }],
+          content: [
+            {
+              type: 'tool_result',
+              tool_use_id: 'fail-event',
+              is_error: true,
+              content: 'Error message',
+            },
+          ],
         },
       });
 
@@ -895,12 +1002,14 @@ describe('TaskTracker', () => {
     it('should return a copy that does not affect internal state', () => {
       tracker.processMessage({
         message: {
-          content: [{
-            type: 'tool_use',
-            id: 'copy-test',
-            name: 'Task',
-            input: { description: 'Copy test', subagent_type: 'general' },
-          }],
+          content: [
+            {
+              type: 'tool_use',
+              id: 'copy-test',
+              name: 'Task',
+              input: { description: 'Copy test', subagent_type: 'general' },
+            },
+          ],
         },
       });
 

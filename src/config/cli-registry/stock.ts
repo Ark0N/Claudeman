@@ -403,6 +403,9 @@ const CODEX: CliEntry = {
     echo: { policy: 'predict', anchor: { kind: 'cursor' }, predictProfile: 'codex' },
     wheelForward: { mode: 'never' }, // #227: codex ignores SGR wheel reports, never forward
     maxFrameBytes: 32 * 1024,
+    // codex's own bare-spawn default (no config sent) is already safe (no bypass flag), so
+    // the multi-user clamp only needs to force an EXPLICITLY-SENT bypass back off.
+    privilegedParams: [{ param: 'dangerouslyBypassApprovals', clampTo: false }],
   },
   overlays: {
     credStore: {
@@ -481,6 +484,10 @@ const GEMINI: CliEntry = {
     ...agentDefaults(),
     altScreen: 'strip-full',
     echo: { policy: 'buffer', anchor: { kind: 'cursor' } },
+    // gemini's builder defaults an ABSENT approvalMode to 'yolo', so the clamp must
+    // MATERIALIZE a config (not just touch an already-sent one) or a non-granted owner who
+    // sends no geminiConfig at all would still get yolo for free.
+    privilegedParams: [{ param: 'approvalMode', clampTo: 'auto_edit', materializeWhenAbsent: true }],
   },
   overlays: {
     credStore: { rel: '.gemini', seedWhole: true }, // also covers antigravity — see its own entry
@@ -542,6 +549,9 @@ const ANTIGRAVITY: CliEntry = {
     ...agentDefaults(),
     altScreen: 'strip-mux-only',
     echo: { policy: 'buffer', anchor: { kind: 'cursor' } },
+    // Like codex: an ABSENT config already defaults safe (no bypass flag), so only a
+    // SENT config needs the flag forced off — nothing is materialized.
+    privilegedParams: [{ param: 'dangerouslySkipPermissions', clampTo: false }],
   },
   overlays: {
     // No credStore of its own: agy nests its whole state under ~/.gemini/antigravity-cli/,
@@ -623,6 +633,10 @@ const PI: CliEntry = {
     ...agentDefaults(),
     altScreen: 'preserve', // pi's TUI renders into the main screen with terminal-owned scrollback
     echo: { policy: 'buffer', anchor: { kind: 'cursor' } },
+    // pi's absent-config default is an interactive trust PROMPT the session user could
+    // just answer "yes" to, so omitting --approve is not itself a clamp — MATERIALIZE
+    // approveProjectTrust:false so buildPiCommand emits --no-approve outright.
+    privilegedParams: [{ param: 'approveProjectTrust', clampTo: false, materializeWhenAbsent: true }],
   },
   overlays: {
     credStore: {

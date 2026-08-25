@@ -507,7 +507,7 @@ describe('Memory Leak Prevention Patterns', () => {
 
       expect(manager.activeTimerCount).toBe(1);
 
-      await new Promise(resolve => setTimeout(resolve, 50));
+      await new Promise((resolve) => setTimeout(resolve, 50));
 
       expect(manager.activeTimerCount).toBe(0);
       expect(callback).toHaveBeenCalled();
@@ -552,10 +552,13 @@ describe('Memory Leak Prevention Patterns', () => {
     });
 
     it('should handle nested object cleanup', () => {
-      const sessions = new Map<string, {
-        buffers: Map<string, string>;
-        handlers: Set<() => void>;
-      }>();
+      const sessions = new Map<
+        string,
+        {
+          buffers: Map<string, string>;
+          handlers: Set<() => void>;
+        }
+      >();
 
       sessions.set('session1', {
         buffers: new Map([['terminal', 'data']]),

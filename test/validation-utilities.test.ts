@@ -227,25 +227,16 @@ describe('Validation Utilities', () => {
   });
 
   describe('Object Validation', () => {
-    const hasProperty = <K extends string>(
-      obj: unknown,
-      key: K
-    ): obj is Record<K, unknown> => {
+    const hasProperty = <K extends string>(obj: unknown, key: K): obj is Record<K, unknown> => {
       return typeof obj === 'object' && obj !== null && key in obj;
     };
 
-    const hasRequiredProperties = (
-      obj: unknown,
-      keys: string[]
-    ): obj is Record<string, unknown> => {
+    const hasRequiredProperties = (obj: unknown, keys: string[]): obj is Record<string, unknown> => {
       if (typeof obj !== 'object' || obj === null) return false;
-      return keys.every(key => key in obj);
+      return keys.every((key) => key in obj);
     };
 
-    const validateShape = <T>(
-      obj: unknown,
-      validators: Record<keyof T, (value: unknown) => boolean>
-    ): obj is T => {
+    const validateShape = <T>(obj: unknown, validators: Record<keyof T, (value: unknown) => boolean>): obj is T => {
       if (typeof obj !== 'object' || obj === null) return false;
       const record = obj as Record<string, unknown>;
       return Object.entries(validators).every(([key, validate]) => {
@@ -266,10 +257,11 @@ describe('Validation Utilities', () => {
     });
 
     it('should validate object shape', () => {
-      const isUser = (obj: unknown) => validateShape(obj, {
-        name: (v) => typeof v === 'string',
-        age: (v) => typeof v === 'number',
-      });
+      const isUser = (obj: unknown) =>
+        validateShape(obj, {
+          name: (v) => typeof v === 'string',
+          age: (v) => typeof v === 'number',
+        });
 
       expect(isUser({ name: 'John', age: 25 })).toBe(true);
       expect(isUser({ name: 'John' })).toBe(false);
@@ -347,9 +339,7 @@ describe('Validation Utilities', () => {
       }>
     ) => {
       return (value: T): ValidationResult => {
-        const errors = validations
-          .filter(v => !v.check(value))
-          .map(v => v.message);
+        const errors = validations.filter((v) => !v.check(value)).map((v) => v.message);
         return {
           valid: errors.length === 0,
           errors,
@@ -453,7 +443,7 @@ describe('Validation Utilities', () => {
           } else if (schema.items) {
             value.forEach((item, i) => {
               const itemErrors = validateField(item, schema.items!);
-              errors.push(...itemErrors.map(e => `[${i}]: ${e}`));
+              errors.push(...itemErrors.map((e) => `[${i}]: ${e}`));
             });
           }
           break;
@@ -465,7 +455,7 @@ describe('Validation Utilities', () => {
             const obj = value as Record<string, unknown>;
             for (const [key, fieldSchema] of Object.entries(schema.properties)) {
               const fieldErrors = validateField(obj[key], fieldSchema);
-              errors.push(...fieldErrors.map(e => `${key}: ${e}`));
+              errors.push(...fieldErrors.map((e) => `${key}: ${e}`));
             }
           }
           break;
@@ -602,7 +592,7 @@ describe('Validation Utilities', () => {
 
       if (keysA.length !== keysB.length) return false;
 
-      return keysA.every(key => deepEqual(aObj[key], bObj[key]));
+      return keysA.every((key) => deepEqual(aObj[key], bObj[key]));
     };
 
     it('should compare primitives', () => {
@@ -624,14 +614,8 @@ describe('Validation Utilities', () => {
     });
 
     it('should compare nested structures', () => {
-      expect(deepEqual(
-        { a: { b: [1, 2] } },
-        { a: { b: [1, 2] } }
-      )).toBe(true);
-      expect(deepEqual(
-        { a: { b: [1, 2] } },
-        { a: { b: [1, 3] } }
-      )).toBe(false);
+      expect(deepEqual({ a: { b: [1, 2] } }, { a: { b: [1, 2] } })).toBe(true);
+      expect(deepEqual({ a: { b: [1, 2] } }, { a: { b: [1, 3] } })).toBe(false);
     });
 
     it('should handle null and undefined', () => {

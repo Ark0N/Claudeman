@@ -31,7 +31,13 @@ import { existsSync, readFileSync, mkdirSync } from 'node:fs';
 import { writeFile, rename } from 'node:fs/promises';
 import { dirname } from 'node:path';
 import { homedir } from 'node:os';
-import { dataPath, DEFAULT_TMUX_SOCKET, CODEMAN_INSTANCE } from './config/instance.js';
+import {
+  dataPath,
+  DEFAULT_TMUX_SOCKET,
+  CODEMAN_INSTANCE,
+  SAFE_TMUX_SOCKET_PATTERN,
+  resolveTmuxSocketName,
+} from './config/instance.js';
 import {
   ProcessStats,
   PersistedRespawnConfig,
@@ -46,6 +52,7 @@ import {
   type GeminiConfig,
   type AntigravityConfig,
   type PiConfig,
+  type GrokConfig,
   type SessionRemote,
   type SessionDocker,
   type DockerCommandMode,
@@ -183,9 +190,6 @@ const SAFE_PANE_TARGET_PATTERN = /^(%\d+|\d+)$/;
 /** Dedicated tmux socket for new Codeman-owned sessions (instance-scoped:
  *  `codeman` for prod, `codeman-beta` on the beta branch). */
 const DEFAULT_CODEMAN_TMUX_SOCKET = DEFAULT_TMUX_SOCKET;
-
-/** Regex to validate tmux socket names passed to `tmux -L`. */
-const SAFE_TMUX_SOCKET_PATTERN = /^[a-zA-Z0-9_.-]+$/;
 
 /**
  * Separator used in `tmux list-panes -F` output between session name and pid.
@@ -581,9 +585,8 @@ function resolveConfiguredTmuxSocket(): string {
   const raw = process.env.CODEMAN_TMUX_SOCKET ?? DEFAULT_CODEMAN_TMUX_SOCKET;
   if (!SAFE_TMUX_SOCKET_PATTERN.test(raw)) {
     console.warn(`[TmuxManager] Ignoring invalid CODEMAN_TMUX_SOCKET: ${JSON.stringify(raw)}`);
-    return DEFAULT_CODEMAN_TMUX_SOCKET;
   }
-  return raw;
+  return resolveTmuxSocketName();
 }
 
 /** Build the `tmux -L <socket>` command prefix. Socket name is shell-escaped. */
@@ -658,6 +661,7 @@ export function buildSpawnCommand(options: {
   geminiConfig?: GeminiConfig;
   antigravityConfig?: AntigravityConfig;
   piConfig?: PiConfig;
+  grokConfig?: GrokConfig;
   resumeSessionId?: string;
   effort?: EffortLevel;
   /** Codeman session name, passed to claude as `--name` (version-gated, sanitized; local spawns only). */
@@ -1296,6 +1300,8 @@ export class TmuxManager extends EventEmitter implements TerminalMultiplexer {
   private reconnectGuard: Set<string> = new Set();
 
   private trueColorConfigured = false;
+  /** tmux 3.7+ can resize pane history after creation; older releases cannot. */
+  private liveHistoryResizeSupported: boolean | null = null;
 
   constructor() {
     super();
@@ -1312,6 +1318,26 @@ export class TmuxManager extends EventEmitter implements TerminalMultiplexer {
 
   private tmux(): string {
     return tmuxCommand(this.tmuxSocket);
+  }
+
+  private supportsLiveHistoryResize(): boolean {
+    if (this.liveHistoryResizeSupported !== null) return this.liveHistoryResizeSupported;
+
+    try {
+      const output = execSync(`${this.tmux()} -V`, {
+        encoding: 'utf8',
+        timeout: EXEC_TIMEOUT_MS,
+        stdio: ['ignore', 'pipe', 'ignore'],
+      });
+      const match = output.match(/(?:^|\D)(\d+)\.(\d+)/);
+      const major = match ? Number(match[1]) : 0;
+      const minor = match ? Number(match[2]) : 0;
+      this.liveHistoryResizeSupported = major > 3 || (major === 3 && minor >= 7);
+    } catch {
+      // Unknown versions take the legacy path required by tmux <3.7.
+      this.liveHistoryResizeSupported = false;
+    }
+    return this.liveHistoryResizeSupported;
   }
 
   // Load saved sessions from disk (NEVER called in test mode)
@@ -1528,6 +1554,7 @@ export class TmuxManager extends EventEmitter implements TerminalMultiplexer {
       geminiConfig,
       antigravityConfig,
       piConfig,
+      grokConfig,
       resumeSessionId,
       envOverrides,
       effort,
@@ -1565,7 +1592,10 @@ export class TmuxManager extends EventEmitter implements TerminalMultiplexer {
       return session;
     }
 
-    // Resolve CLI binary directory based on mode
+    // Resolve CLI binary directory based on mode. The not-found messages come
+    // from the resolvers (formatCliNotFoundMessage) so the error names WHERE it
+    // looked — server PATH, login shell, checked directories — instead of just
+    // asserting the CLI is missing (the classic systemd/launchd PATH trap).
     const { pathExport, dir: cliDir } = this.buildPathExport(mode);
     if (!cliDir && mode !== 'shell') {
       const message = missingCliMessage(mode);
@@ -1585,6 +1615,7 @@ export class TmuxManager extends EventEmitter implements TerminalMultiplexer {
       geminiConfig,
       antigravityConfig,
       piConfig,
+      grokConfig,
       resumeSessionId,
       effort,
       sessionName: name,
@@ -1615,7 +1646,16 @@ export class TmuxManager extends EventEmitter implements TerminalMultiplexer {
       // launched in TMUX_LAUNCH_CWD (/tmp) rather than the real workingDir: a FUSE/rclone
       // mount that isn't ready yet makes `getcwd` fail and breaks the spawn (see #110). The
       // pane cd's into workingDir below via respawn-pane.
-      execSync(`${this.tmux()} new-session -ds "${muxName}" -c ${TMUX_LAUNCH_CWD}`, {
+      // tmux <3.7 allocates history only at pane creation, so its global default
+      // must be set immediately BEFORE new-session. tmux 3.7+ can resize a pane
+      // after creation; target only the new session there because changing the
+      // global option can resize (and when lowered, trim) unrelated live panes.
+      const safeHistoryLimit =
+        Number.isSafeInteger(historyLimit) && historyLimit > 0 ? Math.trunc(historyLimit) : DEFAULT_TMUX_HISTORY_LIMIT;
+      const createSessionCommand = this.supportsLiveHistoryResize()
+        ? `${this.tmux()} new-session -ds "${muxName}" -c ${TMUX_LAUNCH_CWD} \\; set-option -t "${muxName}" history-limit ${safeHistoryLimit}`
+        : `${this.tmux()} set-option -g history-limit ${safeHistoryLimit} \\; new-session -ds "${muxName}" -c ${TMUX_LAUNCH_CWD} \\; set-option -t "${muxName}" history-limit ${safeHistoryLimit}`;
+      execSync(createSessionCommand, {
         cwd: TMUX_LAUNCH_CWD,
         timeout: EXEC_TIMEOUT_MS,
         stdio: 'ignore',
@@ -1673,16 +1713,6 @@ export class TmuxManager extends EventEmitter implements TerminalMultiplexer {
           .then(() => {})
           .catch(() => {
             /* Already set globally as fallback */
-          }),
-        // Raise tmux scrollback from its 2000-line default so re-attach preserves
-        // more context. Intentionally exceeds the xterm-side DEFAULT_SCROLLBACK (50k
-        // in constants.js), which stays lower to protect browser/mobile memory.
-        execAsync(`${this.tmux()} set-option -t "${muxName}" history-limit ${historyLimit}`, {
-          timeout: EXEC_TIMEOUT_MS,
-        })
-          .then(() => {})
-          .catch(() => {
-            /* Non-critical — falls back to tmux default */
           }),
       ];
 
@@ -1804,10 +1834,10 @@ export class TmuxManager extends EventEmitter implements TerminalMultiplexer {
       geminiConfig,
       antigravityConfig,
       piConfig,
+      grokConfig,
       resumeSessionId,
       envOverrides,
       effort,
-      historyLimit = DEFAULT_TMUX_HISTORY_LIMIT,
       remote,
       docker,
       name,
@@ -1817,16 +1847,6 @@ export class TmuxManager extends EventEmitter implements TerminalMultiplexer {
     const muxName = session.muxName;
 
     if (!isValidMuxName(muxName) || !isValidPath(workingDir)) return null;
-
-    // Re-apply the configured tmux history-limit after respawn (kept in sync
-    // with the live setting via setHistoryLimit()).
-    if (!IS_TEST_MODE) {
-      await execAsync(`${this.tmux()} set-option -t ${shellescape(muxName)} history-limit ${historyLimit}`, {
-        timeout: EXEC_TIMEOUT_MS,
-      }).catch(() => {
-        /* Non-critical — keeps existing tmux history-limit */
-      });
-    }
 
     // Resolve CLI binary directory based on mode
     const { pathExport } = this.buildPathExport(mode);
@@ -1844,6 +1864,7 @@ export class TmuxManager extends EventEmitter implements TerminalMultiplexer {
       geminiConfig,
       antigravityConfig,
       piConfig,
+      grokConfig,
       resumeSessionId,
       effort,
       sessionName: name,
@@ -2679,9 +2700,9 @@ export class TmuxManager extends EventEmitter implements TerminalMultiplexer {
   }
 
   /**
-   * Apply a tmux history-limit to all tracked sessions (e.g. when the user
-   * changes the terminal-history setting). Invalid limits fall back to the
-   * default. Best-effort per session.
+   * Apply a tmux history limit. tmux 3.7+ safely targets tracked live sessions;
+   * older releases can only change the global default for future panes. Invalid
+   * limits fall back to the default.
    */
   async setHistoryLimit(limit: number): Promise<void> {
     const safeLimit = Number.isSafeInteger(limit) && limit > 0 ? Math.trunc(limit) : DEFAULT_TMUX_HISTORY_LIMIT;
@@ -2690,12 +2711,22 @@ export class TmuxManager extends EventEmitter implements TerminalMultiplexer {
       return;
     }
 
-    const updates = Array.from(this.sessions.values()).map((session) =>
-      execAsync(`${this.tmux()} set-option -t ${shellescape(session.muxName)} history-limit ${safeLimit}`, {
-        timeout: EXEC_TIMEOUT_MS,
-      })
-    );
-    await Promise.allSettled(updates);
+    if (this.supportsLiveHistoryResize()) {
+      const updates = Array.from(this.sessions.values()).map((session) =>
+        execAsync(`${this.tmux()} set-option -t ${shellescape(session.muxName)} history-limit ${safeLimit}`, {
+          timeout: EXEC_TIMEOUT_MS,
+        })
+      );
+      await Promise.allSettled(updates);
+      return;
+    }
+
+    await execAsync(`${this.tmux()} set-option -g history-limit ${safeLimit}`, {
+      timeout: EXEC_TIMEOUT_MS,
+    }).catch(() => {
+      // No tmux server yet is fine: legacy createSession sets the same default
+      // immediately before it creates the first pane.
+    });
   }
 
   /**

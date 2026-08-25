@@ -10,7 +10,7 @@
  * @globals {function} scheduleBackground - scheduler.postTask wrapper (background priority)
  * @globals {function} getEventCoords - Unified mouse/touch coordinate extractor
  * @globals {function} escapeHtml - XSS-safe HTML escaping
- * @globals {object} SSE_EVENTS - Centralized SSE event type constants (120 event types; must match backend src/web/sse-events.ts)
+ * @globals {object} SSE_EVENTS - Centralized SSE event type constants (156 event types; must match backend src/web/sse-events.ts)
  * @globals {Array} BUILTIN_RESPAWN_PRESETS - Built-in respawn configuration presets
  *
  * @dependency None (first in load order)
@@ -156,6 +156,43 @@ function shouldAutoWrapTabs(input) {
   return scrollWidth > clientWidth + 1;
 }
 
+function resolveTabOrientation(input) {
+  if (!input || input.setting !== 'vertical') return 'horizontal';
+  if (input.deviceType === 'mobile') return 'horizontal';
+  return 'vertical';
+}
+
+const TAB_RAIL_MIN_WIDTH = 208;
+const TAB_RAIL_DEFAULT_WIDTH = 256;
+const TAB_RAIL_MAX_WIDTH = 360;
+
+function resolveTabRailWidth(input = {}) {
+  const viewportWidth = Number(input.viewportWidth);
+  const mainWidth = Number(input.mainWidth);
+  const minTerminalWidth = Number(input.minTerminalWidth);
+  const limits = [TAB_RAIL_MAX_WIDTH];
+  if (Number.isFinite(viewportWidth) && viewportWidth > 0) limits.push(Math.floor(viewportWidth * 0.4));
+  if (Number.isFinite(mainWidth) && mainWidth > 0 && Number.isFinite(minTerminalWidth) && minTerminalWidth > 0) {
+    limits.push(Math.floor(mainWidth - minTerminalWidth));
+  }
+  const effectiveMax = Math.max(TAB_RAIL_MIN_WIDTH, Math.min(...limits));
+  const requested = Number(input.width);
+  const width = Number.isFinite(requested) ? requested : TAB_RAIL_DEFAULT_WIDTH;
+  return Math.round(Math.min(effectiveMax, Math.max(TAB_RAIL_MIN_WIDTH, width)));
+}
+
+function resolveTabRailKeyboardWidth(input = {}) {
+  let width;
+  if (input.key === 'Home') width = TAB_RAIL_MIN_WIDTH;
+  else if (input.key === 'End') width = TAB_RAIL_MAX_WIDTH;
+  else if (input.key === 'Enter') width = TAB_RAIL_DEFAULT_WIDTH;
+  else if (input.key === 'ArrowLeft' || input.key === 'ArrowRight') {
+    const direction = input.key === 'ArrowLeft' ? -1 : 1;
+    width = (Number(input.currentWidth) || TAB_RAIL_DEFAULT_WIDTH) + direction * (input.shiftKey ? 32 : 8);
+  } else return null;
+  return resolveTabRailWidth({ ...input, width });
+}
+
 // Sliver of the neighbouring tab left visible when the strip scrolls a tab into
 // view. Landing a tab flush against the edge reads as "this is the last one";
 // the gap is what tells the user there is more strip to swipe to.
@@ -243,6 +280,9 @@ const LINEAGE_DIP_MAX_PX = 64;
 // apart bled into one thick band instead of reading as three separate lines.
 const LINEAGE_SIBLING_STEP_PX = 8;
 const LINEAGE_STRIP_TOLERANCE_PX = 4;
+const LINEAGE_VERTICAL_TRACK_INSET_PX = 6;
+const LINEAGE_VERTICAL_SIBLING_STEP_PX = 3;
+const LINEAGE_VERTICAL_ANCHOR_CLEARANCE_PX = 4;
 // Lineage palette, assigned per SPAWNING TAB in first-seen order and cycled
 // (session-lineage.js). Every arc leaving one tab shares its colour however many
 // workers it spawns; a child that spawns in turn gets its own for the arcs below it.
@@ -265,21 +305,44 @@ function computeLineagePath(input) {
   const ch = Number(child.height) || 0;
   if (pw <= 0 || ph <= 0 || cw <= 0 || ch <= 0) return null;
 
-  const px = Number(parent.left) + pw / 2;
-  const cx = Number(child.left) + cw / 2;
-  if (!Number.isFinite(px) || !Number.isFinite(cx)) return null;
-
+  const orientation = input?.orientation === 'vertical' ? 'vertical' : 'horizontal';
   const strip = input?.strip;
+  const depth = Math.max(0, Math.min(6, Number(input?.depth) || 0));
+  const pLeft = Number(parent.left);
+  const cLeft = Number(child.left);
+  const pTop = Number(parent.top);
+  const cTop = Number(child.top);
+  if (![pLeft, cLeft, pTop, cTop].every(Number.isFinite)) return null;
+
+  if (orientation === 'vertical') {
+    const py = pTop + ph / 2;
+    const cy = cTop + ch / 2;
+    if (strip && Number(strip.height) > 0) {
+      const min = Number(strip.top) - LINEAGE_STRIP_TOLERANCE_PX;
+      const max = Number(strip.top) + Number(strip.height) + LINEAGE_STRIP_TOLERANCE_PX;
+      if (py < min || py > max || cy < min || cy > max) return null;
+    }
+
+    const stripLeft =
+      strip && Number.isFinite(Number(strip.left))
+        ? Number(strip.left)
+        : Math.min(pLeft, cLeft) - LINEAGE_VERTICAL_TRACK_INSET_PX * 2;
+    const requestedTrack =
+      stripLeft + LINEAGE_VERTICAL_TRACK_INSET_PX + depth * LINEAGE_VERTICAL_SIBLING_STEP_PX;
+    const trackX = Math.min(requestedTrack, Math.min(pLeft, cLeft) - LINEAGE_VERTICAL_ANCHOR_CLEARANCE_PX);
+    const d = `M ${r1(pLeft)} ${r1(py)} H ${r1(trackX)} V ${r1(cy)} H ${r1(cLeft)}`;
+    return { d, endX: cLeft, endY: cy, sameRow: false };
+  }
+
+  const px = pLeft + pw / 2;
+  const cx = cLeft + cw / 2;
   if (strip && Number(strip.width) > 0) {
     const min = Number(strip.left) - LINEAGE_STRIP_TOLERANCE_PX;
     const max = Number(strip.left) + Number(strip.width) + LINEAGE_STRIP_TOLERANCE_PX;
     if (px < min || px > max || cx < min || cx > max) return null;
   }
 
-  const depth = Math.max(0, Math.min(6, Number(input?.depth) || 0));
-  const pTop = Number(parent.top);
   const pBottom = pTop + ph;
-  const cTop = Number(child.top);
   const cBottom = cTop + ch;
   const sameRow = Math.abs(pTop + ph / 2 - (cTop + ch / 2)) <= Math.min(ph, ch) / 2;
 
@@ -562,14 +625,71 @@ function resolveTerminalFontFamily(custom) {
   return `${families.join(', ')}, ${TERMINAL_FONT_DEFAULT_STACK}`;
 }
 
+// ---------------------------------------------------------------------------
+// Auto Copy (copy-on-select). Pure decision, so every guard below is testable
+// without a terminal, a clipboard, or a browser.
+// ---------------------------------------------------------------------------
+
+/**
+ * Upper bound on an AUTO-copied selection.
+ *
+ * A drag that runs off the top of the viewport autoscrolls, so one gesture can
+ * sweep the entire 50k-line scrollback (millions of characters), and writing
+ * that to the clipboard on every mouseup is a real hazard on a phone. Past the
+ * cap the copy is REFUSED rather than truncated (half a selection on the
+ * clipboard is worse than none) and the user is told to press Ctrl+C, which
+ * still copies the whole thing through the explicit path.
+ */
+const AUTO_COPY_MAX_CHARS = 1_000_000;
+
+/**
+ * What an auto-copy attempt should do at the end of a selection gesture.
+ *
+ * `pending` is set by xterm's onSelectionChange and cleared on every flush;
+ * `lastCopied` is the text this surface auto-copied last. Either one alone is
+ * wrong, which is why both are here:
+ *
+ *  - onSelectionChange does not reliably fire BEFORE the mouseup that ends the
+ *    drag (xterm fires it from its own document-level mouseup handler, and
+ *    listener order between the two is registration order, not something this
+ *    code controls). Gating on `pending` alone would silently drop the first
+ *    copy of a drag-selection.
+ *  - Gating on `text !== lastCopied` alone drops a deliberate re-selection of
+ *    the same text after the user copied something else in between, and it
+ *    would let any unrelated mouseup on the page re-copy a stale selection.
+ *
+ * So: a genuine selection change (`pending`) always copies, and otherwise only
+ * text that differs from the last auto-copy does.
+ *
+ * @param {{enabled?: boolean, text?: string, lastCopied?: string, pending?: boolean}} params
+ * @returns {'copy'|'skip'|'too-large'}
+ */
+function decideAutoCopy({ enabled, text, lastCopied, pending } = {}) {
+  if (!enabled) return 'skip';
+  // Whitespace-only is what a drag across blank cells produces; putting a wall
+  // of spaces on the clipboard is never what the gesture meant.
+  if (typeof text !== 'string' || !text.trim()) return 'skip';
+  if (!pending && text === lastCopied) return 'skip';
+  if (text.length > AUTO_COPY_MAX_CHARS) return 'too-large';
+  return 'copy';
+}
+
 if (typeof window !== 'undefined') {
   window.WEBGL_FALLBACK = WEBGL_FALLBACK;
   window.evaluateWebGLLongTaskTrip = evaluateWebGLLongTaskTrip;
   window.shouldSkipWebGL = shouldSkipWebGL;
   window.CodemanTabOverflow = {
     shouldAutoWrapTabs,
+    resolveTabOrientation,
     computeTabScrollLeft,
     TAB_SCROLL_REVEAL_PX,
+  };
+  window.CodemanTabRail = {
+    DEFAULT_WIDTH: TAB_RAIL_DEFAULT_WIDTH,
+    MIN_WIDTH: TAB_RAIL_MIN_WIDTH,
+    MAX_WIDTH: TAB_RAIL_MAX_WIDTH,
+    resolveWidth: resolveTabRailWidth,
+    resolveKeyboardWidth: resolveTabRailKeyboardWidth,
   };
   window.CodemanWsReconnect = {
     plan: planWsReconnect,
@@ -579,6 +699,8 @@ if (typeof window !== 'undefined') {
     DIP_MIN_PX: LINEAGE_DIP_MIN_PX,
     DIP_MAX_PX: LINEAGE_DIP_MAX_PX,
     SIBLING_STEP_PX: LINEAGE_SIBLING_STEP_PX,
+    VERTICAL_TRACK_INSET_PX: LINEAGE_VERTICAL_TRACK_INSET_PX,
+    VERTICAL_SIBLING_STEP_PX: LINEAGE_VERTICAL_SIBLING_STEP_PX,
     COLORS: LINEAGE_COLORS,
   };
   window.CodemanConnectionLoss = {
@@ -594,6 +716,10 @@ if (typeof window !== 'undefined') {
     anchor: sessionActivityAnchor,
     compare: compareSessionActivity,
     sort: sortSessionsByActivity,
+  };
+  window.CodemanAutoCopy = {
+    decide: decideAutoCopy,
+    MAX_CHARS: AUTO_COPY_MAX_CHARS,
   };
   window.CodemanTerminalFont = {
     DEFAULT_STACK: TERMINAL_FONT_DEFAULT_STACK,
@@ -916,6 +1042,7 @@ const SSE_EVENTS = {
 
   // Web tabs (dashboard URLs)
   WEBVIEW_CHANGED: 'webview:changed',
+  TAB_LAYOUT_CHANGED: 'tab:layoutChanged',
 };
 
 // ═══════════════════════════════════════════════════════════════

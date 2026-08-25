@@ -2,10 +2,7 @@ import type { Page, Locator } from 'playwright';
 import { MIN_TOUCH_TARGET, BREAKPOINTS, BODY_CLASSES, SELECTORS } from './constants.js';
 
 /** Assert an element meets minimum touch target size (WCAG 2.5.5 / Apple HIG) */
-export async function assertTouchTarget(
-  locator: Locator,
-  minSize: number = MIN_TOUCH_TARGET,
-): Promise<void> {
+export async function assertTouchTarget(locator: Locator, minSize: number = MIN_TOUCH_TARGET): Promise<void> {
   const box = await locator.boundingBox();
   expect(box).not.toBeNull();
   expect(box!.width).toBeGreaterThanOrEqual(minSize);
@@ -68,27 +65,19 @@ export async function assertVisible(page: Page, selector: string): Promise<void>
 }
 
 /** Get a computed CSS property value */
-export async function getCSSProperty(
-  page: Page,
-  selector: string,
-  property: string,
-): Promise<string> {
+export async function getCSSProperty(page: Page, selector: string, property: string): Promise<string> {
   return page.evaluate(
     ({ sel, prop }) => {
       const el = document.querySelector(sel);
       if (!el) throw new Error(`Element not found: ${sel}`);
       return getComputedStyle(el).getPropertyValue(prop);
     },
-    { sel: selector, prop: property },
+    { sel: selector, prop: property }
   );
 }
 
 /** Get computed numeric value (parses px values) */
-export async function getCSSNumericValue(
-  page: Page,
-  selector: string,
-  property: string,
-): Promise<number> {
+export async function getCSSNumericValue(page: Page, selector: string, property: string): Promise<number> {
   const value = await getCSSProperty(page, selector, property);
   return parseFloat(value) || 0;
 }
@@ -97,7 +86,7 @@ export async function getCSSNumericValue(
  *  Returns list of violations (elements smaller than minSize). */
 export async function assertAccessibleTouchTargets(
   page: Page,
-  minSize: number = MIN_TOUCH_TARGET,
+  minSize: number = MIN_TOUCH_TARGET
 ): Promise<{ selector: string; width: number; height: number }[]> {
   const violations = await page.evaluate((min) => {
     const interactiveSelectors = 'button, a, [role="button"], input, select, textarea, [tabindex]';
@@ -115,9 +104,8 @@ export async function assertAccessibleTouchTargets(
         // Generate a useful selector for the failing element
         const tag = el.tagName.toLowerCase();
         const id = el.id ? `#${el.id}` : '';
-        const cls = el.className && typeof el.className === 'string'
-          ? '.' + el.className.trim().split(/\s+/).join('.')
-          : '';
+        const cls =
+          el.className && typeof el.className === 'string' ? '.' + el.className.trim().split(/\s+/).join('.') : '';
         const text = el.textContent?.trim().substring(0, 20) || '';
         results.push({
           selector: `${tag}${id}${cls} ("${text}")`,
@@ -140,19 +128,19 @@ export async function assertFontSizeNoZoom(page: Page, selector: string): Promis
 
 /** Assert an element has a specific CSS class */
 export async function assertHasClass(page: Page, selector: string, className: string): Promise<void> {
-  const has = await page.evaluate(
-    ({ sel, cls }) => document.querySelector(sel)?.classList.contains(cls) ?? false,
-    { sel: selector, cls: className },
-  );
+  const has = await page.evaluate(({ sel, cls }) => document.querySelector(sel)?.classList.contains(cls) ?? false, {
+    sel: selector,
+    cls: className,
+  });
   expect(has).toBe(true);
 }
 
 /** Assert an element does NOT have a specific CSS class */
 export async function assertNotHasClass(page: Page, selector: string, className: string): Promise<void> {
-  const has = await page.evaluate(
-    ({ sel, cls }) => document.querySelector(sel)?.classList.contains(cls) ?? false,
-    { sel: selector, cls: className },
-  );
+  const has = await page.evaluate(({ sel, cls }) => document.querySelector(sel)?.classList.contains(cls) ?? false, {
+    sel: selector,
+    cls: className,
+  });
   expect(has).toBe(false);
 }
 
@@ -161,7 +149,7 @@ export async function assertTranslateY(
   page: Page,
   selector: string,
   expectedY: number,
-  tolerance: number = 2,
+  tolerance: number = 2
 ): Promise<void> {
   const transform = await getCSSProperty(page, selector, 'transform');
   // transform is a matrix(...) string; extract translateY

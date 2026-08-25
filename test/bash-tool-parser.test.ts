@@ -447,9 +447,7 @@ describe('BashToolParser', () => {
       parser.on('toolStart', startHandler);
       parser.on('toolEnd', endHandler);
 
-      parser.processTerminalData(
-        '● Bash(tail -f /var/log/a.log)\n✓ Bash\n● Bash(cat /var/log/b.log)\n',
-      );
+      parser.processTerminalData('● Bash(tail -f /var/log/a.log)\n✓ Bash\n● Bash(cat /var/log/b.log)\n');
 
       expect(startHandler).toHaveBeenCalledTimes(2);
       expect(endHandler).toHaveBeenCalledTimes(1);

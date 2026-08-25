@@ -200,7 +200,7 @@ const safeEnvOverridesSchema = z
     },
     {
       message:
-        'envOverrides contains blocked or disallowed env var keys. Only CLAUDE_CODE_*, OPENCODE_*, CODEX_*, GEMINI_*, GOOGLE_*, ANTIGRAVITY_*, PI_* keys and CLAUDE_CONFIG_DIR are allowed.',
+        'envOverrides contains blocked or disallowed env var keys. Only CLAUDE_CODE_*, OPENCODE_*, CODEX_*, GEMINI_*, GOOGLE_*, ANTIGRAVITY_*, PI_*, GROK_*, XAI_* keys and CLAUDE_CONFIG_DIR are allowed.',
     }
   );
 
@@ -340,6 +340,32 @@ const PiConfigSchema = z
   .optional();
 
 /**
+ * Schema for Grok Build CLI (xAI `grok`)-specific configuration.
+ *
+ * `alwaysApprove` maps to `--always-approve` (grok's bypassPermissions mode).
+ * An ABSENT config spawns bare `grok` = grok's own ask-mode default, so the
+ * multi-user clamp only needs the only-if-sent branch (like codex/antigravity).
+ */
+const GrokConfigSchema = z
+  .object({
+    model: z
+      .string()
+      .max(100)
+      .regex(/^[a-zA-Z0-9._\-/]+$/)
+      .optional(),
+    alwaysApprove: z.boolean().optional(),
+    continueSession: z.boolean().optional(),
+    // Ids only: grok's --resume also matches session TITLES (arbitrary user
+    // strings), which this regex deliberately cannot express.
+    resumeSessionId: z
+      .string()
+      .max(100)
+      .regex(/^[a-zA-Z0-9._-]+$/)
+      .optional(),
+  })
+  .optional();
+
+/**
  * The session that spawned the one being created — pure UI decoration, drawn as a
  * lineage line between the two tabs. Accepted here and, equivalently, as the
  * `X-Codeman-Parent-Session` header (the agent skill sets that once on its shared
@@ -368,6 +394,7 @@ export const CreateSessionSchema = z.object({
   geminiConfig: GeminiConfigSchema,
   antigravityConfig: AntigravityConfigSchema,
   piConfig: PiConfigSchema,
+  grokConfig: GrokConfigSchema,
   /** Resume a previous Claude conversation by its session ID (used for reboot recovery) */
   resumeSessionId: z
     .string()
@@ -503,6 +530,7 @@ const RemoteCommandOverridesSchema = z
     gemini: z.string().min(1).max(300).optional(),
     antigravity: z.string().min(1).max(300).optional(),
     pi: z.string().min(1).max(300).optional(),
+    grok: z.string().min(1).max(300).optional(),
   })
   .strict()
   .optional();
@@ -783,6 +811,7 @@ export const QuickStartSchema = z.object({
   geminiConfig: GeminiConfigSchema,
   antigravityConfig: AntigravityConfigSchema,
   piConfig: PiConfigSchema,
+  grokConfig: GrokConfigSchema,
   envOverrides: safeEnvOverridesSchema,
   /** Claude CLI effort level (soft default via --settings, switchable in-session via /effort) */
   effort: effortLevelSchema,
@@ -995,6 +1024,8 @@ export const SettingsUpdateSchema = z
     // CODEMAN_ALLOW_UNAUTHENTICATED_NETWORK env var. Stripped before persisting.
     acknowledgeUnauthTunnel: z.boolean().optional(),
     tabTwoRows: z.boolean().optional(),
+    tabOrientation: z.enum(['horizontal', 'vertical']).optional(),
+    tabRailWidth: z.number().int().min(208).max(360).optional(),
     /**
      * Session list layout. Display key (per-device).
      * 'header'       = horizontal tab strip
@@ -1006,6 +1037,8 @@ export const SettingsUpdateSchema = z
      * on data-sidebar-detail. See applySessionListLayout() in app.js.
      */
     sessionListLayout: z.enum(['header', 'sidebar', 'sidebar-rich']).optional(),
+    /** Session-name text size in vertical navigation. Display key (per-device). */
+    sessionSidebarFontSize: z.number().int().min(11).max(18).optional(),
     agentTeamsEnabled: z.boolean().optional(),
     /** Model for new Claude sessions (e.g. "claude-fable-5[1m]", "opus[1m]"); takes precedence over opusContext1mEnabled */
     claudeModel: z.string().max(50).optional(),

@@ -287,11 +287,12 @@ Object.assign(CodemanApp.prototype, {
     this._installMobileTapMouseGuard();
     this._installTouchSelectionFocusGuard();
 
-    // Suppress xterm key handling during CJK IME composition.
-    // Without this, xterm processes raw keyDown events (e.g., "Process" key)
-    // during composition, causing duplicate or garbled input.
+    // Let xterm's CompositionHelper own IME key events. In particular, a
+    // non-composing keyCode 229 is how an active IME commits numbers and
+    // punctuation; returning false here would stop xterm before it can diff
+    // the helper textarea and emit the committed Unicode text.
     this.terminal.attachCustomKeyEventHandler((ev) => {
-      if (ev.isComposing || ev.keyCode === 229) return false;
+      if (ev.isComposing || ev.key === 'Process' || ev.keyCode === 229) return true;
 
       // Let the app's Alt/Option session-nav and Command Palette shortcuts reach the document keydown handler
       // (app.js switches tabs by PHYSICAL e.code) instead of xterm injecting ESC<char> into
@@ -398,72 +399,6 @@ Object.assign(CodemanApp.prototype, {
 
       return true;
     });
-
-    // Android virtual keyboard fix: catch non-composition input events.
-    // On Android Chrome, typing symbols (e.g., "/" from Gboard's symbol keyboard)
-    // sends keyCode 229 + input event WITHOUT compositionstart/end wrapping.
-    // The custom key handler above returns false for keyCode 229, telling xterm
-    // to ignore the keydown. xterm.js expects the character to arrive via
-    // composition events, but since there's no composition, the character is lost.
-    // This listener catches those orphaned input events and forwards them to onData.
-    {
-      const xtermTextarea = container.querySelector('.xterm-helper-textarea');
-      if (xtermTextarea && MobileDetection.isTouchDevice()) {
-        let composing = false;
-        let lastKeydownHandled = 0;
-        xtermTextarea.addEventListener('compositionstart', () => { composing = true; });
-        xtermTextarea.addEventListener('compositionend', () => { composing = false; });
-        // Track when xterm handles a keydown normally (non-229 keyCode).
-        // If xterm processed the keydown, it will emit onData itself --
-        // the input event handler below must NOT re-send the character.
-        xtermTextarea.addEventListener('keydown', (e) => {
-          if (!e.isComposing && e.keyCode !== 229) {
-            lastKeydownHandled = Date.now();
-          }
-        });
-        xtermTextarea.addEventListener('input', (e) => {
-          // Only handle insertText events outside of composition -- these are
-          // the ones xterm.js misses on Android virtual keyboards.
-          if (composing || e.isComposing) return;
-          if (e.inputType !== 'insertText' || !e.data) return;
-          // If xterm just handled a keydown (within 50ms), it already sent the
-          // char via onData. Skip to avoid double-send (e.g., Shift+A => AA).
-          if (Date.now() - lastKeydownHandled < 50) return;
-          // xterm.js may have already processed this via its own input handler.
-          // Check if the textarea was cleared by xterm (value is empty or just
-          // whitespace) -- if so, xterm handled it and we should not double-send.
-          // Use a microtask to check after xterm's own handlers have run.
-          const data = e.data;
-          const pendingBefore = this._localEchoOverlay?.pendingText || '';
-          Promise.resolve().then(() => {
-            if (
-              this._lastTerminalData?.data === data &&
-              performance.now() - this._lastTerminalData.time < 100
-            ) {
-              xtermTextarea.value = '';
-              return;
-            }
-            const pendingAfter = this._localEchoOverlay?.pendingText || '';
-            if (
-              this._localEchoEnabled &&
-              pendingAfter.length > pendingBefore.length &&
-              pendingAfter.endsWith(data)
-            ) {
-              xtermTextarea.value = '';
-              return;
-            }
-            // If xterm cleared the textarea, it processed the input -- skip.
-            const val = xtermTextarea.value;
-            if (!val || (val.trim() === '' && data !== ' ')) return;
-            // xterm didn't process it -- forward to terminal as if typed.
-            // Emit via onData path by writing to terminal's input handler.
-            this.terminal._core.coreService.triggerDataEvent(data, true);
-            // Clear the textarea to prevent xterm from processing it later.
-            xtermTextarea.value = '';
-          });
-        });
-      }
-    }
 
     // WebGL renderer for GPU-accelerated terminal rendering.
     // Previously caused "page unresponsive" crashes from synchronous GPU stalls,
@@ -592,8 +527,34 @@ Object.assign(CodemanApp.prototype, {
         this._touchSelectionActive = false;
         this._touchSelectionAnchor = null;
         this._hideTouchSelectionBar();
+        // Nothing highlighted, nothing for Auto Copy to flush. xterm drops the
+        // selection on any keypress, so without this a keystroke would leave a
+        // stale flush armed for the next unrelated mouseup.
+        this._autoCopyPending = false;
+        return;
       }
+      // Auto Copy arms here and fires at the END of the gesture (below). This
+      // callback runs on EVERY cell the drag crosses, so copying here would be
+      // one clipboard write per mouse move.
+      this._autoCopyPending = true;
     });
+
+    // Auto Copy (copy-on-select, per-device `autoCopySelection`, default OFF).
+    //
+    // ⚠️ The flush is SYNCHRONOUS inside the mouseup handler, deliberately: both
+    // clipboard paths need user activation (Firefox gates navigator.clipboard
+    // .writeText on it, and Safari requires document.execCommand('copy'), the
+    // plain-HTTP fallback install.sh's LAN option lands on, to run inside the
+    // gesture's own task). Deferring to a timer or to onSelectionChange loses it.
+    //
+    // ⚠️ document-level, because a drag that ends outside the terminal (the user
+    // sweeps up past the header) delivers its mouseup to the document, not to
+    // the container. Unrelated mouseups elsewhere on the page are filtered by
+    // decideAutoCopy, not by the listener's target.
+    if (!this._autoCopyListenerInstalled) {
+      this._autoCopyListenerInstalled = true;
+      document.addEventListener('mouseup', () => this._flushAutoCopySelection());
+    }
 
     // Mouse wheel: forward to the TUI only for sessions verified to handle SGR
     // wheel reports (claude 2.1.187+ — see _shouldForwardWheelToApp), local
@@ -940,6 +901,7 @@ Object.assign(CodemanApp.prototype, {
     const MIN_ROWS = 10;
 
     const throttledResize = () => {
+      if (this._tabRailResizeOwnsObserver) return;
       // Trailing-edge debounce: ALL resize work (fit + clear + SIGWINCH) happens
       // once after the user stops resizing. During active resize, the terminal
       // stays at its old dimensions for up to 300ms.
@@ -1892,6 +1854,11 @@ Object.assign(CodemanApp.prototype, {
     this._suppressTrustedTapMouseEvents();
     this._armTouchSelectionFocusGuard();
     this._positionTouchSelectionBar();
+    // Auto Copy's other entry point. The touchend that ends this gesture is
+    // preventDefault()ed (that is what stops the compat mouse pair from
+    // stealing the selection back), so the document mouseup listener never sees
+    // this surface at all, so a phone would have a dead toggle without this call.
+    this._flushAutoCopySelection();
   },
 
   /** Whole logical line under the anchor — the common case a word selection just missed. */
@@ -1912,6 +1879,9 @@ Object.assign(CodemanApp.prototype, {
     this._touchSelectionAnchor = { index, length };
     this._applyTouchSelection(index, length);
     this._positionTouchSelectionBar();
+    // Widening to the whole line is a new selection the user asked for, and the
+    // button's click carries the activation both clipboard paths need.
+    this._flushAutoCopySelection();
   },
 
   /** Copy through the shared path: Clipboard API, else execCommand (plain-HTTP installs). */
@@ -2244,7 +2214,7 @@ Object.assign(CodemanApp.prototype, {
     }
     titleSpan.appendChild(document.createTextNode(this._historyRowLabel(s, shortDir)));
 
-    // Badge row: mode (claude/codex/opencode/gemini/antigravity/pi/shell) + a LIVE pill.
+    // Badge row: mode (claude/codex/opencode/gemini/antigravity/pi/grok/shell) + a LIVE pill.
     const badgeRow = document.createElement('div');
     badgeRow.className = 'history-item-badges';
     if (s.mode) {
@@ -3012,12 +2982,12 @@ Object.assign(CodemanApp.prototype, {
 
   /**
    * Post-scroll companion to _noteTerminalUserScroll: hitting the TOP of the
-   * buffer while scrolling up is the user reaching for history the browser does
-   * not have, so pull the rest of tmux's scrollback (issue #205, see
-   * _maybeRefetchFullHistory). Must be called AFTER scrollLines(), since the
-   * check is on the resulting position, and it is deliberately not folded into
-   * _noteTerminalUserScroll for exactly that reason. Cheap: one integer compare
-   * per scroll event, and the pull itself is cooldown-guarded.
+   * buffer while scrolling up gives the app a chance to pull the rest of tmux's
+   * scrollback (issue #205, see _maybeRefetchFullHistory). Shell sessions decline
+   * automatic pulls because their captures can be large; their banner button is
+   * the explicit path. Must be called AFTER scrollLines(), since the check is on
+   * the resulting position, and it is deliberately not folded into
+   * _noteTerminalUserScroll for exactly that reason.
    */
   _maybeLoadMoreHistoryOnScroll(lines) {
     if (lines >= 0) return;
@@ -3571,7 +3541,9 @@ Object.assign(CodemanApp.prototype, {
     }
 
     const buffer = this.terminal.buffer.active;
-    const totalLines = buffer.baseY + buffer.length;
+    // `length` already includes scrollback + viewport rows. Adding baseY scans
+    // every scrollback row twice, starting with thousands of out-of-range calls.
+    const totalLines = buffer.length;
     let lastNonEmptyLine = -1;
 
     for (let lineIndex = totalLines - 1; lineIndex >= 0; lineIndex--) {
@@ -3601,8 +3573,8 @@ Object.assign(CodemanApp.prototype, {
    * Uses _safeYield to spread work across frames; falls back to setTimeout
    * and a tick-Worker so progress continues on occluded / idle-throttled tabs.
    * @param {string} buffer - The full terminal buffer to write
-   * @param {number} chunkSize - Size of each chunk (default 128KB for smooth 60fps)
-   * @returns {Promise<void>} - Resolves when all chunks written
+   * @param {number} chunkSize - Size of each chunk (default 32KB)
+   * @returns {Promise<{parsedAt: number, bufferLength: number, completed: boolean}>} Parse marker snapshot
    */
   chunkedTerminalWrite(buffer, chunkSize = TERMINAL_CHUNK_SIZE, loadOwner) {
     // Generation counter: if a newer chunkedTerminalWrite starts (tab switch),
@@ -3611,9 +3583,14 @@ Object.assign(CodemanApp.prototype, {
     const bufferLoadOwner = this._beginBufferLoad(loadOwner);
 
     return new Promise((resolve) => {
+      const parseSnapshot = (completed = this._chunkedWriteGen === writeGen) => ({
+        parsedAt: performance.now(),
+        bufferLength: this.terminal?.buffer?.active?.length ?? 0,
+        completed,
+      });
       if (!buffer || buffer.length === 0) {
         this._finishBufferLoad(bufferLoadOwner);
-        resolve();
+        resolve(parseSnapshot());
         return;
       }
 
@@ -3621,53 +3598,45 @@ Object.assign(CodemanApp.prototype, {
       // (from historical SSE data that was stored with markers)
       const cleanBuffer = buffer.replace(DEC_SYNC_STRIP_RE, '');
 
-      const finish = () => {
-        // Only finish if we're still the active write — a newer write owns buffer load state
-        if (this._chunkedWriteGen === writeGen) {
-          this._finishBufferLoad(bufferLoadOwner);
-        }
-        resolve();
-      };
-
       // For small buffers, write directly — single-frame render is fast enough
       if (cleanBuffer.length <= chunkSize) {
-        this.terminal.write(cleanBuffer, finish);
+        this.terminal.write(cleanBuffer, () => resolve(parseSnapshot()));
+        // The write is now ordered in xterm's queue. Release live output before
+        // parsing completes; subsequent writes stay behind it without being lost.
+        this._finishBufferLoad(bufferLoadOwner);
         return;
       }
 
-      // Large buffers: write in chunks across animation frames.
-      // Each 32KB chunk keeps per-frame WebGL render work under ~5ms,
-      // avoiding GPU stalls without needing to toggle the renderer.
+      // Large buffers: enqueue paced chunks, then append an empty marker whose
+      // callback fires after xterm parses every preceding chunk. The live-output
+      // gate is released as soon as that marker is ordered, not after parsing, so
+      // new output queues behind history instead of being held or dropped.
       let offset = 0;
       const _chunkStart = performance.now();
       let _chunkCount = 0;
       const writeChunk = () => {
         // Abort if a newer chunked write started (user switched tabs)
         if (this._chunkedWriteGen !== writeGen) {
-          resolve();
+          resolve(parseSnapshot(false));
           return;
         }
 
-        if (offset >= cleanBuffer.length) {
-          const _totalMs = performance.now() - _chunkStart;
-          console.log(
-            `[CRASH-DIAG] chunkedTerminalWrite complete: ${cleanBuffer.length} bytes in ${_chunkCount} chunks, ${_totalMs.toFixed(0)}ms total`
-          );
-          // Wait one more frame for xterm to finish rendering before resolving
-          this._safeYield(finish);
-          return;
-        }
-
-        const _ct0 = performance.now();
         const chunk = cleanBuffer.slice(offset, offset + chunkSize);
-        this.terminal.write(chunk);
-        const _cdt = performance.now() - _ct0;
+        offset += chunk.length;
         _chunkCount++;
-        if (_cdt > 50)
-          console.warn(
-            `[CRASH-DIAG] chunk #${_chunkCount} write took ${_cdt.toFixed(0)}ms (${chunk.length} bytes at offset ${offset})`
-          );
-        offset += chunkSize;
+        this.terminal.write(chunk);
+        if (offset >= cleanBuffer.length) {
+          this.terminal.write('', () => {
+            const result = parseSnapshot();
+            const _totalMs = result.parsedAt - _chunkStart;
+            console.log(
+              `[CRASH-DIAG] chunkedTerminalWrite complete: ${cleanBuffer.length} bytes in ${_chunkCount} chunks, ${_totalMs.toFixed(0)}ms parsed`
+            );
+            resolve(result);
+          });
+          this._finishBufferLoad(bufferLoadOwner);
+          return;
+        }
 
         // Schedule next chunk; rAF if possible, else setTimeout/Worker
         // fallback so progress doesn't stall on occluded/unfocused windows.
@@ -3878,6 +3847,98 @@ Object.assign(CodemanApp.prototype, {
     return ok;
   },
 
+  /**
+   * Auto Copy's ON/OFF, read at flush time from the CACHED settings object
+   * (loadAppSettingsFromStorage memoizes, so this is not a localStorage hit).
+   *
+   * Reading it here rather than mirroring it into a field is deliberate: there
+   * is then no apply-path a future settings save can forget to call, and the
+   * toggle takes effect on the very next selection instead of the next reload.
+   */
+  _autoCopySelectionEnabled() {
+    try {
+      return this.loadAppSettingsFromStorage?.()?.autoCopySelection === true;
+    } catch {
+      return false;
+    }
+  },
+
+  /**
+   * Copy the current terminal selection because the user finished highlighting
+   * it. Called at the end of a selection GESTURE: the document mouseup
+   * installed in initTerminal, and the touch-selection gesture end (a touchend
+   * the touch path preventDefaults, so no mouseup ever arrives there).
+   *
+   * ⚠️ This is NOT copyTerminalSelection(): that one clears the selection (so a
+   * second Ctrl+C is an interrupt) and hands focus back to the terminal. Both
+   * are wrong here: clearing would make the text vanish from under the cursor
+   * that just highlighted it, and focusing opens the on-screen keyboard over
+   * the text on a phone. Focus is instead RESTORED to whatever held it, which
+   * only matters for the execCommand fallback (it focuses a temp textarea on
+   * the way through); the Clipboard API path never moves focus at all.
+   */
+  async _flushAutoCopySelection() {
+    const decide = window.CodemanAutoCopy?.decide;
+    if (!decide || !this.terminal) return;
+    const text = this.terminal.hasSelection?.() ? this.terminal.getSelection() : '';
+    const verdict = decide({
+      enabled: this._autoCopySelectionEnabled(),
+      text,
+      lastCopied: this._autoCopyLastText,
+      pending: !!this._autoCopyPending,
+    });
+    this._autoCopyPending = false;
+    if (verdict === 'skip') return;
+    if (verdict === 'too-large') {
+      this._autoCopyNotify('Selection too large to copy automatically. Press Ctrl+C.', 'warning');
+      return;
+    }
+
+    this._autoCopyLastText = text;
+    const focusedBefore = document.activeElement;
+    const ok = await this._copyText(text);
+    if (
+      focusedBefore &&
+      focusedBefore !== document.activeElement &&
+      focusedBefore.isConnected &&
+      typeof focusedBefore.focus === 'function'
+    ) {
+      try {
+        focusedBefore.focus();
+      } catch {}
+    }
+    if (!ok) {
+      // Let the next gesture retry the same text rather than dedupe itself into
+      // silence after a transient clipboard refusal.
+      this._autoCopyLastText = '';
+      this._autoCopyNotify('Auto Copy failed: the browser blocked clipboard access', 'error');
+      return;
+    }
+    // Silent on success, like every terminal emulator's copy-on-select, except
+    // ONCE per page load: a feature that works by doing nothing visible needs to
+    // say so the first time, or the user cannot tell it from a dead toggle.
+    if (!this._autoCopyHintShown) {
+      this._autoCopyHintShown = true;
+      this.showToast('Auto Copy: selection copied', 'success');
+    }
+  },
+
+  /**
+   * Failure/refusal toast, throttled. Auto Copy fires per gesture, so an
+   * install where the clipboard is permanently blocked would otherwise paint a
+   * toast on every drag, which trains the user to ignore toasts everywhere.
+   */
+  _autoCopyNotify(message, type) {
+    const now = Date.now();
+    const last = this._autoCopyNotifiedAt;
+    // `last === undefined` is checked rather than falling back to 0: the first
+    // failure must always be reported, and a `now - 0 < throttle` comparison
+    // only happens to hold because the wall clock is a big number.
+    if (last !== undefined && now - last < 10_000) return;
+    this._autoCopyNotifiedAt = now;
+    this.showToast(message, type);
+  },
+
   _syncMobileHelperTextareaToCursor() {
     if (!MobileDetection.isTouchDevice() || !this.terminal?.element) return;
     try {
@@ -3918,7 +3979,7 @@ Object.assign(CodemanApp.prototype, {
 
     const mouseMode = this.terminal.modes?.mouseTrackingMode;
     const mouseTrackingOn = !!mouseMode && mouseMode !== 'none';
-    if (!mouseTrackingOn && !this._sessionUsesServerMouseStrip()) return 'input';
+    if (!mouseTrackingOn && !this._shouldReportMouseToCli()) return 'input';
 
     const buffer = this.terminal.buffer?.active;
     if (!buffer?.getLine) return 'input';
@@ -4218,9 +4279,10 @@ Object.assign(CodemanApp.prototype, {
       // xterm's mouse encoder owns live DECSET modes. The synthetic DOM click
       // follows the same path as a desktop click.
       this._dispatchSyntheticTerminalClick(touch.clientX, touch.clientY);
-    } else if (shouldActivate && this._sessionUsesServerMouseStrip()) {
+    } else if (shouldActivate && this._shouldReportMouseToCli()) {
       // Claude/Codex/Gemini DECSETs are stripped from the browser stream, so
-      // report directly to the PTY while retaining local touch scrollback.
+      // report directly to the PTY while retaining local touch scrollback. Only
+      // while the CLI actually has tracking on (see _shouldReportMouseToCli).
       this._sendSyntheticSgrTap(touch.clientX, touch.clientY);
     }
 
@@ -4288,9 +4350,32 @@ Object.assign(CodemanApp.prototype, {
   // output stream has mouse-tracking DECSET sequences stripped before reaching the
   // browser. For these, xterm's live mouseTrackingMode is useless as a gate — the
   // PTY-side TUI keeps tracking enabled, we just never see the enable sequence.
-  _sessionUsesServerMouseStrip() {
-    const mode = this.sessions?.get(this.activeSessionId)?.mode || 'claude';
-    return mode === 'claude' || mode === 'codex' || mode === 'gemini';
+  /**
+   * True when the browser has to hand-encode a click report for the CLI.
+   *
+   * Two conditions, and dropping either one is a bug that has already happened:
+   *
+   * 1. The session's mode is one whose mouse DECSETs the server STRIPS out of
+   *    the stream (claude/codex/gemini, `isAltScreenStripMode`), which is why
+   *    xterm's own encoder is permanently idle here and something has to stand
+   *    in for it.
+   * 2. The CLI actually has a mouse-tracking mode on right now. The server
+   *    records that as it strips (`_recordStrippedMouseMode` in session.ts) and
+   *    publishes it as `cliMouseTracking`. Without this half the browser
+   *    reported EVERY click, so a CLI sitting at its composer with no dialog
+   *    open, or a pane that has fallen back to a shell prompt, received mouse
+   *    reports it never asked for. A shell prints those as literal text
+   *    (`[<0;88;20M`) and they garble the next line typed.
+   *
+   * Fails toward silence: an unknown or stale flag reports nothing rather than
+   * injecting bytes. After a server restart the flag is false until the CLI
+   * re-emits its DECSET, which closing and reopening a dialog does.
+   */
+  _shouldReportMouseToCli() {
+    const session = this.sessions?.get(this.activeSessionId);
+    const mode = session?.mode || 'claude';
+    if (mode !== 'claude' && mode !== 'codex' && mode !== 'gemini') return false;
+    return session?.cliMouseTracking === true;
   },
 
   // True when xterm's viewport shows the live PTY screen (not scrolled up into
@@ -4556,7 +4641,7 @@ Object.assign(CodemanApp.prototype, {
 
   // Desktop counterpart of the touchend tap branch: hand-encode an SGR report
   // for a plain left-click when the server strips mouse DECSETs (see
-  // _sessionUsesServerMouseStrip). Every skip below is a click that already has
+  // _shouldReportMouseToCli). Every skip below is a click that already has
   // a meaning elsewhere: synthetic/compat clicks after a touch tap (touchend
   // reported already), modified clicks (shift keeps xterm's selection
   // override), double/triple clicks (word/line selection), drag-selections,
@@ -4570,7 +4655,7 @@ Object.assign(CodemanApp.prototype, {
     if (ev.shiftKey || ev.altKey || ev.ctrlKey || ev.metaKey) return;
     const mode = this.terminal.modes?.mouseTrackingMode;
     if (mode && mode !== 'none') return;
-    if (!this._sessionUsesServerMouseStrip()) return;
+    if (!this._shouldReportMouseToCli()) return;
     if (this.terminal.hasSelection?.()) return;
     if (this._linkHovered) return; // link provider hover/leave callbacks (registerFilePathLinkProvider)
     if (performance.now() <= (this._trustedTapMouseSuppressUntil || 0)) return;

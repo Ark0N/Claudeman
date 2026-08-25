@@ -11,7 +11,7 @@ export async function setVisualViewportHeight(
   cdp: CDPSession,
   width: number,
   height: number,
-  scale: number,
+  scale: number
 ): Promise<void> {
   await cdp.send('Emulation.setDeviceMetricsOverride', {
     width,
@@ -31,11 +31,11 @@ export async function clearDeviceMetricsOverride(cdp: CDPSession): Promise<void>
 export async function dispatchTouchEvent(
   cdp: CDPSession,
   type: 'touchStart' | 'touchMove' | 'touchEnd' | 'touchCancel',
-  touchPoints: Array<{ x: number; y: number }>,
+  touchPoints: Array<{ x: number; y: number }>
 ): Promise<void> {
   await cdp.send('Input.dispatchTouchEvent', {
     type,
-    touchPoints: touchPoints.map(p => ({ x: Math.round(p.x), y: Math.round(p.y) })),
+    touchPoints: touchPoints.map((p) => ({ x: Math.round(p.x), y: Math.round(p.y) })),
   });
 }
 
@@ -54,7 +54,7 @@ export async function setNetworkThrottle(
   cdp: CDPSession,
   downloadKbps: number,
   uploadKbps: number,
-  latencyMs: number,
+  latencyMs: number
 ): Promise<void> {
   await cdp.send('Network.enable');
   await cdp.send('Network.emulateNetworkConditions', {

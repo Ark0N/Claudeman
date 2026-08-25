@@ -237,7 +237,7 @@ describe('RalphTracker', () => {
       tracker.on('todoUpdate', todoHandler);
 
       tracker.processTerminalData('- [ ] First task\n');
-      tracker.flushPendingEvents();  // Flush debounced events
+      tracker.flushPendingEvents(); // Flush debounced events
 
       expect(todoHandler).toHaveBeenCalled();
       const todos = tracker.todos;
@@ -384,8 +384,8 @@ describe('RalphTracker', () => {
 
       const todos = tracker.todos;
       expect(todos).toHaveLength(3);
-      expect(todos.filter(t => t.status === 'pending')).toHaveLength(2);
-      expect(todos.filter(t => t.status === 'completed')).toHaveLength(1);
+      expect(todos.filter((t) => t.status === 'pending')).toHaveLength(2);
+      expect(todos.filter((t) => t.status === 'completed')).toHaveLength(1);
     });
 
     it('should not auto-enable on native todo pattern by default', () => {
@@ -421,9 +421,9 @@ describe('RalphTracker', () => {
       tracker.on('todoUpdate', todoHandler);
 
       tracker.processTerminalData('- [ ] Task 1\n');
-      tracker.flushPendingEvents();  // Flush debounced events
+      tracker.flushPendingEvents(); // Flush debounced events
       tracker.processTerminalData('- [ ] Task 2\n');
-      tracker.flushPendingEvents();  // Flush debounced events
+      tracker.flushPendingEvents(); // Flush debounced events
 
       expect(todoHandler).toHaveBeenCalledTimes(2);
     });
@@ -747,7 +747,7 @@ Final text
       tracker.on('completionDetected', completionHandler);
 
       tracker.startLoop('COMPLETE');
-      tracker.processTerminalData('<promise>COMPLE\n');  // Partial
+      tracker.processTerminalData('<promise>COMPLE\n'); // Partial
 
       expect(completionHandler).not.toHaveBeenCalled();
     });
@@ -916,7 +916,7 @@ Final text
       tracker.processTerminalData('[x] not at start\n');
 
       // Should not create todos from these false positives
-      const actualTodos = tracker.todos.filter(t => t.content.length > 0);
+      const actualTodos = tracker.todos.filter((t) => t.content.length > 0);
       expect(actualTodos.length).toBeLessThanOrEqual(1);
     });
 
@@ -1180,7 +1180,7 @@ Final text
         tracker.processTerminalData('✔ Task #2 updated: status → in progress\n');
         tracker.flushPendingEvents();
 
-        const task = tracker.todos.find(t => t.content === 'Implement feature');
+        const task = tracker.todos.find((t) => t.content === 'Implement feature');
         expect(task?.status).toBe('in_progress');
       });
 
@@ -1189,7 +1189,7 @@ Final text
         tracker.processTerminalData('✔ Task #3 updated: status → pending\n');
         tracker.flushPendingEvents();
 
-        const task = tracker.todos.find(t => t.content === 'Review code');
+        const task = tracker.todos.find((t) => t.content === 'Review code');
         expect(task?.status).toBe('pending');
       });
 
@@ -1300,11 +1300,7 @@ Final text
      * Lines are joined with newlines and wrapped with start/end markers.
      */
     function feedStatusBlock(tracker: RalphTracker, fields: string[]): void {
-      const block = [
-        '---RALPH_STATUS---',
-        ...fields,
-        '---END_RALPH_STATUS---',
-      ].join('\n') + '\n';
+      const block = ['---RALPH_STATUS---', ...fields, '---END_RALPH_STATUS---'].join('\n') + '\n';
       tracker.processTerminalData(block);
     }
 
@@ -1339,9 +1335,7 @@ Final text
       tracker.on('statusBlockDetected', handler);
 
       // Only provide the required STATUS field
-      feedStatusBlock(tracker, [
-        'STATUS: COMPLETE',
-      ]);
+      feedStatusBlock(tracker, ['STATUS: COMPLETE']);
 
       expect(handler).toHaveBeenCalledTimes(1);
       const block: RalphStatusBlock = handler.mock.calls[0][0];
@@ -1360,10 +1354,7 @@ Final text
 
       // No ---END_RALPH_STATUS--- marker
       tracker.processTerminalData(
-        '---RALPH_STATUS---\n' +
-        'STATUS: IN_PROGRESS\n' +
-        'TASKS_COMPLETED_THIS_LOOP: 5\n' +
-        'Some other text\n'
+        '---RALPH_STATUS---\n' + 'STATUS: IN_PROGRESS\n' + 'TASKS_COMPLETED_THIS_LOOP: 5\n' + 'Some other text\n'
       );
 
       expect(handler).not.toHaveBeenCalled();
@@ -1374,10 +1365,7 @@ Final text
       tracker.on('statusBlockDetected', handler);
 
       // Block with no STATUS field
-      feedStatusBlock(tracker, [
-        'TASKS_COMPLETED_THIS_LOOP: 5',
-        'FILES_MODIFIED: 2',
-      ]);
+      feedStatusBlock(tracker, ['TASKS_COMPLETED_THIS_LOOP: 5', 'FILES_MODIFIED: 2']);
 
       expect(handler).not.toHaveBeenCalled();
     });
@@ -1386,16 +1374,9 @@ Final text
       const handler = vi.fn();
       tracker.on('statusBlockDetected', handler);
 
-      feedStatusBlock(tracker, [
-        'STATUS: IN_PROGRESS',
-        'FILES_MODIFIED: 1',
-      ]);
+      feedStatusBlock(tracker, ['STATUS: IN_PROGRESS', 'FILES_MODIFIED: 1']);
 
-      feedStatusBlock(tracker, [
-        'STATUS: COMPLETE',
-        'FILES_MODIFIED: 10',
-        'EXIT_SIGNAL: true',
-      ]);
+      feedStatusBlock(tracker, ['STATUS: COMPLETE', 'FILES_MODIFIED: 10', 'EXIT_SIGNAL: true']);
 
       expect(handler).toHaveBeenCalledTimes(2);
 
@@ -1427,17 +1408,9 @@ Final text
     });
 
     it('should update cumulative stats across multiple blocks', () => {
-      feedStatusBlock(tracker, [
-        'STATUS: IN_PROGRESS',
-        'FILES_MODIFIED: 3',
-        'TASKS_COMPLETED_THIS_LOOP: 2',
-      ]);
+      feedStatusBlock(tracker, ['STATUS: IN_PROGRESS', 'FILES_MODIFIED: 3', 'TASKS_COMPLETED_THIS_LOOP: 2']);
 
-      feedStatusBlock(tracker, [
-        'STATUS: IN_PROGRESS',
-        'FILES_MODIFIED: 5',
-        'TASKS_COMPLETED_THIS_LOOP: 1',
-      ]);
+      feedStatusBlock(tracker, ['STATUS: IN_PROGRESS', 'FILES_MODIFIED: 5', 'TASKS_COMPLETED_THIS_LOOP: 1']);
 
       const stats = tracker.cumulativeStats;
       expect(stats.filesModified).toBe(8);
@@ -1448,10 +1421,7 @@ Final text
       const handler = vi.fn();
       tracker.on('statusBlockDetected', handler);
 
-      feedStatusBlock(tracker, [
-        'STATUS: BLOCKED',
-        'RECOMMENDATION: Need human review of failing tests',
-      ]);
+      feedStatusBlock(tracker, ['STATUS: BLOCKED', 'RECOMMENDATION: Need human review of failing tests']);
 
       expect(handler).toHaveBeenCalledTimes(1);
       const block: RalphStatusBlock = handler.mock.calls[0][0];
@@ -1464,12 +1434,15 @@ Final text
     /**
      * Helper to feed a status block with specific progress/test values.
      */
-    function feedStatusBlock(tracker: RalphTracker, opts: {
-      filesModified?: number;
-      tasksCompleted?: number;
-      testsStatus?: string;
-      status?: string;
-    }): void {
+    function feedStatusBlock(
+      tracker: RalphTracker,
+      opts: {
+        filesModified?: number;
+        tasksCompleted?: number;
+        testsStatus?: string;
+        status?: string;
+      }
+    ): void {
       const fields = [
         `STATUS: ${opts.status ?? 'IN_PROGRESS'}`,
         `FILES_MODIFIED: ${opts.filesModified ?? 0}`,
@@ -1478,11 +1451,7 @@ Final text
       if (opts.testsStatus) {
         fields.push(`TESTS_STATUS: ${opts.testsStatus}`);
       }
-      const block = [
-        '---RALPH_STATUS---',
-        ...fields,
-        '---END_RALPH_STATUS---',
-      ].join('\n') + '\n';
+      const block = ['---RALPH_STATUS---', ...fields, '---END_RALPH_STATUS---'].join('\n') + '\n';
       tracker.processTerminalData(block);
     }
 
@@ -1611,21 +1580,20 @@ Final text
     /**
      * Helper to feed a RALPH_STATUS block.
      */
-    function feedStatusBlock(tracker: RalphTracker, opts: {
-      status?: string;
-      exitSignal?: boolean;
-      filesModified?: number;
-    }): void {
+    function feedStatusBlock(
+      tracker: RalphTracker,
+      opts: {
+        status?: string;
+        exitSignal?: boolean;
+        filesModified?: number;
+      }
+    ): void {
       const fields = [
         `STATUS: ${opts.status ?? 'IN_PROGRESS'}`,
         `EXIT_SIGNAL: ${opts.exitSignal ?? false}`,
         `FILES_MODIFIED: ${opts.filesModified ?? 0}`,
       ];
-      const block = [
-        '---RALPH_STATUS---',
-        ...fields,
-        '---END_RALPH_STATUS---',
-      ].join('\n') + '\n';
+      const block = ['---RALPH_STATUS---', ...fields, '---END_RALPH_STATUS---'].join('\n') + '\n';
       tracker.processTerminalData(block);
     }
 
@@ -1781,9 +1749,9 @@ Final text
 
       const todos = tracker.todos;
       expect(todos).toHaveLength(3);
-      expect(todos.find(t => t.content.includes('Server'))?.priority).toBe('P0');
-      expect(todos.find(t => t.content.includes('Review'))?.priority).toBe('P1');
-      expect(todos.find(t => t.content.includes('logging'))?.priority).toBe('P2');
+      expect(todos.find((t) => t.content.includes('Server'))?.priority).toBe('P0');
+      expect(todos.find((t) => t.content.includes('Review'))?.priority).toBe('P1');
+      expect(todos.find((t) => t.content.includes('logging'))?.priority).toBe('P2');
     });
 
     it('should be case-insensitive for priority keywords', () => {
@@ -1822,9 +1790,9 @@ Final text
       // Should fire after debounce delay
       vi.advanceTimersByTime(EVENT_DEBOUNCE_MS);
       expect(handler).toHaveBeenCalledTimes(1);
-      expect(handler).toHaveBeenCalledWith(expect.arrayContaining([
-        expect.objectContaining({ content: expect.stringContaining('Fix the bug') }),
-      ]));
+      expect(handler).toHaveBeenCalledWith(
+        expect.arrayContaining([expect.objectContaining({ content: expect.stringContaining('Fix the bug') })])
+      );
     });
 
     it('should debounce loopUpdate events (not fire immediately)', () => {

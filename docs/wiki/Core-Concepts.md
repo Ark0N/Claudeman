@@ -88,7 +88,7 @@ would. That indirection buys:
 - **Real scrollback.** History is held by tmux, so reconnecting replays what happened while
   you were gone instead of starting from blank.
 - **Attach from anywhere else.** The same session is reachable from a terminal over SSH
-  with the `sc` chooser, or plain `tmux -L codeman attach`.
+  with `codeman tui`, or plain `tmux -L codeman attach`.
 - **Secrets off the command line.** Environment overrides are injected with socket-scoped
   `tmux setenv` rather than being visible in the spawn command.
 
