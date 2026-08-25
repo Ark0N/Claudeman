@@ -14,7 +14,7 @@ terminal agent:
 
 | Profile      | What it is                        | Can Codeman run it in a tab? |
 | ------------ | --------------------------------- | ---------------------------- |
-| `web`        | the browser UI, served on :3080   | no — but see §5              |
+| `web`        | the browser UI, served on :3080   | no — but see §6              |
 | `headless`   | answers one task and exits        | no                           |
 | (`base`)     | the shared core, no app at all    | no                           |
 
@@ -199,21 +199,66 @@ Codeman's allowlist is global, so admitting them would widen it for every mode a
 once. Authenticate those the way dsh does, from the file or the server's own
 environment.
 
-## 5. The web UI as a tab
+## 5. Reading a session back, and driving one as a worker
+
+dsh writes a real transcript — `$DSH_HOME/sessions/<mangled-cwd>/<id>/session.jsonl.zstd`
+— so `GET /api/sessions/:id/last-response` reads that rather than segmenting the
+pane, and the Response Viewer shows a dsh conversation the way it shows a claude
+or codex one (`?context=full` returns prompt / response / tool blocks).
+
+Reading the pane instead is not merely coarse for this mode, it is wrong: dsh-TUI
+paints a full-screen splash, so the segmenter answered a `last-response` call for
+a fresh dsh session with its ASCII-art logo — which anything polling for a
+worker's first answer reads as an answer. Three things about the file shaped the
+reader (`src/deepseek-transcript.ts`):
+
+- **It is one zstd FRAME per append, not one zstd stream.** `zstd -dc` decodes all
+  of them, Node's `zlib` zstd decoder stops at the first: a real 56-line
+  transcript came back as 1 line. The reader walks frame headers itself. On a Node
+  older than 22.15 (no zstd at all) the mode falls back to the pane, as before.
+- **Not every `user/message` is the user.** Each turn also records a
+  plugin-sourced runtime-context snapshot; only `source.kind === 'user'` is a
+  prompt.
+- **A failed turn is not an empty one.** `turn/end` carries the provider's error,
+  which is returned as `Turn error: …` (and an early stop such as `max-tokens` as
+  `Turn ended: …`) instead of an empty string that reads as "still thinking".
+
+### As an agent worker
+
+Because dsh has both halves — a real end-of-turn signal and a real transcript — an
+agent can drive a dsh session the same way it drives a claude one, and the bundled
+`codeman` agent skill does. Spawning `beta:deepseek` in its worker list gives a
+worker that is tasked, waited on and read with the same calls as its claude
+siblings; no other external CLI mode qualifies. Two edges are worth repeating here:
+
+- **Readiness is not the stop signal.** The harness reports `idle` at boot roughly
+  300 ms *before* the composer paints (measured 2.26 s vs 2.56 s after spawn), so a
+  send-and-wait fired immediately after create resolves on that boot report,
+  reports a turn that never ran, and leaves the prompt in a pane that was not yet
+  accepting input. Wait for the composer (`❯`) instead.
+- **Wait on `stop`, not on the default signal set.** That set also carries `idle`,
+  which for every external CLI is inferred from output stabilization; a dsh TUI
+  that repaints rarely reads as idle mid-turn.
+
+## 6. The web UI as a tab
 
 The browser UI is the one interactive surface DeepSeek ships itself, so it gets a
 shortcut rather than a run mode: **Run ▸ DeepSeek web UI…** starts
-`dsh web --no-open --host 127.0.0.1 --port 3080 --trusted-host <codeman-host>` in
-an ordinary shell session and opens `http://127.0.0.1:3080` as a Codeman web tab.
+`dsh web --no-open --host 127.0.0.1 --port <free> --trusted-host <codeman-host>`
+as a background child process (`src/deepseek-web-server.ts`, behind
+`POST/GET/DELETE /api/deepseek/web`) and opens it as a Codeman web tab once the
+server actually answers.
 
-Nothing bespoke supervises it: the server is a normal shell session (visible,
-scrollable, killable, dies with its tab) and the UI is a normal web tab. The
-`--trusted-host` flag is load-bearing — dsh fences its `/api` behind a
-browser-trust check on the request authority, and a Codeman web tab reaches it
-through Codeman's own origin via the webview proxy, not directly. Without it the
-page renders and every API call fails.
+It is a child process rather than a shell session because the session version
+opened a terminal tab nobody asked for on every click. What the session gave for
+free is therefore explicit here: one instance with reuse, a restart when the
+requested `--trusted-host` authority differs from the running one, a kill on
+server stop, and captured boot output. The `--trusted-host` flag is load-bearing —
+dsh fences its `/api` behind a browser-trust check on the request authority, and a
+Codeman web tab reaches it through Codeman's own origin via the webview proxy, not
+directly. Without it the page renders and every API call fails.
 
-## 6. Docker and remote cases
+## 7. Docker and remote cases
 
 Docker cases work: the agent image installs `dsh` and bootstraps a `dsh-tui`
 profile into the container. Profiles are deliberately **not** seeded from the
@@ -227,7 +272,7 @@ Remote SSH cases default to `dsh` through a login shell, which boots the remote
 box's default profile. If the remote has several, name one with the per-host
 `commands.deepseek` override — the local `deepSeekConfig` does not cross ssh.
 
-## 7. What is not wired
+## 8. What is not wired
 
 Deliberately minimal, on the same reasoning as the grok integration: the harness
 is a fast-moving developer preview and every flag added is a flag validated
@@ -237,9 +282,6 @@ forever.
 - `dsh plugin` management beyond first-time profile install.
 - The `headless` profile as a one-shot execution backend for Codeman's own
   internal AI checks (today those are Claude-only).
-- Reading `~/.dsh/sessions/**` into the response viewer, the way codex rollouts
-  are read back. DeepSeek sessions are JSONL and this is very achievable; it is
-  the highest-value follow-up.
 - Model/provider selection from Session Options.
 
 ## Verified against

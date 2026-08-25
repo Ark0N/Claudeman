@@ -188,7 +188,7 @@ for _ in $(seq 1 10); do
 done
 printf '%s\n' "$TXT"
 #    (.data is {text,timestamp}; text is also "" before the first completed turn and
-#     always "" for shell/opencode/gemini/antigravity/pi/grok/deepseek, which have no transcript, use
+#     always "" for shell/opencode/gemini/antigravity/pi/grok, which have no transcript, use
 #     the terminal tail there, and here only to diagnose an unsubmitted prompt.)
 
 # 6. clean up: exact id, own list only, through the fail-closed preamble helper
@@ -197,6 +197,59 @@ delete_session "$SID"
 
 Increment `SEQ` for every *new* input to the same worker. Reuse the same `SEQ` only to
 re-ask about the same delivery (the duplicate-wait loop above).
+
+## Flow 1b: DeepSeek Harness worker, end to end
+
+A `deepseek` worker is driven with the same four verbs as a claude one, because the
+harness reports its own lifecycle: its `stop` is a real end-of-turn signal, and its
+answer comes from a real transcript. The differences are all at the edges.
+
+```bash
+# 0. Is there anything to spawn? `available` is the binary, `runnable` is a profile
+#    that can drive a pane -- dsh ships only web/headless, so the two differ.
+"${CURL[@]}" "$API/api/v1/deepseek/status" | jq -c '{available:.data.available,runnable:.data.runnable,profile:.data.defaultProfile}'
+
+# 1. Spawn. `deepSeekConfig` is optional: an absent profile picks the first
+#    pane-capable one, and an absent permissionMode leaves the harness on its own
+#    workspace-write default, which still ASKS before it acts.
+Q=$("${CURL[@]}" -X POST "$API/api/v1/quick-start" -H 'Content-Type: application/json' \
+  -d '{"caseName":"dsh-worker","mode":"deepseek","deepSeekConfig":{"permissionMode":"danger-full-access"}}')
+SID=$(jq -r 'if .success then .data.sessionId else empty end' <<<"$Q")
+[ -n "$SID" ] || { jq -c '{error, errorCode}' <<<"$Q"; exit 1; }   # OPERATION_FAILED = no runnable profile
+CREATED+=("$SID")
+
+# 2. Readiness, and ONLY readiness. ⚠️ Do not use the stop signal for this: the
+#    harness reports idle at BOOT, ~300 ms before the composer paints.
+"${CURL[@]}" -G "$API/api/v1/sessions/$SID/wait-output" \
+  --data-urlencode 'match=❯' --data-urlencode 'from=buffer' --data-urlencode 'timeout=45000' \
+  | jq -e '.data.wait.matched' >/dev/null || { echo "no composer"; delete_session "$SID"; exit 1; }
+
+# 3. Task it. Identical to a claude worker, including the \r and the (clientId, seq).
+"${CURL[@]}" -X POST "$API/api/v1/sessions/$SID/input" -H 'Content-Type: application/json' \
+  -d '{"input":"Read calc.py and tell me in one sentence whether add() is correct.\r","useMux":true,"clientId":"codeman-dsh-1","seq":1,"wait":"stop,exit","waitTimeout":300000}' \
+  | jq -c '{delivered:.data.delivered,signal:.data.wait.signal,timedOut:.data.wait.timedOut}'
+
+# 4. Read it. From $DSH_HOME/sessions/**, not the pane -- scraping a dsh pane returns
+#    its ASCII-art splash. Poll: the harness finalizes the message just after it
+#    reports idle. Two answers are not the model's words and say so:
+#    "Turn error: …" (the provider or harness failed) and "Turn ended: …" (early stop).
+for _ in $(seq 1 15); do
+  TXT=$("${CURL[@]}" "$API/api/v1/sessions/$SID/last-response" | jq -r '.data.text')
+  [ -n "$TXT" ] && break; sleep 1
+done
+printf '%s\n' "$TXT"
+
+# 5. Full conversation, if you need the tool calls too:
+#    "${CURL[@]}" "$API/api/v1/sessions/$SID/last-response?context=full" | jq -r '.data.messages[]|"[\(.label)] \(.text)"'
+
+delete_session "$SID"
+```
+
+⚠️ **`wait:"stop,exit"`, not `wait:true`.** The default set also carries `idle`, which
+for an external CLI is inferred from output stabilization: a dsh TUI that repaints
+rarely reads as idle mid-turn, and a wait carrying `idle` then resolves in 0 ms on a
+turn with minutes left to run (measured). The same reason the preamble's `sendwait`
+asks for `stop,exit` on every mode.
 
 ## Flow 2: shell worker, marker-synchronized
 

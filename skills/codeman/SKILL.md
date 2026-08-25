@@ -47,7 +47,7 @@ later call opens with, and your first REAL call performs them anyway:
 
 ```bash
 . "${XDG_CACHE_HOME:-$HOME/.cache}/codeman-agent-$CODEMAN_SESSION_ID.sh" 2>/dev/null
-[ "${CODEMAN_PREAMBLE:-}" = 1.19.0 ] || { echo "preamble missing or stale; run the full §0 block"; exit 1; }
+[ "${CODEMAN_PREAMBLE:-}" = 1.20.0 ] || { echo "preamble missing or stale; run the full §0 block"; exit 1; }
 ```
 
 ⚠️ **Never spend a Bash call on this check alone.** §1's block opens with this same
@@ -75,8 +75,8 @@ PRE="${XDG_CACHE_HOME:-$HOME/.cache}/codeman-agent-$CODEMAN_SESSION_ID.sh"
 mkdir -p "$(dirname "$PRE")"
 # Rewrite unless the file already ends with THIS version's stamp, so a stale or a
 # half-written file self-heals here instead of costing you a round trip to rm it.
-grep -qs '^CODEMAN_PREAMBLE=1.19.0$' "$PRE" || (umask 077; cat > "$PRE" <<'PREAMBLE'
-# ---- Codeman agent preamble 1.19.0 (seeded by Codeman at session spawn; the SKILL.md §0 bootstrap rewrites it when missing or stale) ----
+grep -qs '^CODEMAN_PREAMBLE=1.20.0$' "$PRE" || (umask 077; cat > "$PRE" <<'PREAMBLE'
+# ---- Codeman agent preamble 1.20.0 (seeded by Codeman at session spawn; the SKILL.md §0 bootstrap rewrites it when missing or stale) ----
 API="${CODEMAN_API_URL:?CODEMAN_API_URL not set; refusing to guess}"
 SELF="${CODEMAN_SESSION_ID:?CODEMAN_SESSION_ID not set}"
 # Credentials, cheapest first. Your session has usually INHERITED the server's
@@ -121,23 +121,53 @@ _composer_up() {   # <sid> <timeoutMs> -> "true"/"false". `shift+tab` is the one
     --data-urlencode 'match=shift+tab' --data-urlencode 'from=buffer' \
     --data-urlencode "timeout=$2" | jq -r '.data.wait.matched // false'
 }
+_dsh_up() {        # <sid> <timeoutMs> -> "true"/"false". The DeepSeek Harness TUI's
+  # composer glyph. Override with DSH_READY_MARK for a profile that draws another one.
+  "${CURL[@]}" -G "$API/api/v1/sessions/$1/wait-output" \
+    --data-urlencode "match=${DSH_READY_MARK:-❯}" --data-urlencode 'from=buffer' \
+    --data-urlencode "timeout=$2" | jq -r '.data.wait.matched // false'
+}
 # spawn_worker <caseName> [mode] -> session id on stdout, diagnostics on stderr.
 # quick-start AND readiness in one call, with a strict contract: NON-EMPTY stdout means
-# a READY claude worker in a hook-carrying case. Anything less is rc 1 with EMPTY
-# stdout, and the half-spawned session is deleted here rather than handed back, because
-# a worker that never drew its composer would eat the task prompt with its trust
-# dialog. There is deliberately no pid poll: wait-output already blocks until the
-# composer draws, and pid!=null proved startup, never readiness.
+# a READY worker whose end-of-turn signal can be trusted -- a claude worker in a
+# hook-carrying case, or a `deepseek` worker whose harness TUI drew its composer.
+# Anything less is rc 1 with EMPTY stdout, and the half-spawned session is deleted here
+# rather than handed back, because a worker that never drew its composer would eat the
+# task prompt with its trust dialog. There is deliberately no pid poll: wait-output
+# already blocks until the composer draws, and pid!=null proved startup, never readiness.
 spawn_worker() {
   local name="${1:?spawn_worker needs a case name}" mode="${2:-claude}" q sid cp r
   # parentSessionId doubles the CURL header, so a spawn_worker copied off the shared
   # curl (or a body someone rebuilt from this recipe) still carries its lineage.
+  # deepseek: ask for the same permission posture the Run button sends, because the
+  # harness's own default (`workspace-write`) still ASKS, and a worker that stops on
+  # an approval row is a worker no fan-out can finish. It is not an escalation --
+  # claude workers already spawn with permissions skipped, and in multi-user mode the
+  # server clamps this back to `workspace-write` for an owner without the grant.
+  # Spawn by hand (§5.1) when you want a worker that asks.
   q=$("${CURL[@]}" -X POST "$API/api/v1/quick-start" -H 'Content-Type: application/json' \
-      -d "$(jq -nc --arg n "$name" --arg m "$mode" --arg p "$SELF" '{caseName:$n,mode:$m,parentSessionId:$p}')")
+      -d "$(jq -nc --arg n "$name" --arg m "$mode" --arg p "$SELF" \
+        '{caseName:$n,mode:$m,parentSessionId:$p}
+         + (if $m == "deepseek" then {deepSeekConfig:{permissionMode:"danger-full-access"}} else {} end)')")
   sid=$(jq -r 'if .success then .data.sessionId else empty end' <<<"$q")
   # NOT retryable in a loop: every quick-start failure code is terminal (§5.1).
   [ -n "$sid" ] || { jq -c '{error,errorCode}' <<<"$q" >&2; return 1; }
-  [ "$mode" = claude ] || { printf '%s\n' "$sid"; return 0; }   # only claude draws a composer
+  if [ "$mode" = deepseek ]; then
+    # The one non-claude mode with REAL end-of-turn signals: its TUI reports
+    # idle/working/blocked to Codeman, so sendwait, until=stop and the Approvals
+    # Inbox all work here exactly as they do for claude. No hook file to vet
+    # (the bridge is env-injected, not a workspace file) and no trust dialog.
+    # ⚠️ Readiness is still not optional, and NOT interchangeable with the stop
+    # signal: the harness's boot report lands ~300ms BEFORE the composer paints
+    # (measured 2.26s vs 2.56s after spawn), so a sendwait fired straight after
+    # quick-start returns on that BOOT signal, reports a turn that never ran, and
+    # strands the prompt in a pane that was not yet taking input.
+    r=$(_dsh_up "$sid" 45000)
+    [ "$r" = true ] || { echo "dsh worker $sid never drew a composer: no pane-capable profile, a profile whose composer is not '${DSH_READY_MARK:-❯}' (set DSH_READY_MARK), or a harness that failed to boot -- check GET /api/v1/deepseek/status. Deleted it" >&2
+      delete_session "$sid" >/dev/null; return 1; }
+    printf '%s\n' "$sid"; return 0
+  fi
+  [ "$mode" = claude ] || { printf '%s\n' "$sid"; return 0; }   # no other mode draws a composer to wait on
   # The server installs hooks into every claude workspace now, so this grep normally
   # passes; it stays because the install is gated on a setting the operator can turn
   # off, remote sessions never get hooks, and a session created by an older server
@@ -166,19 +196,25 @@ spawn_worker() {
     delete_session "$sid" >/dev/null; return 1; }
   printf '%s\n' "$sid"
 }
-# spawn_workers <caseName>... -> one "<caseName> <sessionId>" line per worker, in order;
-# the sessionId column is EMPTY for a spawn that failed (stderr has why). CONCURRENT:
-# N workers cost about what one costs. Spawning them one Bash call at a time is the
-# single biggest avoidable delay in this skill. Names must be UNIQUE: two workers in
-# one case directory co-edit the same tree (§4), so a repeat is an error here, not a race.
+# spawn_workers <caseName[:mode]>... -> one "<caseName> <sessionId>" line per worker, in
+# order; the sessionId column is EMPTY for a spawn that failed (stderr has why).
+# CONCURRENT: N workers cost about what one costs. Spawning them one Bash call at a time
+# is the single biggest avoidable delay in this skill. A bare name is a claude worker;
+# `beta:deepseek` makes that one a DeepSeek Harness worker, and a mixed fleet is one
+# call. Case names must be UNIQUE: two workers in one case directory co-edit the same
+# tree (§4), so a repeat is an error here, not a race (the mode never disambiguates two
+# workers, since they would still share the directory).
 spawn_workers() {
-  local d n i=0
+  local d spec n m i=0
   [ "$#" -gt 0 ] || { echo "spawn_workers: no case names given" >&2; return 1; }
-  [ -z "$(printf '%s\n' "$@" | sort | uniq -d)" ] || { echo "spawn_workers: duplicate case names" >&2; return 1; }
+  [ -z "$(printf '%s\n' "$@" | sed 's/:.*//' | sort | uniq -d)" ] || { echo "spawn_workers: duplicate case names" >&2; return 1; }
   d=$(mktemp -d "${TMPDIR:-/tmp}/codeman-spawn.XXXXXX") || return 1
-  for n in "$@"; do ( spawn_worker "$n" > "$d/$i" ) & i=$((i+1)); done
+  for spec in "$@"; do
+    n=${spec%%:*}; m=${spec#*:}; [ "$m" = "$spec" ] && m=claude
+    ( spawn_worker "$n" "$m" > "$d/$i" ) & i=$((i+1))
+  done
   wait
-  i=0; for n in "$@"; do printf '%s %s\n' "$n" "$(cat "$d/$i" 2>/dev/null)"; i=$((i+1)); done
+  i=0; for spec in "$@"; do printf '%s %s\n' "${spec%%:*}" "$(cat "$d/$i" 2>/dev/null)"; i=$((i+1)); done
   rm -rf "$d"
 }
 # sendwait <sid> <prompt> [seq] -> blocks until that worker's turn ENDS (~10 min ceiling
@@ -194,27 +230,46 @@ spawn_workers() {
 # (observed live). So the first wait is short; on its timeout a bare \r goes out (the
 # missing Enter when the prompt is stranded, a no-op when the turn is genuinely
 # running), then the ORIGINAL frame is resent unchanged, which the server takes as a
-# tagged duplicate: it re-waits without retyping (§5.3). Trustworthy only for a claude
-# worker spawn_worker handed back (hooks vetted); hook-less workspaces and other modes
-# resolve on flapping idle: markers instead (§5.5).
+# tagged duplicate: it re-waits without retyping (§5.3). Trustworthy for a worker
+# spawn_worker handed back -- claude (hooks vetted) or deepseek (status bridge) --
+# and for those only. Hook-less workspaces and the other modes resolve on flapping
+# idle: markers instead (§5.5). ⚠️ A dsh worker running a profile that does not
+# implement the status contract is the one case that LOOKS like claude but is not:
+# it accepts the send and then burns both waits. One timeout on a dsh worker whose
+# pane clearly finished means that profile, so switch that worker to markers.
 sendwait() {
   local sid="${1:?}" p="${2:?}" seq="${3:-$(date +%s)}" body r
+  # `wait:"stop,exit"`, never the `wait:true` default set: that set also carries
+  # `idle`, which is INFERRED from output stabilization and flaps mid-turn. On a
+  # dsh worker whose TUI repaints rarely the session reads `idle` while the model
+  # is still answering, and the re-wait below then resolved in 0 ms with
+  # `signal:"idle"` on a turn that had another three minutes to run (measured).
+  # A wait named after the end of a turn should only end with the turn, or with
+  # the worker. ⚠️ This is also what makes a wrong mode LOUD: the modes that
+  # cannot deliver `stop` answer 400 (before writing anything) instead of
+  # resolving on a flap, which is the answer that sends you to markers (§5.5).
   body=$(jq -nc --arg p "$p" --arg c "$CID-$sid" --argjson s "$seq" \
-    '{input:($p+"\r"),useMux:true,clientId:$c,seq:$s,wait:true,waitTimeout:20000}')
+    '{input:($p+"\r"),useMux:true,clientId:$c,seq:$s,wait:"stop,exit",waitTimeout:20000}')
   r=$("${CURL[@]}" -X POST "$API/api/v1/sessions/$sid/input" \
         -H 'Content-Type: application/json' --data-binary "$body")
   if jq -e '.data.delivered and .data.wait.timedOut' <<<"$r" >/dev/null 2>&1; then
     "${CURL[@]}" -X POST "$API/api/v1/sessions/$sid/input" -H 'Content-Type: application/json' \
       -d "$(jq -nc --arg c "$CID-$sid" --argjson s "$(date +%s)" \
         '{input:"\r",useMux:true,clientId:$c,seq:$s}')" >/dev/null
+    # The resend is a tagged DUPLICATE, so the server skips the write and reports
+    # `delivered:false` for it -- truthfully, but about the wrong send. The first
+    # one delivered, so carry that forward, or §1's cleanup reads a completed turn
+    # as an undelivered one and keeps a finished worker forever.
     r=$("${CURL[@]}" -X POST "$API/api/v1/sessions/$sid/input" \
-          -H 'Content-Type: application/json' --data-binary "$(jq -c '.waitTimeout=580000' <<<"$body")")
+          -H 'Content-Type: application/json' --data-binary "$(jq -c '.waitTimeout=580000' <<<"$body")" \
+        | jq -c 'if .success and (.data.wait.ended | not) then .data.delivered = true else . end')
   fi
   printf '%s\n' "$r"
 }
-# last_text <sid> [prev] -> that worker's last assistant message. Polled, because the
-# transcript write LAGS the stop signal, and "some text exists" is not "THIS turn's
-# text exists": right after a SECOND turn on the same worker the endpoint still serves
+# last_text <sid> [prev] -> that worker's last assistant message (claude, codex and
+# deepseek write a real transcript; the other modes have none, so read the terminal
+# instead -- §5.4). Polled, because the transcript write LAGS the stop signal, and
+# "some text exists" is not "THIS turn's text exists": right after a SECOND turn on the same worker the endpoint still serves
 # the previous answer for a beat (observed live). When reading consecutive turns, pass
 # the previous answer as [prev]: the poll then holds out for text that differs from it,
 # falling back to whatever it last saw if the budget runs dry, so an honestly repeated
@@ -233,10 +288,10 @@ last_text() {
 # The stamp is the LAST line on purpose (a truncated write leaves it unset) and is kept
 # bare on purpose: the write condition above anchors on it with $, so an inline comment
 # here would fail that match and rewrite this file on every single bootstrap.
-CODEMAN_PREAMBLE=1.19.0
+CODEMAN_PREAMBLE=1.20.0
 PREAMBLE
 )
-. "$PRE"; [ "${CODEMAN_PREAMBLE:-}" = 1.19.0 ] || { echo "preamble at $PRE is stale or truncated: rm it and re-run this block"; exit 1; }
+. "$PRE"; [ "${CODEMAN_PREAMBLE:-}" = 1.20.0 ] || { echo "preamble at $PRE is stale or truncated: rm it and re-run this block"; exit 1; }
 ```
 
 Every later Bash call that touches the API starts with the same two loader lines from
@@ -287,8 +342,9 @@ and no per-call body to hand-build.
 
 ```bash
 . "${XDG_CACHE_HOME:-$HOME/.cache}/codeman-agent-$CODEMAN_SESSION_ID.sh" 2>/dev/null   # §0 loader
-[ "${CODEMAN_PREAMBLE:-}" = 1.19.0 ] || { echo "preamble missing or stale; run the full §0 block"; exit 1; }
+[ "${CODEMAN_PREAMBLE:-}" = 1.20.0 ] || { echo "preamble missing or stale; run the full §0 block"; exit 1; }
 N=(alpha beta)                    # INVENT one fresh case name per worker; never list cases first
+                                  # (a name may carry a mode: `beta:deepseek`, see below)
 T=('reply with one line: the absolute path of your working directory'
    'reply with one line: your model name')            # tasks, same order as N
 
@@ -353,6 +409,37 @@ Four things this block leans on, each one link away, no detour needed to run it:
 - Each `sendwait` costs that worker one billed turn, as does every prompt you send it.
 - Deleting the sessions does **not** remove the case directories: §5.14.
 
+### DeepSeek Harness workers
+
+The block above spawns claude workers. Any entry in `N` may instead name a mode
+(`beta:deepseek`), and **a `deepseek` worker is driven by the same four verbs, with no
+change to the rest of the block**: `spawn_workers` waits for its composer, `sendwait`
+blocks on its real end-of-turn signal, `last_text` reads its answer, `delete_session`
+removes it.
+
+That is true of no other non-claude mode, and it is worth knowing why: the DeepSeek
+Harness TUI reports `idle`/`working`/`blocked` to Codeman over the supervisor contract it
+implements, so dsh is the one external CLI with definitive `stop`/`blocked` signals
+instead of guessed-from-silence ones — and it writes a structured transcript, which is
+what `last-response` reads for it. `shell`, `opencode`, `codex`, `gemini`, `antigravity`,
+`pi` and `grok` have neither and still need markers ([§5.5](reference/verbs.md#55-markers-for-hook-less-workers)).
+
+Three things to know before you spawn one:
+
+- **It needs a pane-capable profile.** `dsh` ships only `web`/`headless`, so the terminal
+  agent is always an installed profile. `GET /api/v1/deepseek/status` answers both
+  questions separately (`available` = the binary, `runnable` = a profile that can drive a
+  pane); a spawn without one fails with `OPERATION_FAILED` rather than falling back.
+- **Do not task it on the strength of a `stop` alone.** The harness reports `idle` at
+  boot ~300 ms *before* its composer paints (measured 2.26 s vs 2.56 s), so a `sendwait`
+  fired straight after `quick-start` resolves on that boot signal, reports a turn that
+  never ran, and leaves the prompt in a pane that was not yet taking input. Letting
+  `spawn_worker` gate on readiness is what steps past that edge; it is not optional.
+- **A profile that does not implement the contract looks like a hang.** Codeman cannot
+  know at spawn time whether one does. The tell is a `sendwait` that times out on a
+  worker whose pane clearly finished: that profile is one of them, so drive it with
+  markers instead.
+
 ## 2. What do you want to do?
 
 One row per job. Acting on this table alone is correct; the §5 links are the detail.
@@ -360,10 +447,10 @@ One row per job. Acting on this table alone is correct; the §5 links are the de
 | I want to | Call | Detail |
 |-----------|------|--------|
 | start a worker **where the work is** | `POST /api/v1/quick-start {"caseName":…}`, which **creates** `~/codeman-cases/<name>` unless the name is already a case. Any other path (a git worktree): `POST /api/v1/sessions {"workingDir":…}` then `POST /api/v1/sessions/:id/interactive`. Both install hooks by default, so expect full signals in either, and **verify** rather than assume. N workers means N worktrees | [§5.1](reference/verbs.md#51-where-to-spawn) |
-| know a new worker can accept a prompt | `GET .../wait-output?match=shift+tab&from=buffer` (urlencode the `+`) | [§5.2](reference/verbs.md#52-readiness) |
-| deliver a task **and** know when it finished | `POST .../input` with `"input":"…\r"`, `clientId`, `seq`, `"wait":true`. Resolves on `stop`, so it is trustworthy only where the workspace **has hooks** (claude mode; installed by default, but the operator can disable it and remote sessions never get them). Costs the worker one billed turn | [§5.3](reference/verbs.md#53-send-a-task-and-wait) |
+| know a new worker can accept a prompt | `GET .../wait-output?match=shift+tab&from=buffer` (urlencode the `+`); a `deepseek` worker draws `❯` instead, and its boot `stop` fires ~300 ms BEFORE that, so never read the signal as readiness | [§5.2](reference/verbs.md#52-readiness) |
+| deliver a task **and** know when it finished | `POST .../input` with `"input":"…\r"`, `clientId`, `seq`, `"wait":true`. Resolves on `stop`, so it is trustworthy where the signal is real: claude mode with hooks (installed by default, but the operator can disable it and remote sessions never get them) and `deepseek` mode through its status bridge. Costs the worker one billed turn | [§5.3](reference/verbs.md#53-send-a-task-and-wait) |
 | know a hook-less worker finished | it has no `stop`, and `wait:true` there resolves on flapping `idle` **without erroring**: make it print a split, unique marker and `wait-output` on that instead | [§5.5](reference/verbs.md#55-markers-for-hook-less-workers) |
-| read the answer | `GET .../last-response`, **polled** (claude/codex only; empty for the other modes) | [§5.4](reference/verbs.md#54-read-the-answer) |
+| read the answer | `GET .../last-response`, **polled** (claude, codex and deepseek write a transcript; empty for the other modes) | [§5.4](reference/verbs.md#54-read-the-answer) |
 | know if it is alive | `GET .../wait?until=exit&timeout=1000`: an immediate `signal:"exit"` means dead. `status` and `pid` both lie | [§5.6](reference/verbs.md#56-alive-and-stuck) |
 | know if it is stuck | `GET .../active-tools` and `GET .../run-summary` are structured and free; two `terminal?tail=` samples are the crude fallback | [§5.6](reference/verbs.md#56-alive-and-stuck) |
 | make a runaway worker stop | `POST .../input {"input":"\u001b"}` (ESC, **no** `\r`). Deleting the session would destroy the conversation instead | [§5.7](reference/verbs.md#57-interrupt-without-destroying) |
@@ -464,7 +551,7 @@ these**; open the one row you actually hit.
 | [5.1 Where to spawn](reference/verbs.md#51-where-to-spawn) | the work is **not** a fresh scratch case: a linked case, a git worktree, any path that already existed. Hooks are absent there, which silently breaks send-and-wait. The costliest mistake in this skill |
 | [5.2 Readiness](reference/verbs.md#52-readiness) | a worker never drew its composer, or you need the trust-dialog ladder by hand |
 | [5.3 Send a task and wait](reference/verbs.md#53-send-a-task-and-wait) | the `sendwait` body, its signals, and the duplicate-resend loop |
-| [5.4 Read the answer](reference/verbs.md#54-read-the-answer) | `last_text` came back empty, or the mode is not claude/codex |
+| [5.4 Read the answer](reference/verbs.md#54-read-the-answer) | `last_text` came back empty, or the mode is not claude/codex/deepseek |
 | [5.5 Markers for hook-less workers](reference/verbs.md#55-markers-for-hook-less-workers) | the worker has no `stop` hook: synchronize on a split, unique printed marker |
 | [5.6 Alive and stuck](reference/verbs.md#56-alive-and-stuck) | is it dead or just slow? `status` and `pid` both lie |
 | [5.7 Interrupt without destroying](reference/verbs.md#57-interrupt-without-destroying) | a runaway worker you want to stop but keep |
