@@ -91,11 +91,18 @@ describe('agent skill run-mode lists', () => {
   it('documents the CLI availability probe for every agent mode', () => {
     // The gap this closes: /api/pi/status shipped undocumented and only a human reading
     // the doc noticed, because the sibling scanner (agent-skill-endpoints-doc.test.ts)
-    // only checks documented -> registered. Derived from the schema, so a seventh
+    // only checks documented -> registered. Derived from the schema, so a new enabled
     // backend fails here until its probe is documented; the sibling test still proves
     // the reverse, that nothing documented here is a 404.
+    //
+    // Matches BOTH shapes: the six legacy per-mode aliases (`/api/<mode>/status`) and the
+    // generic route every mode added since (`/api/cli/<mode>/status`, e.g. grok has no
+    // legacy alias and is documented only via the generic form) — a CLI's own doc line
+    // gets to pick whichever it actually points at.
     const doc = readFileSync(join(SKILL_DIR, 'reference/endpoints.md'), 'utf-8');
-    const documented = new Set([...doc.matchAll(/\bGET\s+\/api(?:\/v1)?\/([a-z-]+)\/status\b/g)].map((m) => m[1]));
+    const documented = new Set(
+      [...doc.matchAll(/\bGET\s+\/api(?:\/v1)?\/(?:cli\/)?([a-z-]+)\/status\b/g)].map((m) => m[1])
+    );
     const probeable = MODES.filter((m) => m !== 'shell'); // shell has no CLI to probe
     expect([...probeable].filter((m) => !documented.has(m))).toEqual([]);
   });

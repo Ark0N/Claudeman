@@ -58,6 +58,24 @@ RUN npm install -g --ignore-scripts ${CLI_PI_NPM_PACKAGE} \
  && npm cache clean --force \
  && pi --version
 
+# Grok Build (`grok`, xAI) has no npmPackage in the registry — it is NOT on npm, a
+# standalone ~160MB Rust binary through xAI's own installer, which targets
+# $HOME/.grok/bin with no --dir override. At build time that is root's home and
+# unreachable by the `agent` user, so copy the binary into /usr/local/bin and drop
+# root's ~/.grok in the same layer so the image does not carry the download twice.
+# The staging cp -T is what makes this survive the installer's own behavior EITHER
+# way: newer installers already symlink /usr/local/bin/grok -> /root/.grok/bin/grok,
+# and a direct `cp -L` onto that symlink fails with "same file", while removing the
+# link first and copying fresh works for both old and new installers.
+ARG CLI_GROK_INSTALL_URL="https://x.ai/cli/install.sh"
+RUN curl -fsSL "${CLI_GROK_INSTALL_URL}" | bash \
+ && cp -L /root/.grok/bin/grok /usr/local/bin/grok.real \
+ && rm -f /usr/local/bin/grok \
+ && mv /usr/local/bin/grok.real /usr/local/bin/grok \
+ && chmod 755 /usr/local/bin/grok \
+ && rm -rf /root/.grok /root/.local/bin/grok /root/.local/bin/agent \
+ && grok --version
+
 # `agent` user (gid 0) with an arbitrary-uid-writable HOME. The uid is
 # auto-assigned (node:22-slim already occupies uid 1000 with its `node` user); at
 # runtime Codeman overrides with `--user <hostUid>:0` on Linux, so the baked uid
@@ -75,11 +93,12 @@ ENV HOME=/home/agent
 # transcript/rollout dirs (`.claude/projects`, `.codex/sessions`) are bind-mounted from
 # the host. (gemini/gcloud/opencode are whole seed-copies and need no pre-created dir;
 # Antigravity nests its state inside `.gemini/antigravity-cli`, so it rides that seed.)
-# `.pi/agent` IS pre-created: pi is seeded per-FILE (auth/settings/trust/models), and a
+# `.pi/agent` and `.grok` ARE pre-created: both are seeded per-FILE (pi:
+# auth/settings/trust/models; grok: auth.json/config.toml/pager.toml), and a
 # per-file seed copy, unlike a whole-dir one, does not create its parent directory.
 RUN useradd -g 0 -m -d /home/agent -s /bin/bash agent \
  && mkdir -p /home/agent/.npm /home/agent/.cache /home/agent/.config /home/agent/.codeman \
-      /home/agent/.claude/projects /home/agent/.codex/sessions /home/agent/.pi/agent \
+      /home/agent/.claude/projects /home/agent/.codex/sessions /home/agent/.pi/agent /home/agent/.grok \
  && chgrp -R 0 /home/agent \
  && chmod -R g=u /home/agent
 

@@ -903,7 +903,7 @@ describe('system-routes', () => {
       const body = JSON.parse(res.body);
       expect(body.success).toBe(true);
       const ids = body.data.map((c: { id: string }) => c.id).sort();
-      expect(ids).toEqual(['antigravity', 'claude', 'codex', 'copilot', 'gemini', 'opencode', 'pi', 'shell']);
+      expect(ids).toEqual(['antigravity', 'claude', 'codex', 'copilot', 'gemini', 'grok', 'opencode', 'pi', 'shell']);
 
       const claude = body.data.find((c: { id: string }) => c.id === 'claude');
       expect(claude.available).toBe(true);

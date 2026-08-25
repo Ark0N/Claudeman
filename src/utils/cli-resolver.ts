@@ -1,9 +1,10 @@
 /**
  * @fileoverview Generic CLI binary resolution, shared by every per-CLI resolver
  * (`claude-cli-resolver.ts`, `opencode-cli-resolver.ts`, `codex-cli-resolver.ts`,
- * `gemini-cli-resolver.ts`, `antigravity-cli-resolver.ts`, `pi-cli-resolver.ts`).
+ * `gemini-cli-resolver.ts`, `antigravity-cli-resolver.ts`, `pi-cli-resolver.ts`,
+ * `grok-cli-resolver.ts`).
  *
- * Those six files used to each hand-roll the same `which` + search-dir walk with a
+ * Those files used to each hand-roll the same `which` + search-dir walk with a
  * module-level cache. They now call into this module and re-export the result under their
  * historical names, so every existing caller (`findClaudeDir()`, `resolvePiDir()`, …) and
  * every `vi.mock('.../opencode-cli-resolver.js')` in the test suite keeps working unchanged
@@ -13,22 +14,121 @@
  * registry's stock catalog, so this is also where the resolvers stop duplicating data that
  * `src/config/cli-registry/stock.ts` already declares.
  *
+ * **Resolution chain** (ported from upstream Ark0N/Codeman's independently-built
+ * `cli-executable-resolver.ts`, PR #329 + follow-up `61251c0b`, into this registry-driven
+ * module rather than duplicated per-CLI): PATH (`which`) → declared search dirs → an
+ * interactive LOGIN SHELL as the last resort, since that is what finds nvm/Homebrew/
+ * user-npm installs when Codeman runs as a systemd/launchd service with a minimal PATH
+ * (launchd hands a job `/usr/bin:/bin:/usr/sbin:/sbin`). The login-shell step is the only
+ * one that spawns anything beyond a `which`, so it stays last.
+ *
+ * A MISS across the whole chain is negative-cached with a doubling backoff (reusing
+ * `resolveRetryingVersion`/`retryingVersionProbeDelayMs` below — the exact mechanism
+ * `getClaudeCliVersion` already used for its own version probe, generalized here to the
+ * directory-resolution miss path too) rather than either caching it forever (the original
+ * bug: a missing CLI re-ran the whole chain, including the synchronous login-shell spawn,
+ * on every request, forever) or never caching it at all.
+ *
+ * Every exec call that carries a `timeout` also carries `killSignal: 'SIGKILL'`:
+ * `execFileSync`'s `timeout` option only SENDS the signal and then keeps waiting for the
+ * child to exit — the default SIGTERM is ignored by an interactive bash stuck in a blocking
+ * `.bash_profile`, which would otherwise survive the timeout and block the server forever.
+ *
+ * Hermeticity: under `VITEST`, no exec call in this module ever runs for real — the suites
+ * must never depend on, or execute, whatever happens to be installed on the machine running
+ * them (same rule as `IS_TEST_MODE` in tmux-manager.ts).
+ *
  * @module utils/cli-resolver
  */
 
 import { execFileSync, execSync } from 'node:child_process';
 import { existsSync } from 'node:fs';
-import { delimiter, dirname, join } from 'node:path';
+import { basename, delimiter, dirname, join } from 'node:path';
 import { homedir } from 'node:os';
 import { EXEC_TIMEOUT_MS } from '../config/exec-timeout.js';
 import { compileVersionRegex } from '../config/cli-registry/patterns.js';
 import type { CliVersionProbe } from '../config/cli-registry/types.js';
 import { getCli } from '../config/cli-registry/registry.js';
+import { loginShellArgs, resolveLocalShell } from './shell-resolver.js';
 
 /** Expand a leading `~` to the current homedir. Search dirs carry no other expansion. */
 function expandHome(dir: string): string {
   return dir.startsWith('~') ? join(homedir(), dir.slice(1).replace(/^[/\\]/, '')) : dir;
 }
+
+// ---------------------------------------------------------------------------
+// Login-shell fallback — the last-resort step in the resolution chain.
+// ---------------------------------------------------------------------------
+
+const LOGIN_SHELL_BEGIN_MARKER = '__CODEMAN_CLI_RESOLVE_BEGIN__';
+const LOGIN_SHELL_END_MARKER = '__CODEMAN_CLI_RESOLVE_END__';
+
+function loginShellProbeCommand(binary: string): string {
+  return [
+    `printf '%s\\n' '${LOGIN_SHELL_BEGIN_MARKER}'`,
+    `command -v -- ${binary}`,
+    `printf '%s\\n' '${LOGIN_SHELL_END_MARKER}'`,
+  ].join('; ');
+}
+
+/** Only lines BETWEEN the markers, absolute, and matching `binary`'s basename are trusted
+ *  — a login shell's `.bash_profile`/`.zshrc` can print arbitrary noise ahead of the result. */
+function parseLoginShellResult(output: string, binary: string): string | null {
+  const lines = output.split(/\r?\n/).map((line) => line.trim());
+  const begin = lines.indexOf(LOGIN_SHELL_BEGIN_MARKER);
+  if (begin === -1) return null;
+  const end = lines.indexOf(LOGIN_SHELL_END_MARKER, begin + 1);
+  if (end === -1) return null;
+  for (const candidate of lines.slice(begin + 1, end)) {
+    if (candidate.startsWith('/') && basename(candidate) === binary) return candidate;
+  }
+  return null;
+}
+
+/**
+ * Spawn the user's login shell to resolve `binary` via `command -v`. Returns `null` under
+ * VITEST (never spawns for real in tests) or on any failure — this is a best-effort last
+ * resort, not a required step.
+ */
+function findInLoginShell(binary: string): string | null {
+  if (process.env.VITEST) return null;
+  const shellPath = resolveLocalShell();
+  const shellArgs = loginShellArgs(shellPath).trim().split(/\s+/).filter(Boolean);
+  try {
+    const out = execFileSync(shellPath, [...shellArgs, '-c', loginShellProbeCommand(binary)], {
+      encoding: 'utf-8',
+      timeout: EXEC_TIMEOUT_MS,
+      stdio: ['ignore', 'pipe', 'ignore'],
+      killSignal: 'SIGKILL',
+    });
+    const candidate = parseLoginShellResult(out, binary);
+    return candidate && existsSync(candidate) ? candidate : null;
+  } catch {
+    return null;
+  }
+}
+
+/** `which <bin>`, VITEST-gated (never spawns for real in tests, matching every other probe
+ *  in this module — this call previously had NO such guard, a real hermeticity gap). */
+function findOnProcessPath(bin: string): string | null {
+  if (process.env.VITEST) return null;
+  try {
+    const result = execSync(`which ${bin}`, {
+      encoding: 'utf-8',
+      timeout: EXEC_TIMEOUT_MS,
+      killSignal: 'SIGKILL',
+    }).trim();
+    return result && existsSync(result) ? result : null;
+  } catch {
+    return null;
+  }
+}
+
+// ---------------------------------------------------------------------------
+// Negative-result caching with backoff — shared by both resolver flavors below via
+// `resolveRetryingVersion`, the SAME mechanism claude's own version probe already used
+// (see that section further down), rather than a second, duplicated backoff curve.
+// ---------------------------------------------------------------------------
 
 /**
  * A resolver instance for one CLI. Each call to `createDirResolver()` returns its own
@@ -41,39 +141,32 @@ export interface DirResolver {
 }
 
 /**
- * The plain "which, then search dirs" resolver — covers opencode, codex, gemini and
- * antigravity today, and any future CLI with no version-sanity requirement.
+ * The plain "which, then search dirs, then a login shell" resolver — covers opencode,
+ * codex, gemini, antigravity, grok and any future CLI with no version-sanity requirement.
  */
 export function createDirResolver(binaries: string[], searchDirs: string[]): DirResolver {
-  let cached: string | null = null; // '' = searched, not found
   const dirs = searchDirs.map(expandHome);
+  const state: RetryingVersionProbeState = { failures: 0, lastFailureAt: 0 };
 
-  function resolveDir(): string | null {
-    if (cached !== null) return cached || null;
-
+  function probeChain(): string | null {
     for (const bin of binaries) {
-      try {
-        const result = execSync(`which ${bin}`, { encoding: 'utf-8', timeout: EXEC_TIMEOUT_MS }).trim();
-        if (result && existsSync(result)) {
-          cached = dirname(result);
-          return cached;
-        }
-      } catch {
-        // not on PATH via `which`; fall through to the search dirs
-      }
+      const found = findOnProcessPath(bin);
+      if (found) return dirname(found);
     }
-
     for (const dir of dirs) {
       for (const bin of binaries) {
-        if (existsSync(join(dir, bin))) {
-          cached = dir;
-          return cached;
-        }
+        if (existsSync(join(dir, bin))) return dir;
       }
     }
-
-    cached = '';
+    for (const bin of binaries) {
+      const found = findInLoginShell(bin);
+      if (found) return dirname(found);
+    }
     return null;
+  }
+
+  function resolveDir(): string | null {
+    return resolveRetryingVersion(state, Date.now(), probeChain);
   }
 
   return { resolveDir, isAvailable: () => resolveDir() !== null };
@@ -81,8 +174,8 @@ export function createDirResolver(binaries: string[], searchDirs: string[]): Dir
 
 /**
  * A resolver whose EVERY candidate must pass a version-sanity probe before being accepted
- * — pi's behaviour, generalized. For a CLI with a short, generic binary name, a `which` hit
- * is not by itself evidence the right program is installed.
+ * — pi's/grok's behaviour, generalized. For a CLI with a short, generic binary name, a
+ * `which` hit is not by itself evidence the right program is installed.
  *
  * Under `VITEST` the probe never runs (existence alone decides), matching every resolver's
  * hermetic-test behaviour: the suites must not depend on what happens to be on the dev box.
@@ -97,10 +190,10 @@ export function createVersionGatedResolver(
   probe: CliVersionProbe,
   logPrefix: string
 ): VersionGatedResolver {
-  let cachedDir: string | null = null; // '' = searched, not found
-  let cachedVersion: string | null = null;
   const dirs = searchDirs.map(expandHome);
   const regex = probe.regex ? compileVersionRegex(probe.regex) : null;
+  const state: RetryingVersionProbeState = { failures: 0, lastFailureAt: 0 };
+  let cachedVersion: string | null = null;
 
   function probeOne(binPath: string): string | null {
     if (process.env.VITEST) return null;
@@ -109,6 +202,7 @@ export function createVersionGatedResolver(
         encoding: 'utf-8',
         timeout: EXEC_TIMEOUT_MS,
         stdio: ['ignore', 'pipe', 'ignore'],
+        killSignal: 'SIGKILL',
       }).trim();
       const candidate = regex ? regex.exec(out)?.[1] : out || null;
       if (candidate) return candidate;
@@ -121,32 +215,23 @@ export function createVersionGatedResolver(
 
   function accept(binPath: string): string | null {
     if (process.env.VITEST) {
-      cachedDir = dirname(binPath);
       cachedVersion = '';
-      return cachedDir;
+      return dirname(binPath);
     }
     const version = probeOne(binPath);
     if (!version) return null;
-    cachedDir = dirname(binPath);
     cachedVersion = version;
-    return cachedDir;
+    return dirname(binPath);
   }
 
-  function resolveDir(): string | null {
-    if (cachedDir !== null) return cachedDir || null;
-
+  function probeChain(): string | null {
     for (const bin of binaries) {
-      try {
-        const result = execSync(`which ${bin}`, { encoding: 'utf-8', timeout: EXEC_TIMEOUT_MS }).trim();
-        if (result && existsSync(result)) {
-          const dir = accept(result);
-          if (dir) return dir;
-        }
-      } catch {
-        // not on PATH via `which`
+      const found = findOnProcessPath(bin);
+      if (found) {
+        const dir = accept(found);
+        if (dir) return dir;
       }
     }
-
     for (const dir of dirs) {
       for (const bin of binaries) {
         const binPath = join(dir, bin);
@@ -155,10 +240,18 @@ export function createVersionGatedResolver(
         if (accepted) return accepted;
       }
     }
-
-    cachedDir = '';
-    cachedVersion = '';
+    for (const bin of binaries) {
+      const found = findInLoginShell(bin);
+      if (found) {
+        const dir = accept(found);
+        if (dir) return dir;
+      }
+    }
     return null;
+  }
+
+  function resolveDir(): string | null {
+    return resolveRetryingVersion(state, Date.now(), probeChain);
   }
 
   return {
@@ -174,13 +267,19 @@ export function createVersionGatedResolver(
 // ---------------------------------------------------------------------------
 // Claude's retry/backoff version probe. Pure apart from the `state` it mutates
 // and the injected `probe`, so it stays directly unit-testable exactly as
-// `test/claude-cli-version-cache.test.ts` already exercises it.
+// `test/claude-cli-version-cache.test.ts` already exercises it. Also now the
+// shared backoff mechanism for `createDirResolver`/`createVersionGatedResolver`'s
+// own directory-miss caching above.
 // ---------------------------------------------------------------------------
 
 /**
- * Cache state for a `--version` probe with retry/backoff. `version` is only ever set from a
+ * Cache state for a probe with retry/backoff. `version` is only ever set from a
  * SUCCESSFUL probe and then kept for the process lifetime (the binary can't change under a
  * running server without a restart). Failures are tracked separately so they expire.
+ *
+ * Named for its original use (claude's `--version` probe) but the field holds any
+ * successfully-resolved string — a version number OR a resolved directory path, per
+ * `createDirResolver`/`createVersionGatedResolver` above.
  */
 export interface RetryingVersionProbeState {
   /** Successful probe result; `undefined` until one succeeds. */
@@ -206,10 +305,10 @@ export function retryingVersionProbeDelayMs(failures: number): number {
 }
 
 /**
- * Cache policy for a retry/backoff version probe. Success is cached forever, failure is not
- * — see claude-cli-resolver.ts's original doc comment (preserved there) for the shipped bug
- * this asymmetry fixes: caching a transient failure forever silently disabled every feature
- * gated on the version for the rest of the process lifetime.
+ * Cache policy for a retry/backoff probe. Success is cached forever, failure is not — see
+ * claude-cli-resolver.ts's original doc comment (preserved there) for the shipped bug this
+ * asymmetry fixes: caching a transient failure forever silently disabled every feature
+ * gated on the result for the rest of the process lifetime.
  */
 export function resolveRetryingVersion(
   state: RetryingVersionProbeState,
@@ -258,6 +357,7 @@ export function createRetryingVersionGetter(opts: {
     const out = execFileSync(bin, [opts.versionArg], {
       encoding: 'utf-8',
       timeout: EXEC_TIMEOUT_MS,
+      killSignal: 'SIGKILL',
       env: { ...process.env, PATH: opts.getAugmentedPath ? opts.getAugmentedPath() : process.env.PATH },
     });
     const match = regex ? regex.exec(out) : null;
@@ -281,31 +381,70 @@ export function augmentPath(dir: string | null, currentPath: string): string {
   return currentPath;
 }
 
+// ---------------------------------------------------------------------------
+// Not-found diagnostics — bounded, sanitized PATH/login-shell/search-dir info appended to
+// a "CLI not found" message, ported from upstream's `formatCliNotFoundMessage`.
+// ---------------------------------------------------------------------------
+
+/** Maximum rendered length of each bounded diagnostic field, excluding its label. A
+ *  not-found message must never become a vector for dumping arbitrary env data. */
+const DIAGNOSTIC_FIELD_MAX_LENGTH = 1024;
+
+function sanitizeDiagnosticField(value: string, emptyMarker: string): string {
+  const flattened = Array.from(value, (character) => {
+    const codePoint = character.codePointAt(0) ?? 0;
+    const isControl = codePoint <= 0x1f || (codePoint >= 0x7f && codePoint <= 0x9f);
+    return isControl || codePoint === 0x2028 || codePoint === 0x2029 ? ' ' : character;
+  })
+    .join('')
+    .replace(/ +/g, ' ')
+    .trim();
+  if (!flattened) return emptyMarker;
+  if (flattened.length <= DIAGNOSTIC_FIELD_MAX_LENGTH) return flattened;
+  return `${flattened.slice(0, DIAGNOSTIC_FIELD_MAX_LENGTH - 1)}…`;
+}
+
+/**
+ * Append bounded PATH/login-shell/search-dir diagnostics to a base "CLI not found" message,
+ * so the error names exactly where resolution looked instead of just what it was looking
+ * for. Called from `missingCliMessage()` (registry.ts), so every caller (tmux-manager's
+ * spawn throw, session-routes' availability gate) gets it for free.
+ */
+export function formatCliNotFoundMessage(base: string, id: string): string {
+  const entry = getCli(id);
+  const searchDirs = (entry?.discovery.searchDirs ?? []).map(expandHome);
+  const shellPath = resolveLocalShell();
+  const shellArgs = loginShellArgs(shellPath).trim().split(/\s+/).filter(Boolean);
+  const processPath = sanitizeDiagnosticField(process.env.PATH ?? '', '(empty)');
+  const shell = sanitizeDiagnosticField([shellPath, ...shellArgs].filter(Boolean).join(' '), '(none)');
+  const dirs = sanitizeDiagnosticField(searchDirs.join(', '), '(none)');
+  return `${base}\nServer PATH: ${processPath}\nLogin shell: ${shell}\nChecked directories: ${dirs}`;
+}
+
 /**
  * Generic, memoized-by-id directory resolution for ANY registered CLI. Chooses
  * `createVersionGatedResolver` when the entry's discovery declares
- * `requireVersionMatch` (pi's shape) and `createDirResolver` otherwise (every other
+ * `requireVersionMatch` (pi's/grok's shape) and `createDirResolver` otherwise (every other
  * entry today) — so callers that need only a binary DIRECTORY (not a live version,
  * which the six per-CLI resolver modules still own) can look one up for ANY id
- * without a per-mode branch, including a custom CLI that isn't one of the six
- * hand-named modules at all.
+ * without a per-mode branch, including a custom CLI that isn't one of the named
+ * modules at all.
  *
  * Each id gets its own resolver instance the first time it is requested, cached for
- * the process lifetime exactly like the six per-CLI modules already cache themselves
+ * the process lifetime exactly like the per-CLI modules already cache themselves
  * — this does not create a second competing cache for claude/opencode/codex/gemini
- * /antigravity/pi, since callers that already import those modules' own functions
+ * /antigravity/pi/grok, since callers that already import those modules' own functions
  * keep using them; this is for generic code that only has a `CliId` string in hand.
  */
 const _dirResolvers = new Map<string, DirResolver>();
 
 /**
  * Drop the memoized resolver for `id`, so the next `resolveCliBinDir`/`resolveCliVersion`
- * call re-probes PATH and the search dirs from scratch instead of replaying a cached `null`.
- * Each resolver caches its OWN result forever once resolved once (`createDirResolver`'s
- * closured `cached` var) — deliberately, since a CLI's install location does not normally
- * change mid-process. The one case that DOES change it: `cli-installer.ts` just installed
- * the binary, so a `false` cached at server boot would otherwise never self-correct without
- * a restart.
+ * call re-probes PATH/searchDirs/login-shell from scratch instead of replaying a cached
+ * negative result. `createDirResolver`/`createVersionGatedResolver` already retry a miss on
+ * their own doubling backoff (see this file's header), but `cli-installer.ts` calls this
+ * right after a successful install so the FIRST post-install check is not stuck waiting out
+ * whatever backoff window was already in progress.
  */
 export function invalidateCliBinDirCache(id: string): void {
   _dirResolvers.delete(id);
@@ -332,10 +471,10 @@ export function resolveCliBinDir(id: string): string | null {
 /**
  * Generic version accessor for the SAME memoized resolver `resolveCliBinDir` builds. Only
  * returns a value for an entry whose resolver is version-aware (today: `requireVersionMatch`
- * entries like pi) — claude's separate retry/backoff version getter stays on its own module
- * (`getClaudeCliVersion`), since that behaviour is declared via `retryOnTransientFailure`,
- * not `requireVersionMatch`, and is not (yet) built generically here. Returns null rather
- * than probing blind for an entry with no version-aware resolver.
+ * entries like pi/grok) — claude's separate retry/backoff version getter stays on its own
+ * module (`getClaudeCliVersion`), since that behaviour is declared via
+ * `retryOnTransientFailure`, not `requireVersionMatch`, and is not (yet) built generically
+ * here. Returns null rather than probing blind for an entry with no version-aware resolver.
  */
 function isVersionGated(resolver: DirResolver): resolver is VersionGatedResolver {
   return 'getVersion' in resolver;

@@ -697,5 +697,103 @@ const COPILOT: CliEntry = {
   },
 };
 
+// Grok Build (xAI, `grok`). Ported from upstream Ark0N/Codeman's hardcoded 7th-mode
+// addition (commit 3f8c8e99 + follow-ups 57f326ab, 9cfd8e89) into registry data — a real,
+// established mode (enabled by default), not an experimental opt-in like Copilot.
+const GROK: CliEntry = {
+  id: 'grok' as CliEntry['id'],
+  label: 'Grok',
+  shortBadge: 'GK',
+  // Upstream hand-authored a charcoal GRADIENT across 4+ CSS spots (welcome button, tab
+  // badge, run-mode dot, mobile skin overrides) rather than one flat colour; our registry's
+  // `accent` is a single hex, so this is the closest single value (the run-mode-dot colour,
+  // zinc-400) — every OTHER surface just gets this via the inline-accent fallback the same
+  // way Copilot does, since there is no bespoke `.welcome-btn-grok`/`.run-mode-dot.grok`
+  // CSS class in this fork.
+  accent: '#a1a1aa',
+  enabled: true,
+  stock: true,
+  order: 70,
+  kind: 'agent',
+  discovery: {
+    binaries: ['grok'],
+    searchDirs: ['~/.grok/bin', HOME_DIRS.local, HOME_DIRS.usrLocal, HOME_DIRS.homeBin],
+    // `grok` has a known npm squatter (@vibe-kit/grok-cli also installs a `grok` bin), so a
+    // bare `which grok` hit is not evidence of the right program — same defence as pi,
+    // byte-identical regex.
+    version: { arg: '--version', regex: '(?:^|\\s)(\\d+\\.\\d+\\.\\d+)', requireVersionMatch: true },
+    install: {
+      command: {
+        linux: 'curl -fsSL https://x.ai/cli/install.sh | bash',
+        darwin: 'curl -fsSL https://x.ai/cli/install.sh | bash',
+      },
+      // Not on npm — xAI ships a standalone installer/binary, same shape as Antigravity.
+      docsUrl: 'https://github.com/xai-org/grok-build',
+    },
+  },
+  launch: {
+    params: {
+      alwaysApprove: { type: 'bool' },
+      model: { type: 'token', pattern: 'model' },
+      resumeId: { type: 'token', pattern: 'id-dotted' },
+      continueSession: { type: 'bool' },
+    },
+    variants: [
+      {
+        id: 'default',
+        args: [
+          { lit: 'grok' },
+          { flag: '--always-approve', when: { param: 'alwaysApprove', is: true } },
+          { flag: '--model', valueFrom: 'model', when: { param: 'model', state: 'set' } },
+          { flag: '--resume', valueFrom: 'resumeId', when: { param: 'resumeId', state: 'set' } },
+          {
+            lit: '--continue',
+            when: {
+              allOf: [
+                { param: 'continueSession', is: true },
+                { param: 'resumeId', state: 'unset' },
+              ],
+            },
+          },
+        ],
+      },
+    ],
+    legacyConfigAliases: { resumeId: 'resumeSessionId' },
+    resumeAppend: { style: 'flag', flag: '--resume' },
+  },
+  env: {
+    exports: [{ name: 'COLORTERM', value: 'truecolor' }],
+    unset: ['NO_COLOR'],
+    // No tmuxSetenvKeys: XAI_API_KEY (xAI's documented headless auth var) is covered by the
+    // XAI_ prefix allowlist below, same "rely on the prefix, not an explicit key list"
+    // reasoning as pi's ~34 provider keys.
+    tmuxSetenvKeys: [],
+    dockerExecEnvNames: [],
+    allowedPrefixes: ['GROK_', 'XAI_'],
+    allowedKeys: [],
+  },
+  capabilities: {
+    ...agentDefaults(),
+    // Fullscreen alt-screen TUI with mouse support — same shape as opencode/antigravity:
+    // only the tmux-attach-time smcup strip, not Ink's full erase-scrollback+DECSET strip.
+    altScreen: 'strip-mux-only',
+    // Buffer-policy fallthrough default, unmeasured against an authenticated grok composer
+    // (upstream's own hedge, preserved here) — same as gemini/antigravity/pi/copilot.
+    echo: { policy: 'buffer', anchor: { kind: 'cursor' } },
+    // codex/antigravity-shaped clamp: grok's own bare-spawn default (no config sent) is
+    // already its safe interactive ask-mode, so the multi-user clamp only needs to force an
+    // EXPLICITLY-SENT bypass flag back off — nothing is materialized when config is absent.
+    privilegedParams: [{ param: 'alwaysApprove', clampTo: false }],
+  },
+  overlays: {
+    // ~/.grok also holds sessions/, memory/, downloads/ (the ~160MB binary), completions/,
+    // docs/, bin/ — per-file seeding like pi's credStore, not a whole-dir seedWhole copy.
+    credStore: { rel: '.grok', seedFiles: ['auth.json', 'config.toml', 'pager.toml'] },
+    // No remote/docker overlay needed: the defaults (exec grok / login-shell `grok`) are
+    // already correct — verified against upstream's own pinned test/grok-mode.test.ts
+    // expectation `exec "${SHELL:-/bin/sh}" -i -l -c 'grok'`.
+  },
+};
+
 /** The full stock catalog, in the order the run menu shows by default. */
-export const STOCK_CLIS: CliEntry[] = [CLAUDE, SHELL, OPENCODE, CODEX, GEMINI, ANTIGRAVITY, PI, COPILOT];
+export const STOCK_CLIS: CliEntry[] = [CLAUDE, SHELL, OPENCODE, CODEX, GEMINI, ANTIGRAVITY, PI, COPILOT, GROK];

@@ -26,6 +26,7 @@ import { dataPath } from '../instance.js';
 import type { CliEntry, CliId, CliRegistryFile } from './types.js';
 import { CliEntrySchema } from './schema.js';
 import { STOCK_CLIS } from './stock.js';
+import { formatCliNotFoundMessage } from '../../utils/cli-resolver.js';
 
 const SCHEMA_VERSION = 1;
 
@@ -330,9 +331,13 @@ export function missingCliMessage(id: string): string | null {
   const entry = getCli(id);
   if (!entry) return null;
   const command = resolveInstallCommandForPlatform(entry);
-  return command
+  const base = command
     ? `${entry.label} CLI not found. Install with: ${command}`
     : `${entry.label} CLI not found. See its docs for install instructions.`;
+  // Bounded PATH/login-shell/search-dir diagnostics appended so the error names exactly
+  // where resolution looked, not just what it was looking for — ported from upstream's
+  // formatCliNotFoundMessage (see cli-resolver.ts's own doc comment for the full story).
+  return formatCliNotFoundMessage(base, id);
 }
 
 /**

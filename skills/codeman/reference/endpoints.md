@@ -237,7 +237,7 @@ minutes, never retry the credential.
 flushed slightly *after* the `stop` hook fires, so a read taken the instant the wait
 returns is too early (verified live: empty on the first call, full prose seconds later).
 It is also `""` before the worker's first completed turn, and permanently `""` for
-`shell`, `opencode`, `gemini`, `antigravity` and `pi`, which write no Claude transcript.
+`shell`, `opencode`, `gemini`, `antigravity`, `pi` and `grok`, which write no Claude transcript.
 
 **Fix** Poll it, bounded (10 tries, 1 s apart). If it is still empty on a hook-less mode,
 that is expected, not a failure: read `terminal?tail=` and strip ANSI instead.
@@ -336,7 +336,7 @@ ESC=$(printf '\033')
 
 `POST /api/v1/quick-start` body (all optional):
 `{"caseName":"worker-1","mode":"claude","sessionName":"w9-worker","effort":"high"}`
-,  `mode` ∈ `claude|shell|opencode|codex|gemini|antigravity|pi`; response is
+,  `mode` ∈ `claude|shell|opencode|codex|gemini|antigravity|pi|grok`; response is
 `.data.{sessionId, caseName, casePath}`. Creates the case directory (a real directory
 on the user's disk) if missing, do not retry it in a loop, and remember the name.
 
@@ -345,8 +345,10 @@ on the user's disk) if missing, do not retry it in a loop, and remember the name
 the mode yourself: `GET /api/v1/claude/status`, `GET /api/v1/opencode/status`,
 `GET /api/v1/codex/status`, `GET /api/v1/gemini/status`, `GET /api/v1/antigravity/status`
 and `GET /api/v1/pi/status` each return `.data.{available, path}` (no session needed).
-Pi's also carries `.data.version`, because `pi` is a short generic name that an unrelated
-binary on `$PATH` can shadow: the resolver rejects one whose `--version` is not
+`grok` has no legacy per-mode alias — use the generic `GET /api/v1/cli/grok/status`
+instead, same response shape. Pi's and grok's both also carry `.data.version`, because
+`pi`/`grok` are short generic names an unrelated binary on `$PATH` can shadow: the
+resolver rejects one whose `--version` is not
 semver-shaped, so `available:false` there can mean "a different `pi` is in front" rather
 than "nothing is installed". `shell` has no CLI to probe.
 
@@ -463,7 +465,7 @@ Quirks that will bite you:
 - ⚠️ **`active-tools` proves presence, never absence.** It is fed by the BashToolParser,
   which reads Claude's rendered `● Bash(…)` lines, and `_processExpensiveParsers`
   returns early for every external CLI mode (`session.ts:2136`), so it is permanently
-  `[]` on `opencode`/`codex`/`gemini`/`antigravity`/`pi`. ⚠️ **`shell` is NOT one of those**
+  `[]` on `opencode`/`codex`/`gemini`/`antigravity`/`pi`/`grok`. ⚠️ **`shell` is NOT one of those**
   (`isExternalCliMode`, `session.ts:165-167`, lists only those five), so the parser does
   run on a shell worker, and `TEXT_COMMAND_PATTERN` (`bash-tool-parser.ts:88`) matches
   bare `tail|cat|head|less|grep|watch|multitail <path>` lines with no `● Bash(` wrapper:

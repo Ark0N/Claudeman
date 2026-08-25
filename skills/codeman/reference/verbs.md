@@ -343,7 +343,7 @@ recovered by submitting it with `{"input":"\r"}`.
 
 ⚠️ `stop` and `blocked` fire for `claude` sessions only (they are Claude Code hooks,
 and only when the workspace actually has them, see [§5.1](#51-where-to-spawn)). On
-`shell`/`opencode`/`codex`/`gemini`/`antigravity`/`pi`, requesting them explicitly is a
+`shell`/`opencode`/`codex`/`gemini`/`antigravity`/`pi`/`grok`, requesting them explicitly is a
 400, and lifecycle transitions there are coarse (a short shell command may emit **no**
 `idle` transition at all, verified live), so synchronize those with markers.
 
@@ -369,7 +369,7 @@ from the transcript file, which is flushed slightly *after* the `stop` hook fire
 single read taken the instant send-and-wait returns comes back `""` even though the
 turn finished (verified live: empty on the first call, full text seconds later). `text`
 is also `""` before the worker's first completed turn, and always `""` for modes with
-no transcript (`shell`, `opencode`, `gemini`, `antigravity`, `pi`; the first four
+no transcript (`shell`, `opencode`, `gemini`, `antigravity`, `pi`, `grok`; the first five
 verified live, pi from the same source path), which is
 why the loop above is bounded rather than open-ended. Fall back to the terminal buffer
 there, tail in **bytes** (`textOutput` in `GET .../output` stays empty for interactive
@@ -454,7 +454,7 @@ turn), and both better than diffing terminal samples:
 ```
 
 ⚠️ `active-tools` is parsed out of Claude's own output format, so it is **empty for
-`opencode`/`codex`/`gemini`/`antigravity`/`pi`** (those parsers are skipped wholesale) and
+`opencode`/`codex`/`gemini`/`antigravity`/`pi`/`grok`** (those parsers are skipped wholesale) and
 in practice empty for `shell`. Source-verified, not measured live.
 
 Only if neither helps: sample `terminal?tail=` twice a few seconds apart. A changing
