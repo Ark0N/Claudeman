@@ -267,6 +267,18 @@ describe('DeepSeek status bridge', () => {
     expect(server).toContain("if (!session || session.mode !== 'claude') return;");
   });
 
+  it('keeps the transcript reader off docker and remote-SSH sessions', () => {
+    // A docker case's harness writes its transcript inside the CONTAINER's
+    // ~/.dsh and a remote-SSH case's lives on the remote host, so the local
+    // reader would scan a $DSH_HOME that can never hold the file and return
+    // "nothing said yet" forever — starving an agent that polls the worker.
+    // Those sessions must keep the pane segmenter. Static, because standing up
+    // a docker/remote session in the unit harness is exactly what the tmux
+    // test-mode mocks exist to avoid.
+    const routes = readFileSync(join(process.cwd(), 'src/web/routes/session-routes.ts'), 'utf-8');
+    expect(routes).toMatch(/session\.mode === 'deepseek' && !session\.docker && !session\.remote/);
+  });
+
   it('maps the harness lifecycle states onto real hook events', () => {
     expect(DEEPSEEK_STATE_TO_HOOK_EVENT.idle).toBe('stop');
     expect(DEEPSEEK_STATE_TO_HOOK_EVENT.blocked).toBe('permission_prompt');

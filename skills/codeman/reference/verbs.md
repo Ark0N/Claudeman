@@ -152,7 +152,19 @@ It is **decoration, and resolved rather than trusted**, so treat it accordingly:
 
 ### 5.2 Readiness
 
-A new session reports `idle` before its CLI has spawned, and a brand-new case shows a
+**dsh workers first**, because their trap is the opposite of claude's: they have no
+trust dialog and boot straight into a composer (`❯`, matched `from=buffer`), but the
+harness reports `idle` — which reaches you as a `stop` signal — about 300 ms BEFORE that
+composer paints (measured 2.26 s vs 2.56 s after spawn, twice). So the signal that means
+"this worker finished its turn" is also the first thing it emits at boot, and a
+send-and-wait fired straight after `quick-start` resolves on it, reports a turn that
+never ran, and leaves the prompt in a pane that was not yet taking input. Wait for the
+composer, not for the signal; `spawn_worker` does exactly that, and by the time it
+returns the boot edge is spent (signals are edge-triggered, so nothing can catch it
+later). A profile whose composer is not `❯` needs `DSH_READY_MARK` set to whatever it
+does draw.
+
+For claude: a new session reports `idle` before its CLI has spawned, and a brand-new case shows a
 **trust dialog** first, so neither "wait for idle" nor "wait for ❯" means ready (the
 trust dialog contains `❯` too, observed live). Codeman auto-accepts that dialog
 itself, reliably enough that stage 1 usually just works: `_maybeAcceptTrustDialog()`
@@ -341,17 +353,35 @@ If the loop exhausts its cap, do not keep looping: read the terminal, report wha
 see, and remember that a still-typed-but-unsubmitted prompt (missing `\r`) can only be
 recovered by submitting it with `{"input":"\r"}`.
 
-⚠️ `stop` and `blocked` fire for `claude` sessions only (they are Claude Code hooks,
-and only when the workspace actually has them, see [§5.1](#51-where-to-spawn)). On
-`shell`/`opencode`/`codex`/`gemini`/`antigravity`/`pi`/`grok`/`deepseek`, requesting them explicitly is a
+⚠️ `stop` and `blocked` fire for `claude` sessions (they are Claude Code hooks, and
+only when the workspace actually has them, see [§5.1](#51-where-to-spawn)) **and for
+`deepseek`** — the one external CLI that reports its own lifecycle, so its `stop` is a
+real end-of-turn signal rather than a guess. On
+`shell`/`opencode`/`codex`/`gemini`/`antigravity`/`pi`/`grok`, requesting them explicitly is a
 400, and lifecycle transitions there are coarse (a short shell command may emit **no**
 `idle` transition at all, verified live), so synchronize those with markers.
 
+⚠️ A dsh session can still refuse them for a per-SESSION reason: `statusReporting:
+false` at create time disarms the bridge, and an explicit `until=stop` is then a 400
+naming that setting. And a `stop` that is *accepted* is not proof it will ever fire —
+whether the installed profile implements the supervisor contract cannot be known at
+request time, so a non-conforming one accepts the wait and times out on it. One timeout
+on a dsh worker whose pane clearly finished identifies that profile; switch it to
+markers.
+
 ### 5.4 Read the answer
 
-For `claude` and `codex` workers this is the read path: `last-response` returns the
-agent's final message as clean text, taken from the transcript rather than the screen,
-so it carries none of the TUI's box-drawing or repaint noise.
+For `claude`, `codex` and `deepseek` workers this is the read path: `last-response`
+returns the agent's final message as clean text, taken from the transcript rather than
+the screen, so it carries none of the TUI's box-drawing or repaint noise.
+
+⚠️ For `deepseek` it reads `$DSH_HOME/sessions/**`, and reading it is the ONLY way to
+get that answer: dsh-TUI paints a full-screen splash, so scraping its pane returns the
+ASCII-art logo (that is what `last-response` itself used to return for dsh). Two dsh
+answers are not the model's words and say so: `Turn error: …` (the provider or the
+harness failed the turn) and `Turn ended: …` (an early stop such as `max-tokens`). A
+turn still streaming reads back as the partial answer so far, so a non-empty read is
+not by itself proof the turn ended — that is what the `stop` signal is for.
 
 ```bash
 for _ in $(seq 1 10); do          # the transcript write LAGS the stop signal
@@ -369,9 +399,10 @@ from the transcript file, which is flushed slightly *after* the `stop` hook fire
 single read taken the instant send-and-wait returns comes back `""` even though the
 turn finished (verified live: empty on the first call, full text seconds later). `text`
 is also `""` before the worker's first completed turn, and always `""` for modes with
-no transcript (`shell`, `opencode`, `gemini`, `antigravity`, `pi`, `grok`, `deepseek`; the first four
+no transcript (`shell`, `opencode`, `gemini`, `antigravity`, `pi`, `grok`; the first four
 verified live, pi from the same source path), which is
-why the loop above is bounded rather than open-ended. Fall back to the terminal buffer
+why the loop above is bounded rather than open-ended. A dsh worker lags too, for its own
+reason: the harness finalizes the assistant message just after it reports `idle`. Fall back to the terminal buffer
 there, tail in **bytes** (`textOutput` in `GET .../output` stays empty for interactive
 sessions; don't use it):
 

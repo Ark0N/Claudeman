@@ -907,6 +907,20 @@ export class Session extends EventEmitter {
     return this._deepSeekConfig?.statusReporting;
   }
 
+  /**
+   * This session's `DSH_HOME` override, if it set one.
+   *
+   * Deliberately ONE key rather than an `envOverrides` getter: the map can hold
+   * provider credentials (`DEEPSEEK_API_KEY`, `GEMINI_API_KEY`, …) and is
+   * kept off the public `SessionState` for exactly that reason. The transcript
+   * reader needs the profile tree's location and nothing else, so that is all
+   * this exposes.
+   */
+  get deepSeekHomeOverride(): string | undefined {
+    const value = this._envOverrides?.DSH_HOME;
+    return value && value.trim() ? value.trim() : undefined;
+  }
+
   /** Owning username in multi-user mode, else undefined. */
   get owner(): string | undefined {
     return this._owner;

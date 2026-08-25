@@ -141,6 +141,7 @@ import {
   isExternalCliTranscriptMode,
   parseExternalCliTranscript,
 } from '../response-viewer-transcript.js';
+import { readDeepSeekLastResponse } from '../../deepseek-transcript.js';
 
 // Path to linked-cases registry (same file used by case-routes resolveCasePath)
 const LINKED_CASES_FILE = dataPath('linked-cases.json');
@@ -2029,6 +2030,35 @@ export function registerSessionRoutes(
     if (session.mode === 'codex') {
       const codexQuery = req.query as { context?: string };
       return await readCodexLastResponse(session, codexQuery.context === 'full');
+    }
+
+    // DeepSeek Harness writes a real structured transcript under
+    // `$DSH_HOME/sessions/**`, so read that rather than segmenting the pane.
+    // ⚠️ For dsh the pane fallback is not merely coarse, it is WRONG: dsh-TUI
+    // paints a full-screen splash, and the segmenter served its ASCII-art logo
+    // back as the worker's answer (measured), which an agent polling for a
+    // reply reads as a reply. So an EMPTY transcript result still wins over the
+    // pane — "nothing said yet" is the honest answer. Only `null`, meaning a
+    // Node too old to decode zstd, falls through to the segmenter below.
+    // ⚠️ Local sessions only: a docker case's harness writes its transcript
+    // inside the CONTAINER's ~/.dsh (the workspace bind-mount does not cover
+    // it) and a remote-SSH case's lives on the remote host, so the local
+    // reader would scan a $DSH_HOME that can never hold this session's file
+    // and return "nothing said yet" forever — an agent polling that worker
+    // would starve on an answer that exists. Those configurations keep the
+    // pane segmenter below: coarse, but the real conversation.
+    if (session.mode === 'deepseek' && !session.docker && !session.remote) {
+      const deepSeekQuery = req.query as { context?: string };
+      const full = deepSeekQuery.context === 'full';
+      const transcript = await readDeepSeekLastResponse(session, { blocks: full });
+      if (transcript) {
+        return {
+          text: transcript.text,
+          timestamp: transcript.timestamp,
+          hasContext: transcript.text.length > 0 || transcript.blocks.length > 0,
+          messages: full ? transcript.blocks : undefined,
+        };
+      }
     }
 
     // OpenCode / Gemini / Antigravity / Pi render their own TUIs and write no

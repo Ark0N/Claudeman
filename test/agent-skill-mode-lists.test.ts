@@ -26,11 +26,20 @@
  *     external CLIs: those lists exist to describe what `isExternalCliMode()` gates
  *     (no Claude transcript, no hooks, no Claude-format parsers), so naming some but
  *     not all of them is the drift itself. Runs of one or two modes are exempt, since
- *     a legitimate pair ("claude or shell") is not a class claim. ONE exception is
- *     allowed and it is a real one: the "writes no transcript" lists drop `codex`,
- *     which does write a rollout Codeman reads back (the pane carries a unique
- *     originator precisely so `last-response` can find it), so external-minus-codex
- *     is a meaningful class rather than an oversight.
+ *     a legitimate pair ("claude or shell") is not a class claim. The exceptions are
+ *     the REAL classes inside the external family, each one a capability some of those
+ *     CLIs have and the rest do not:
+ *
+ *       - "writes no transcript" drops `codex` (a rollout Codeman reads back) and
+ *         `deepseek` (a JSONL session file Codeman reads back);
+ *       - "delivers no hook signals" drops `deepseek`, whose harness reports its own
+ *         lifecycle -- that one is derived from `hooksAvailableForMode()` rather than
+ *         restated, so the predicate and the prose cannot drift apart;
+ *       - the positive twin of the first: the modes whose answers CAN be read.
+ *
+ *     Anything else partial is still the drift. A NEW backend belongs to none of these
+ *     classes until someone says so, so every one of them grows by a mode and every
+ *     stale list fails here -- which is the whole point.
  *
  * Port: N/A (pure static analysis).
  */
@@ -41,6 +50,7 @@ import { fileURLToPath } from 'node:url';
 import { join } from 'node:path';
 import { CreateSessionSchema, QuickStartSchema } from '../src/web/schemas.js';
 import { isExternalCliMode } from '../src/session.js';
+import { hooksAvailableForMode } from '../src/web/session-wait-registry.js';
 import type { SessionMode } from '../src/types/session.js';
 
 const HERE = fileURLToPath(new URL('.', import.meta.url));
@@ -62,6 +72,15 @@ function schemaModes(schema: typeof CreateSessionSchema | typeof QuickStartSchem
 
 const MODES = schemaModes(CreateSessionSchema);
 const EXTERNAL_MODES = MODES.filter(isExternalCliMode);
+
+/**
+ * External modes whose ANSWERS Codeman can read: codex from its rollout,
+ * deepseek from `$DSH_HOME/sessions/**`. Stated here rather than derived because
+ * `last-response` branches per mode into a per-CLI reader and there is no single
+ * predicate to import; the runtime facts are `readCodexLastResponse` and
+ * `readDeepSeekLastResponse` in session-routes.ts.
+ */
+const TRANSCRIPT_EXTERNAL_MODES = new Set<string>(['codex', 'deepseek']);
 
 /**
  * Mode tokens appearing back to back, separated only by list punctuation — `a|b|c`,
@@ -109,9 +128,12 @@ describe('agent skill run-mode lists', () => {
 
   it('never enumerates a partial set of external CLI modes', () => {
     const complete = new Set<string>(EXTERNAL_MODES);
-    /** The documented exception: codex writes a rollout, so it is absent from the
-     *  "no transcript" lists on purpose. Every OTHER external mode must still be there. */
-    const withoutCodex = new Set<string>(EXTERNAL_MODES.filter((m) => m !== 'codex'));
+    // The real classes inside the family (see the fileoverview). Each is derived, so
+    // an eighth backend joins none of them and every list naming the other seven fails.
+    const noTranscript = new Set<string>(EXTERNAL_MODES.filter((m) => !TRANSCRIPT_EXTERNAL_MODES.has(m)));
+    const withTranscript = new Set<string>(EXTERNAL_MODES.filter((m) => TRANSCRIPT_EXTERNAL_MODES.has(m)));
+    const noHookSignals = new Set<string>(EXTERNAL_MODES.filter((m) => !hooksAvailableForMode(m)));
+    const allowed = [complete, noTranscript, withTranscript, noHookSignals];
     const sameSet = (a: Set<string>, b: Set<string>) => a.size === b.size && [...a].every((v) => b.has(v));
 
     const offenders: string[] = [];
@@ -121,7 +143,7 @@ describe('agent skill run-mode lists', () => {
         if (listed.length < 3) continue;
         const externals = new Set<string>(listed.filter(isExternalCliMode));
         // Empty is fine (a claude/shell-only list); partial is the drift.
-        if (externals.size === 0 || sameSet(externals, complete) || sameSet(externals, withoutCodex)) continue;
+        if (externals.size === 0 || allowed.some((set) => sameSet(externals, set))) continue;
         const missing = EXTERNAL_MODES.filter((m) => !externals.has(m));
         offenders.push(`${file}: "${run.trim()}" is missing ${missing.join(', ')}`);
       }
