@@ -1535,7 +1535,10 @@ html[data-tab-orientation='vertical'] .tab-rail .session-tab .tab-name-prefix {
   display: inline;
 }
 
-html[data-tab-orientation='vertical'] .tab-rail .session-tab .tab-name.tab-name-renaming {
+:is(
+  html[data-tab-orientation='vertical'] .tab-rail,
+  html[data-session-list='sidebar'] .session-sidebar
+) .session-tab .tab-name.tab-name-renaming {
   display: flex;
   align-items: center;
   -webkit-box-orient: initial;
@@ -1544,11 +1547,17 @@ html[data-tab-orientation='vertical'] .tab-rail .session-tab .tab-name.tab-name-
   overflow: visible;
 }
 
-html[data-tab-orientation='vertical'] .tab-name-renaming .tab-rename-prefix {
+:is(
+  html[data-tab-orientation='vertical'] .tab-rail,
+  html[data-session-list='sidebar'] .session-sidebar
+) .tab-name-renaming .tab-rename-prefix {
   flex: 0 0 auto;
 }
 
-html[data-tab-orientation='vertical'] .tab-name-renaming .tab-rename-input {
+:is(
+  html[data-tab-orientation='vertical'] .tab-rail,
+  html[data-session-list='sidebar'] .session-sidebar
+) .tab-name-renaming .tab-rename-input {
   flex: 1 1 0;
   width: auto;
   min-width: 0;

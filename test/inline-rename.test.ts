@@ -541,6 +541,46 @@ describe('Inline rename input', () => {
     expect(result.firstRenameClassActive).toBe(false);
   });
 
+  it('Session sidebar paints typing without ellipsizing the live editor', async () => {
+    await resetState();
+    const id = 'sidebar-live-input';
+
+    await page.evaluate((sessionId) => {
+      const app = (
+        window as unknown as {
+          app: {
+            sessions: Map<string, { id: string; name: string }>;
+            startInlineRename: (id: string) => void;
+          };
+        }
+      ).app;
+      document.documentElement.dataset.sessionList = 'sidebar';
+      document.documentElement.dataset.sidebar = 'expanded';
+      const list = document.getElementById('sessionSidebarList') as HTMLElement;
+      const tab = document.createElement('div');
+      tab.setAttribute('data-test-tab', '1');
+      tab.className = 'session-tab';
+      tab.innerHTML =
+        '<span class="tab-info"><span class="tab-name-row">' +
+        `<span class="tab-name" data-session-id="${sessionId}">old title</span>` +
+        '</span></span>';
+      list.appendChild(tab);
+      app.sessions.set(sessionId, { id: sessionId, name: 'old title' });
+      app.startInlineRename(sessionId);
+    }, id);
+
+    const label = page.locator(`.tab-name[data-session-id="${id}"]`);
+    const input = label.locator('input.tab-rename-input');
+    await input.press(process.platform === 'darwin' ? 'Meta+A' : 'Control+A');
+    await page.keyboard.type('edited title');
+
+    expect(await input.inputValue()).toBe('edited title');
+    expect(await input.evaluate((node) => document.activeElement === node)).toBe(true);
+    expect(await label.evaluate((node) => node.classList.contains('tab-name-renaming'))).toBe(true);
+    expect(await label.evaluate((node) => getComputedStyle(node).overflow)).toBe('visible');
+    expect(await input.evaluate((node) => node.getBoundingClientRect().width)).toBeGreaterThan(0);
+  });
+
   it('Vertical rail paints typing in an unclamped editor and restores the clamp on cancel', async () => {
     await resetState();
     const id = 'vertical-live-input';
