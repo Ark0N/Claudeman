@@ -394,11 +394,12 @@ export const _clampExternalCliBypassForOwner = clampExternalCliBypassForOwner;
 
 /**
  * Env-var keys a non-granted owner must not be able to set, because each one
- * hands back privilege the config clamp above just removed.
+ * hands back privilege the config clamp above just removed — or, for the last,
+ * redirects a credential the server injects.
  *
- * Both are DeepSeek's, and both are reachable because `DSH_*` is an allowlisted
- * `envOverrides` prefix (schemas.ts) — which it has to be, since that is also how
- * a user configures the harness's non-privileged knobs.
+ * All are DeepSeek's, and all are reachable because `DSH_*` and `DEEPSEEK_*` are
+ * allowlisted `envOverrides` prefixes (schemas.ts) — which they have to be, since
+ * that is also how a user configures the harness's non-privileged knobs.
  *
  * - `DSH_PERMISSION_MODE` IS the harness's permission switch. Every other CLI's
  *   bypass is a command-line FLAG, reachable only through the per-CLI config the
@@ -407,8 +408,14 @@ export const _clampExternalCliBypassForOwner = clampExternalCliBypassForOwner;
  * - `DSH_HOME` points the launcher at a profile tree, and a profile's plugin code
  *   executes at BOOT, before any approval row can apply. A user who can write a
  *   workspace can put a profile in it, so this is the wider of the two.
+ * - `DEEPSEEK_BASE_URL` aims the provider endpoint, and `_configureDeepSeek()`
+ *   forwards the SERVER's own `DEEPSEEK_API_KEY` into every dsh pane before
+ *   `applyEnvOverrides()` runs — so a non-granted owner who could set the base
+ *   URL would have the operator's API key sent as a bearer credential to a host
+ *   of their choosing. (`DEEPSEEK_API_KEY` itself stays overridable: supplying
+ *   your OWN key removes privilege rather than granting it.)
  */
-const OWNER_CLAMPED_ENV_KEYS = ['DSH_PERMISSION_MODE', 'DSH_HOME'] as const;
+const OWNER_CLAMPED_ENV_KEYS = ['DSH_PERMISSION_MODE', 'DSH_HOME', 'DEEPSEEK_BASE_URL'] as const;
 
 /**
  * Env-var half of the multi-user bypass clamp.
@@ -456,30 +463,11 @@ export const _clampEnvOverridesForOwner = clampEnvOverridesForOwner;
  * and exits, so both would present as "the tab immediately died".
  */
 async function resolveDeepSeekLaunchError(requestedProfile?: string): Promise<string | null> {
-  const { isDeepSeekAvailable, getDeepSeekNotFoundMessage, listDeepSeekProfiles, resolveDefaultDeepSeekProfile } =
-    await import('../../utils/deepseek-cli-resolver.js');
-  if (!isDeepSeekAvailable()) return getDeepSeekNotFoundMessage();
-
-  const profiles = listDeepSeekProfiles();
-  if (requestedProfile) {
-    const match = profiles.find((p) => p.name === requestedProfile);
-    if (!match) {
-      return `DeepSeek Harness profile "${requestedProfile}" does not exist. Create it with: dsh plugin --profile ${requestedProfile} add <package>`;
-    }
-    if (match.kind === 'web' || match.kind === 'headless') {
-      return `DeepSeek Harness profile "${requestedProfile}" is a ${match.kind} profile and cannot run in a terminal session. Pick an interactive profile, or open the web profile as a Codeman web tab.`;
-    }
-    return null;
-  }
-
-  if (!resolveDefaultDeepSeekProfile()) {
-    return (
-      'No interactive DeepSeek Harness profile is installed. DeepSeek ships only the web and headless ' +
-      'profiles, so the terminal agent comes from a plugin — install one with: ' +
-      'dsh plugin --profile dsh-tui add @deepseek-harness-tui/dsh-tui'
-    );
-  }
-  return null;
+  // Thin async wrapper: the implementation moved into the resolver module so
+  // CRON fires can ask the same question before constructing a Session; the
+  // dynamic import keeps this file's startup free of the probe machinery.
+  const { resolveDeepSeekLaunchError: impl } = await import('../../utils/deepseek-cli-resolver.js');
+  return impl(requestedProfile);
 }
 
 // ═══════════════════════════════════════════════════════════════
@@ -1299,6 +1287,7 @@ export function registerSessionRoutes(
         session.mode !== 'antigravity' &&
         session.mode !== 'pi' &&
         session.mode !== 'grok' &&
+        session.mode !== 'deepseek' &&
         ctx.store.getConfig().ralphEnabled &&
         !session.ralphTracker.autoEnableDisabled
       ) {
@@ -2921,6 +2910,7 @@ export function registerSessionRoutes(
         antigravityConfig ||
         piConfig ||
         grokConfig ||
+        deepSeekConfig ||
         openCodeConfig
       ) {
         return createErrorResponse(

@@ -547,7 +547,16 @@ export function registerSystemRoutes(
     return { success: true, data: getDeepSeekWebStatus() };
   });
 
-  app.delete('/api/deepseek/web', async () => {
+  app.delete('/api/deepseek/web', async (req) => {
+    // Same bar as POST: the server is a single shared instance, so in
+    // multi-user mode stopping it out from under other users' tabs is a
+    // privileged act (single-user and granted owners are unaffected).
+    if (isMultiUserMode() && !(await canUsernameRunPrivilegedCommands(getAuthUser(req).username))) {
+      return createErrorResponse(
+        ApiErrorCode.FORBIDDEN,
+        'Stopping the DeepSeek web UI requires the can-bypass-permissions grant'
+      );
+    }
     const { stopDeepSeekWeb } = await import('../../deepseek-web-server.js');
     await stopDeepSeekWeb();
     return { success: true, data: { stopped: true } };

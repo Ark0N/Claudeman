@@ -54,7 +54,7 @@ import { dataPath } from './config/instance.js';
  * by an older Codeman and rewrite only when needed (rather than rewriting on
  * every session create, or — worse — leaving a stale one in place forever).
  */
-const SHIM_VERSION = 2;
+const SHIM_VERSION = 3;
 const SHIM_MARKER = `codeman-dsh-status-shim v${SHIM_VERSION}`;
 
 /**
@@ -143,12 +143,19 @@ try {
   // Missing file: the loopback bypass still applies when no tunnel is running.
 }
 
+// The contract's ordering token: the TUI retries failed deliveries with
+// backoff, so a stale report can land AFTER a newer one. Forwarded so the
+// server can drop out-of-order arrivals instead of, say, resolving an
+// approval with a retried 'working' while the harness sits blocked.
+const seq = Number(flag('--seq'))
+
 const body = JSON.stringify({
   event,
   sessionId,
   data: {
     source: 'dsh-status-shim',
     agent: flag('--agent') || 'dsh',
+    ...(Number.isFinite(seq) ? { seq } : {}),
     ...(flag('--message') ? { message: flag('--message') } : {}),
   },
 })
@@ -179,7 +186,14 @@ const req = transport.request(
   },
   (res) => {
     res.resume()
-    process.exit(res.statusCode && res.statusCode >= 200 && res.statusCode < 300 ? 0 : 1)
+    const status = res.statusCode ?? 0
+    // 2xx: delivered. 4xx: PERMANENT — a 401 (missing/rotated secret) or 429
+    // can never be fixed by retrying, and each retry feeds the auth-failure
+    // rate-limit bucket, so a single misconfigured dsh session could 429 the
+    // hook endpoint for the whole instance (killing every claude session's
+    // real hooks). Exit 0 so the TUI does not retry; only transport errors
+    // and 5xx stay retryable.
+    process.exit(status >= 200 && status < 500 ? 0 : 1)
   }
 )
 req.on('timeout', () => {

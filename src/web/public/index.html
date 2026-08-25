@@ -657,7 +657,8 @@
               </button>
               <!-- The DeepSeek Harness browser UI is the vendor's OWN interactive
                    surface (the terminal one is third-party), so it gets a shortcut:
-                   this starts `dsh web` in a shell session and opens it as a tab.
+                   POST /api/deepseek/web starts a background `dsh web` fenced to
+                   this origin, and the URL opens as a managed web tab.
                    Shown only when dsh is installed. -->
               <button class="run-mode-option run-mode-option--web" id="runModeDeepSeekWeb" style="display: none;" onclick="app.runDeepSeekWeb()">
                 <span class="run-mode-dot deepseek"></span>DeepSeek web UI&hellip;

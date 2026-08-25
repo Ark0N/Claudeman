@@ -605,41 +605,52 @@ check_grok() {
 # `dsh` is the hardest name of the lot: Debian ships an unrelated `dsh`
 # (dancer's shell). The server-side resolver settles it by demanding the
 # harness's own help banner; detection here only feeds the "you have no AI CLI"
-# hint, so the same cheap banner grep is enough and costs one exec.
-check_dsh() {
-    local candidate
+# hint, so the same banner grep is enough — but unlike every sibling probe it
+# EXECUTES the candidate, so it must be bounded. </dev/null is load-bearing
+# twice over: a foreign binary that blocks on stdin would hang the install, and
+# under `curl | bash` a child that reads stdin EATS THE REST OF THIS SCRIPT.
+# The timeout (where coreutils ships one; stock macOS has none) bounds a binary
+# that ignores EOF, mirroring the server resolver's own EXEC_TIMEOUT_MS.
+dsh_banner_probe() {
+    local runner=()
+    if command -v timeout &>/dev/null; then runner=(timeout 5); fi
+    "${runner[@]}" "$1" --help </dev/null 2>/dev/null | grep -qi "DeepSeek Harness"
+}
+
+# Resolved ONCE and memoized: the probe executes a possibly-foreign binary, and
+# the check/get/reminder call sites together used to re-run the whole scan many
+# times per install.
+DSH_RESOLVE_DONE=""
+DSH_RESOLVED_PATH=""
+resolve_dsh() {
+    [[ -n "$DSH_RESOLVE_DONE" ]] && return 0
+    DSH_RESOLVE_DONE=1
+    local candidate path
     if command -v dsh &>/dev/null; then
         candidate="$(command -v dsh)"
-        if "$candidate" --help 2>/dev/null | grep -qi "DeepSeek Harness"; then
+        if dsh_banner_probe "$candidate"; then
+            DSH_RESOLVED_PATH="$candidate"
             return 0
         fi
     fi
 
     for path in "${DSH_SEARCH_PATHS[@]}"; do
-        if [[ -x "$path" ]] && "$path" --help 2>/dev/null | grep -qi "DeepSeek Harness"; then
+        if [[ -x "$path" ]] && dsh_banner_probe "$path"; then
+            DSH_RESOLVED_PATH="$path"
             return 0
         fi
     done
+    return 0
+}
 
-    return 1
+check_dsh() {
+    resolve_dsh
+    [[ -n "$DSH_RESOLVED_PATH" ]]
 }
 
 get_dsh_path() {
-    local candidate
-    if command -v dsh &>/dev/null; then
-        candidate="$(command -v dsh)"
-        if "$candidate" --help 2>/dev/null | grep -qi "DeepSeek Harness"; then
-            echo "$candidate"
-            return
-        fi
-    fi
-
-    for path in "${DSH_SEARCH_PATHS[@]}"; do
-        if [[ -x "$path" ]] && "$path" --help 2>/dev/null | grep -qi "DeepSeek Harness"; then
-            echo "$path"
-            return
-        fi
-    done
+    resolve_dsh
+    echo "$DSH_RESOLVED_PATH"
 }
 
 get_grok_path() {
