@@ -157,16 +157,37 @@ export async function stopDeepSeekWeb(): Promise<void> {
   });
 }
 
+type StartResult = { ok: true; port: number; url: string; reused: boolean } | { ok: false; error: string };
+
+/**
+ * Serializes concurrent starts. Two POSTs racing (two devices, or a double
+ * click while the first boots) used to both see `current === null`, pick the
+ * SAME free port, and spawn twice: the loser died on EADDRINUSE while its exit
+ * handler nulled the singleton out from under the winner, leaving a live
+ * `dsh web` nothing tracked or killed — the exact orphan this module exists to
+ * prevent. The second caller now simply waits and reuses the first's server.
+ */
+let startLock: Promise<unknown> = Promise.resolve();
+
 /**
  * Start (or reuse) the background `dsh web` for `authority`.
  *
  * @param dshDir directory holding the resolved `dsh` binary.
  * @param authority browser authority to pass as `--trusted-host`.
  */
-export async function startDeepSeekWeb(
-  dshDir: string,
-  authority: string
-): Promise<{ ok: true; port: number; url: string; reused: boolean } | { ok: false; error: string }> {
+export function startDeepSeekWeb(dshDir: string, authority: string): Promise<StartResult> {
+  const run = startLock.then(
+    () => startDeepSeekWebLocked(dshDir, authority),
+    () => startDeepSeekWebLocked(dshDir, authority)
+  );
+  startLock = run.then(
+    () => undefined,
+    () => undefined
+  );
+  return run;
+}
+
+async function startDeepSeekWebLocked(dshDir: string, authority: string): Promise<StartResult> {
   // Reuse only when the running server is BOTH healthy and fenced for the
   // authority now asking. A server trusting the other origin renders a page
   // whose every API call 403s, which looks like a broken dashboard rather than
@@ -226,7 +247,10 @@ export async function startDeepSeekWeb(
   const deadline = Date.now() + READY_TIMEOUT_MS;
   while (Date.now() < deadline) {
     if (exited) {
-      current = null;
+      // Guarded like the exit/error handlers: a concurrent stop (DELETE route,
+      // shutdown) may already have cleared or replaced the singleton, and an
+      // unconditional null here would drop a server this call does not own.
+      if (current === running) current = null;
       const tail = output.trim().slice(-800);
       return { ok: false, error: tail ? `dsh web exited during startup: ${tail}` : 'dsh web exited during startup' };
     }
@@ -236,7 +260,14 @@ export async function startDeepSeekWeb(
     await new Promise((r) => setTimeout(r, READY_POLL_MS));
   }
 
-  await stopDeepSeekWeb();
+  // Timeout: kill OUR child. Only route through stopDeepSeekWeb() while the
+  // singleton is still ours — signalling `current` unconditionally here could
+  // SIGTERM a healthy server a concurrent actor now owns.
+  if (current === running) {
+    await stopDeepSeekWeb();
+  } else {
+    killTree(running.child, 'SIGKILL');
+  }
   const tail = output.trim().slice(-800);
   return {
     ok: false,

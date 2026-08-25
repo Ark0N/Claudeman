@@ -577,7 +577,11 @@ Object.assign(CodemanApp.prototype, {
         if (!wvData.success) throw new Error(wvData.error || 'Failed to save the web tab');
         webview = wvData.data.webview || wvData.data;
       }
-      await this.loadWebviews?.();
+      // refreshWebviews, not a hopeful optional-chain: openWebview() reads
+      // this.webviews and silently no-ops on an id it has not loaded, so
+      // skipping the refresh made the FIRST click create the record but open
+      // nothing (the SSE round-trip had not landed yet).
+      await this.refreshWebviews?.();
 
       this._appendSessionLaunchStatus(ownsLaunchTerminal, `Serving on ${url} - opening it as a tab.`);
       if (webview?.id) await this.openWebview(webview.id);

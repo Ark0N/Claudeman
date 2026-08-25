@@ -16,7 +16,7 @@ import { buildSpawnCommand } from '../src/tmux-manager.js';
 import { defaultDockerCommandForMode } from '../src/docker-hosts.js';
 import { defaultRemoteCommandForMode } from '../src/remote-hosts.js';
 import { isExternalCliMode, isAltScreenStripMode } from '../src/session.js';
-import { hooksAvailableForMode, resolveWaitSignals } from '../src/web/session-wait-registry.js';
+import { hooksAvailableForMode, resolveWaitSignals, sessionHookOptions } from '../src/web/session-wait-registry.js';
 import { _clampExternalCliBypassForOwner, _clampEnvOverridesForOwner } from '../src/web/routes/session-routes.js';
 import { DEEPSEEK_STATE_TO_HOOK_EVENT } from '../src/deepseek-status-shim.js';
 import { readFileSync } from 'node:fs';
@@ -228,6 +228,24 @@ describe('DeepSeek status bridge', () => {
     expect(resolveWaitSignals(undefined, on).until).toContain('stop');
   });
 
+  it('refuses stop/blocked on a docker or remote dsh session, where the bridge cannot reach the harness', () => {
+    // `docker exec` does not carry the local tmux env into the container and the
+    // remote shell never sees the local `HERDR_*` setenv, so such a session can
+    // never post a hook event however statusReporting is set — accepting
+    // `until=stop` there burns the caller's whole timeout on every turn.
+    expect(hooksAvailableForMode('deepseek', { deepSeekBridgeUnreachable: true })).toBe(false);
+    const unreachable = { mode: 'deepseek' as const, deepSeekBridgeUnreachable: true };
+    const rejected = resolveWaitSignals('stop', unreachable);
+    expect(rejected.until).toEqual([]);
+    expect(rejected.error).toContain('container or on a remote host');
+    // The default set degrades instead of erroring, exactly like the disarmed case.
+    expect(resolveWaitSignals(undefined, unreachable)).toEqual({ until: ['idle', 'exit'], error: null });
+    // sessionHookOptions() is what lifts the fact off a live session.
+    expect(sessionHookOptions({ docker: { containerName: 'c' } }).deepSeekBridgeUnreachable).toBe(true);
+    expect(sessionHookOptions({ remote: { hostId: 'h' } }).deepSeekBridgeUnreachable).toBe(true);
+    expect(sessionHookOptions({}).deepSeekBridgeUnreachable).toBe(false);
+  });
+
   it('keeps the hook predicate out of the two gates that mean "is this claude"', () => {
     // Read My Mind and intent capture read Claude's own transcript, so they mean
     // mode === 'claude'. They used to ask hooksAvailableForMode(), which was the
@@ -333,6 +351,19 @@ describe('DeepSeek multi-user clamp: the env-var half', () => {
   it('strips DSH_HOME, which points the launcher at a profile tree that executes at boot', async () => {
     const out = await _clampEnvOverridesForOwner('nobody', { DSH_HOME: '/home/attacker/evil-dsh' });
     expect(out).toEqual({});
+  });
+
+  it("strips DEEPSEEK_BASE_URL, which would aim the server's own forwarded API key at a foreign host", async () => {
+    // _configureDeepSeek() exports the SERVER's DEEPSEEK_API_KEY into every dsh
+    // pane, and applyEnvOverrides() lands after it — so a non-granted owner who
+    // could set the base URL would have the operator's key sent as a bearer
+    // credential to an endpoint of their choosing. Their OWN key stays settable:
+    // that removes privilege rather than granting it.
+    const out = await _clampEnvOverridesForOwner('nobody', {
+      DEEPSEEK_BASE_URL: 'https://attacker.example/v1',
+      DEEPSEEK_API_KEY: 'sk-their-own',
+    });
+    expect(out).toEqual({ DEEPSEEK_API_KEY: 'sk-their-own' });
   });
 
   it('leaves unrelated overrides alone, and returns the same object when there is nothing to strip', async () => {

@@ -395,11 +395,23 @@ export class CronService {
     let session: Session;
     try {
       const mode = job.agentType;
+      // Same two-part availability gate the HTTP create paths run: `dsh` is a
+      // profile LAUNCHER, so without this a job on a box with only the stock
+      // web/headless profiles spawns a bare `dsh` that boots a profile unable
+      // to drive a pane, and the prompt is typed into a logging server or a
+      // dead pane instead of failing the run with the actionable message.
+      if (mode === 'deepseek') {
+        const { resolveDeepSeekLaunchError } = await import('../utils/deepseek-cli-resolver.js');
+        const launchError = resolveDeepSeekLaunchError();
+        if (launchError) return this.failRun(job, run, launchError);
+      }
       const globalNice = await this.deps.getGlobalNiceConfig();
       const modelConfig = await this.deps.getModelConfig();
       const claudeModeConfig = await this.deps.getClaudeModeConfig();
       const effectiveClaudeMode = await resolveClaudeModeForUsername(claudeModeConfig.claudeMode, job.owner);
-      const model = mode !== 'shell' ? modelConfig?.defaultModel || undefined : undefined;
+      // DeepSeek's model is a composition entry in the profile's config tree,
+      // not a session flag — mirror the HTTP routes' exclusion.
+      const model = mode !== 'shell' && mode !== 'deepseek' ? modelConfig?.defaultModel || undefined : undefined;
       // Section 6.3: materialize the safe default for a non-granted owner (see
       // clampCronExternalCliConfigs — cron sends no per-CLI config, so the CLI's own
       // spawn default is what would otherwise apply).

@@ -109,7 +109,11 @@ export type HookEventType =
   | 'elicitation_response'
   | 'stop'
   | 'teammate_idle'
-  | 'task_completed';
+  | 'task_completed'
+  // No Claude Code hook behind this one: it is the DeepSeek status bridge's
+  // "a turn STARTED" report (see deepseek-status-shim.ts). Keep in step with
+  // HookEventSchema in web/schemas.ts.
+  | 'agent_working';
 
 // ========== API Response Types ==========
 

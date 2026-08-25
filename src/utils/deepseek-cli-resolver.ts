@@ -363,3 +363,39 @@ export function getDeepSeekCliVersion(): string | null {
 export function profileExists(name: string): boolean {
   return existsSync(join(resolveDshHome(), 'profiles', name, 'package.json'));
 }
+
+/**
+ * Why a DeepSeek session cannot start, or null when it can.
+ *
+ * Availability for this mode is TWO questions, not one, because `dsh` is a
+ * profile launcher rather than an agent: the binary must resolve (and prove it
+ * is the harness and not Debian's dancer's shell), AND a profile that can occupy
+ * a pane must exist. Every create path — both HTTP routes AND cron fires — must
+ * ask this before constructing a Session, or the pane boots the box's default
+ * profile, which may be a logging web server or a one-shot that exits on
+ * arrival, and the prompt is typed into it.
+ */
+export function resolveDeepSeekLaunchError(requestedProfile?: string): string | null {
+  if (!isDeepSeekAvailable()) return getDeepSeekNotFoundMessage();
+
+  const profiles = listDeepSeekProfiles();
+  if (requestedProfile) {
+    const match = profiles.find((p) => p.name === requestedProfile);
+    if (!match) {
+      return `DeepSeek Harness profile "${requestedProfile}" does not exist. Create it with: dsh plugin --profile ${requestedProfile} add <package>`;
+    }
+    if (match.kind === 'web' || match.kind === 'headless') {
+      return `DeepSeek Harness profile "${requestedProfile}" is a ${match.kind} profile and cannot run in a terminal session. Pick an interactive profile, or open the web profile as a Codeman web tab.`;
+    }
+    return null;
+  }
+
+  if (!resolveDefaultDeepSeekProfile(profiles)) {
+    return (
+      'No interactive DeepSeek Harness profile is installed. DeepSeek ships only the web and headless ' +
+      'profiles, so the terminal agent comes from a plugin — install one with: ' +
+      'dsh plugin --profile dsh-tui add @deepseek-harness-tui/dsh-tui'
+    );
+  }
+  return null;
+}

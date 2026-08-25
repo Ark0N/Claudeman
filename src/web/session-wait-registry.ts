@@ -179,6 +179,16 @@ export interface HookCapabilityOptions {
    * session emit hook events at all.
    */
   deepSeekStatusReporting?: boolean;
+  /**
+   * True when the pane's harness runs somewhere the status bridge cannot reach:
+   * a docker case (`docker exec` does not carry the local tmux env into the
+   * container, and the loopback-bound API is unreachable from it) or a
+   * remote-SSH case (the `HERDR_*` triple is set on the LOCAL ssh process, not
+   * the remote shell). Such a session never posts a hook event however the
+   * statusReporting flag is set, so `until=stop` on it would burn its whole
+   * timeout on every turn.
+   */
+  deepSeekBridgeUnreachable?: boolean;
 }
 
 /**
@@ -221,7 +231,9 @@ export function hooksAvailableForMode(mode: SessionMode, options: HookCapability
   // deliver `stop` and `blocked` — unless the user turned the bridge off, in
   // which case nothing on the box will ever post one. Every other mode is
   // output-stabilization guesswork and must keep failing the ask.
-  if (mode === 'deepseek') return options.deepSeekStatusReporting !== false;
+  if (mode === 'deepseek') {
+    return options.deepSeekStatusReporting !== false && options.deepSeekBridgeUnreachable !== true;
+  }
   return false;
 }
 
@@ -234,8 +246,15 @@ export function hooksAvailableForMode(mode: SessionMode, options: HookCapability
  * call sites, so a future per-session fact is added in one place instead of
  * being forgotten at three of them.
  */
-export function sessionHookOptions(session: { deepSeekStatusReporting?: boolean }): HookCapabilityOptions {
-  return { deepSeekStatusReporting: session.deepSeekStatusReporting };
+export function sessionHookOptions(session: {
+  deepSeekStatusReporting?: boolean;
+  docker?: unknown;
+  remote?: unknown;
+}): HookCapabilityOptions {
+  return {
+    deepSeekStatusReporting: session.deepSeekStatusReporting,
+    deepSeekBridgeUnreachable: Boolean(session.docker || session.remote),
+  };
 }
 
 /** Outcome of resolving a caller-supplied wait target against a session's mode. */
@@ -291,8 +310,11 @@ export function resolveWaitSignals(
       // caller looking for a bug that is really a setting they chose.
       error:
         options.mode === 'deepseek'
-          ? `Signal(s) ${rejected.join(', ')} never fire for this deepseek session: its status bridge is off ` +
-            `(deepSeekConfig.statusReporting: false), so nothing posts hook events. Use idle or exit.`
+          ? options.deepSeekBridgeUnreachable
+            ? `Signal(s) ${rejected.join(', ')} never fire for this deepseek session: it runs in a container or on ` +
+              `a remote host, where the local status bridge cannot reach the harness. Use idle or exit.`
+            : `Signal(s) ${rejected.join(', ')} never fire for this deepseek session: its status bridge is off ` +
+              `(deepSeekConfig.statusReporting: false), so nothing posts hook events. Use idle or exit.`
           : `Signal(s) ${rejected.join(', ')} never fire for ${options.mode} sessions (no Claude Code hooks). Use idle or exit.`,
     };
   }
