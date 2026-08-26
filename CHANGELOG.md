@@ -1,5 +1,11 @@
 # aicodeman
 
+## 1.23.1
+
+### Patch Changes
+
+- 858b15e: Search the full session workspace from File Viewer while keeping results scoped to the active session and hidden-file preference.
+
 ## 1.23.0
 
 ### Minor Changes
