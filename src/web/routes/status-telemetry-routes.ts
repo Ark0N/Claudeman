@@ -57,9 +57,9 @@ export function registerStatusTelemetryRoutes(app: FastifyInstance, ctx: Session
             if (!ctx.sessions.has(id)) lastSig.delete(id);
           }
         }
-        const payload = { sessionId, ...telemetry };
-        setLatestPlanUsage(payload); // replayed in the SSE init snapshot for fresh loads
-        ctx.broadcast(SessionStatusTelemetry, payload);
+        const update = { sessionId, ...telemetry };
+        const snapshot = setLatestPlanUsage(update); // replayed in the SSE init snapshot for fresh loads
+        ctx.broadcast(SessionStatusTelemetry, snapshot);
       }
     }
 

@@ -37,7 +37,13 @@ export {
 } from './claude-cli-resolver.js';
 export { spawnPtyWithHelperRepair } from './node-pty-repair.js';
 export { resolveOpenCodeDir, getOpenCodeNotFoundMessage } from './opencode-cli-resolver.js';
-export { resolveCodexDir, isCodexAvailable, getCodexNotFoundMessage } from './codex-cli-resolver.js';
+export {
+  resolveCodexDir,
+  resolveCodexBinaryPath,
+  isCodexAvailable,
+  getCodexNotFoundMessage,
+  readCodexPlanUsage,
+} from './codex-cli-resolver.js';
 export { resolveGeminiDir, isGeminiAvailable, getGeminiNotFoundMessage } from './gemini-cli-resolver.js';
 export {
   resolveAntigravityDir,
