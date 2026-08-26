@@ -61,7 +61,7 @@ The installer asks before every system change, and re-running the same line upda
 curl -fsSL https://getcodeman.com/install | bash
 ```
 
-This installs Node.js and tmux if missing, clones Codeman to `~/.codeman/app`, and builds it. A few things worth knowing:
+This installs Node.js, tmux and a build toolchain if missing (node-pty ships no Linux prebuilds, so it compiles from source), clones Codeman to `~/.codeman/app`, and builds it. A few things worth knowing:
 
 - **It asks first.** Every system change (package installs, AI CLI download) is prompted, and a menu at the end lets you choose: run Codeman in this terminal, install it as a background service (systemd/launchd, auto-start on boot), or don't start yet. Nothing runs in the background unless you pick it.
 - **Network or local-only, your choice.** The installer asks whether the dashboard should be reachable from other devices on your network (`0.0.0.0`, the default, with a strongly recommended password prompt) or from this machine only (`127.0.0.1`, safest). Skipping the password on a network bind requires an explicit confirmation and ends with a loud warning. A bare `codeman web` started by hand still defaults to loopback.

@@ -3491,6 +3491,14 @@ class CodemanApp {
     this._clearTimer('_clientDropRecoveryTimer');
     this.pendingWrites = [];
     this.writeFrameScheduled = false;
+    // Release the one-chunk-in-flight gate with the rest of the write queue.
+    // flushPendingWrites() early-returns while this is set, so a reset that
+    // cleared everything EXCEPT this flag would leave live output permanently
+    // stalled if xterm's parse callback never lands (disposed terminal, or a
+    // throw inside the async parse). A late callback is harmless: it clears an
+    // already-clear flag and schedules a flush.
+    this._terminalWriteInFlight = false;
+    this._terminalWriteInFlightBytes = 0;
     this._isLoadingBuffer = false;
     this._loadBufferQueue = null;
     this._bufferLoadOwner = null;
@@ -5364,6 +5372,14 @@ class CodemanApp {
     this._clearTimer('syncWaitTimeout');
     this.pendingWrites = [];
     this.writeFrameScheduled = false;
+    // Release the one-chunk-in-flight gate with the rest of the write queue.
+    // flushPendingWrites() early-returns while this is set, so a reset that
+    // cleared everything EXCEPT this flag would leave live output permanently
+    // stalled if xterm's parse callback never lands (disposed terminal, or a
+    // throw inside the async parse). A late callback is harmless: it clears an
+    // already-clear flag and schedules a flush.
+    this._terminalWriteInFlight = false;
+    this._terminalWriteInFlightBytes = 0;
     this._isLoadingBuffer = false;
     this._loadBufferQueue = null;
     this._bufferLoadOwner = null;
@@ -5677,6 +5693,8 @@ class CodemanApp {
       this._clearTimer('syncWaitTimeout');
       this.pendingWrites = [];
       this.writeFrameScheduled = false;
+      this._terminalWriteInFlight = false;
+      this._terminalWriteInFlightBytes = 0;
       this._isLoadingBuffer = false;
       this._loadBufferQueue = null;
       this._terminalRefreshOwner = null;

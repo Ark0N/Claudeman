@@ -412,6 +412,27 @@ check_tmux() {
     command -v tmux &>/dev/null
 }
 
+# node-pty ships prebuilt binaries for darwin and win32 ONLY, so on Linux it is
+# always compiled from source during `npm install`. Without a toolchain that
+# fails deep inside node-gyp with `not found: make`, which reads like an npm bug
+# rather than a missing system package (issue: fresh Ubuntu 24 server install).
+# So the toolchain is checked up front, exactly like git and tmux.
+#
+# Returns a human-readable list of what is missing, empty when all present.
+missing_build_tools() {
+    local missing=""
+    command -v make &>/dev/null || missing="make"
+    if ! command -v c++ &>/dev/null && ! command -v g++ &>/dev/null && ! command -v clang++ &>/dev/null; then
+        missing="${missing:+$missing, }a C++ compiler (g++)"
+    fi
+    command -v python3 &>/dev/null || missing="${missing:+$missing, }python3"
+    printf '%s' "$missing"
+}
+
+check_build_tools() {
+    [[ -z "$(missing_build_tools)" ]]
+}
+
 check_claude() {
     # Check PATH first
     if command -v claude &>/dev/null; then
@@ -932,6 +953,50 @@ install_git_suse() {
     info "Installing Git via zypper..."
     ensure_sudo
     run_as_root zypper install -y git
+}
+
+# Build toolchain for node-pty's source compile (see missing_build_tools).
+install_buildtools_debian() {
+    info "Installing build tools via apt (build-essential, python3)..."
+    ensure_sudo
+    run_as_root apt-get update -qq
+    run_as_root apt-get install -y -qq build-essential python3
+}
+
+install_buildtools_fedora() {
+    info "Installing build tools (gcc, gcc-c++, make, python3)..."
+    ensure_sudo
+    if command -v dnf &>/dev/null; then
+        run_as_root dnf install -y gcc gcc-c++ make python3
+    else
+        run_as_root yum install -y gcc gcc-c++ make python3
+    fi
+}
+
+install_buildtools_arch() {
+    info "Installing build tools via pacman (base-devel, python)..."
+    ensure_sudo
+    run_as_root pacman -Sy --noconfirm base-devel python
+}
+
+install_buildtools_alpine() {
+    info "Installing build tools via apk (build-base, python3)..."
+    ensure_sudo
+    run_as_root apk add --no-cache build-base python3
+}
+
+install_buildtools_suse() {
+    info "Installing build tools via zypper..."
+    ensure_sudo
+    run_as_root zypper install -y gcc gcc-c++ make python3
+}
+
+install_buildtools_macos() {
+    # macOS normally never gets here: node-pty ships darwin prebuilds. Only a
+    # forced source build needs a compiler, and Xcode CLT is its only supplier.
+    info "Requesting Xcode Command Line Tools..."
+    xcode-select --install 2>/dev/null || true
+    die "Finish the Xcode Command Line Tools install in the dialog, then re-run this installer."
 }
 
 install_cloudflared_macos() {
@@ -2061,6 +2126,29 @@ setup_tunnel_service() {
 # Installation Helpers
 # ============================================================================
 
+# npm install with an actionable message for the failure that actually happens
+# on a fresh Linux box: no toolchain, so node-pty cannot compile.
+npm_install_deps() {
+    if npm install --quiet --no-fund --no-audit 2>/dev/null; then
+        return 0
+    fi
+    if npm install --no-fund --no-audit; then
+        return 0
+    fi
+
+    error "npm install failed."
+    if [[ "$(detect_os)" == "linux" ]] && ! check_build_tools; then
+        error "Missing native build tools: $(missing_build_tools)"
+        error "node-pty has no Linux prebuilds, so it must compile from source."
+        error "Install them and re-run this installer:"
+        error "  Debian/Ubuntu:  sudo apt-get install -y build-essential python3"
+        error "  Fedora/RHEL:    sudo dnf install -y gcc gcc-c++ make python3"
+        error "  Arch:           sudo pacman -S --noconfirm base-devel python"
+        error "  Alpine:         sudo apk add build-base python3"
+    fi
+    exit 1
+}
+
 install_dependency() {
     local dep_name="$1"
     local os="$2"
@@ -2171,6 +2259,31 @@ main() {
             install_dependency "tmux" "$os" "$distro"
         else
             die "tmux is required for session persistence."
+        fi
+    fi
+
+    # Native build toolchain. node-pty compiles from source on Linux, so this is
+    # a hard requirement there, not a nicety.
+    if [[ "$os" == "linux" ]]; then
+        info "Checking build tools (node-pty compiles from source on Linux)..."
+        local missing_tools
+        missing_tools="$(missing_build_tools)"
+        if [[ -z "$missing_tools" ]]; then
+            success "Build tools are installed"
+        else
+            warn "Missing build tools: $missing_tools"
+            headless_guard "install build tools (system package via sudo)"
+            if prompt_yes_no "Install the build tools now?"; then
+                install_dependency "buildtools" "$os" "$distro"
+                hash -r 2>/dev/null || true
+                missing_tools="$(missing_build_tools)"
+                if [[ -n "$missing_tools" ]]; then
+                    die "Build tools still missing after install: $missing_tools. Install them manually and re-run."
+                fi
+                success "Build tools installed"
+            else
+                die "A build toolchain (make, g++, python3) is required: node-pty has no Linux prebuilds and compiles from source."
+            fi
         fi
     fi
 
@@ -2341,7 +2454,7 @@ main() {
     # ========================================================================
 
     info "Installing dependencies..."
-    npm install --quiet --no-fund --no-audit 2>/dev/null || npm install --no-fund --no-audit
+    npm_install_deps
 
     info "Building..."
     npm run build --quiet 2>/dev/null || npm run build
@@ -2637,7 +2750,7 @@ update() {
 
     git fetch --quiet origin
     git reset --hard "origin/$BRANCH" --quiet
-    npm install --quiet --no-fund --no-audit 2>/dev/null || npm install --no-fund --no-audit
+    npm_install_deps
     npm run build --quiet 2>/dev/null || npm run build
     date -u +%Y-%m-%dT%H:%M:%SZ > "$INSTALL_DIR/.install-complete"
     success "Updated to $(node -e "console.log(require('./package.json').version)")"

@@ -1,5 +1,23 @@
 # aicodeman
 
+## 1.23.1
+
+### Patch Changes
+
+- Fix a fresh-Linux install failure, and bound the browser terminal's live write queue.
+
+  **install.sh now installs a build toolchain.** Reported against a stock Ubuntu 24 server: node-pty publishes prebuilt binaries for darwin and win32 only, so on Linux it is always compiled from source during `npm install`. The installer set up Node, tmux and git but never a compiler, so a machine without `build-essential` died deep inside node-gyp with `not found: make` — which reads like an npm bug rather than a missing system package. `make`, a C++ compiler and `python3` are now checked up front exactly like git and tmux, installed per distro (apt / dnf / pacman / apk / zypper) behind the same consent prompt, and re-verified afterwards rather than assumed. If `npm install` fails anyway — including on `install.sh update` — it now names the missing tools and the command that installs them instead of leaving a node-gyp stack trace as the last word.
+
+  **Bounded live xterm backpressure** (#339): live output is now one chunk in flight at a time, released by xterm's own parse callback, so xterm's private WriteBuffer can no longer hide an unbounded backlog behind the browser's 128 KiB render cap; queued, loading and incoming bytes all count against that cap. Automatic drop recovery for a shell stays on the bounded 1 MiB tail — a 100k-line shell capture is tens of MiB, and parsing it on the main thread is the freeze the cap exists to prevent — while TUI modes still recover full history behind the existing downgrade guard. Duplicate SSE terminal events are dropped before JSON parsing while WebSocket owns terminal I/O, and recovery is single-flight per active session. Follow-up hardening: the three write-queue reset paths now also release the in-flight gate, so a parse callback that never lands cannot leave live output permanently stalled.
+
+  **File Viewer searches the workspace** (#340): the File Viewer search box now queries the server-side file search endpoint with a 250 ms debounce and strict response validation, instead of filtering only the part of the tree already loaded. Tree and search state are scoped to the active session, the hidden-file preference and independent request epochs, so a stale response cannot repaint the panel; cached-tree restoration, directory results and reset behaviour survive session switches and both panel-hide paths.
+
+  ### Thanks
+  - @dignfei for #339
+  - @aakhter for #340
+
+- 858b15e: Search the full session workspace from File Viewer while keeping results scoped to the active session and hidden-file preference.
+
 ## 1.23.0
 
 ### Minor Changes
