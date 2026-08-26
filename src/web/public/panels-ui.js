@@ -2980,53 +2980,422 @@ Object.assign(CodemanApp.prototype, {
     btn.setAttribute('aria-label', label);
   },
 
+  _ensureFileBrowserState() {
+    if (!this._fileBrowserState) {
+      const ownerSessionId = this.activeSessionId || null;
+      const showHidden = this.fileBrowserShowHidden === true;
+      this._fileBrowserState = {
+        treeEpoch: 0,
+        searchEpoch: 0,
+        ownerSessionId,
+        view: 'normal',
+        normalState: this.fileBrowserData
+          ? { sessionId: ownerSessionId, showHidden, treeEpoch: 0, phase: 'ready', data: this.fileBrowserData }
+          : null,
+        treeInFlight: null,
+        inFlight: null,
+        matches: [],
+        deferredDirectoryTarget: null,
+        filter: typeof this.fileBrowserFilter === 'string' ? this.fileBrowserFilter : '',
+      };
+    }
+    return this._fileBrowserState;
+  },
+
+  _activateFileBrowserSession(sessionId) {
+    if (!sessionId) return;
+
+    const state = this._ensureFileBrowserState();
+    if (state.inFlight?.timer !== undefined && state.inFlight?.timer !== null) {
+      clearTimeout(state.inFlight.timer);
+    }
+    state.searchEpoch++;
+    state.treeEpoch++;
+    state.ownerSessionId = sessionId;
+    state.treeInFlight = null;
+    state.inFlight = null;
+    state.normalState = null;
+    state.matches = [];
+    state.deferredDirectoryTarget = null;
+    state.filter = '';
+    state.view = 'normal';
+    this.fileBrowserData = null;
+    this.fileBrowserFilter = '';
+    this.fileBrowserExpandedDirs?.clear?.();
+    this.fileBrowserAllExpanded = false;
+
+    const searchInput = this.$?.('fileBrowserSearch');
+    if (searchInput) searchInput.value = '';
+    this._syncFileBrowserExpandBtn();
+    const expandBtn = this.$?.('fileBrowserExpandBtn');
+    if (expandBtn) expandBtn.innerHTML = '\u229E';
+
+    const panel = this.$?.('fileBrowserPanel');
+    const treeEl = this.$?.('fileBrowserTree');
+    const statusEl = this.$?.('fileBrowserStatus');
+    const visible = panel?.classList.contains('visible') === true;
+    if (treeEl) {
+      treeEl.innerHTML = visible
+        ? `<div class="file-browser-loading">${escapeHtml('Loading files...')}</div>`
+        : '';
+    }
+    if (statusEl) statusEl.textContent = visible ? 'Loading files...' : '';
+
+    if (visible) {
+      const load = this.loadFileBrowser?.(sessionId);
+      load?.catch?.(() => {});
+    }
+  },
+
+  _resetFileBrowserForHide() {
+    const state = this._ensureFileBrowserState();
+    if (state.inFlight?.timer !== undefined && state.inFlight?.timer !== null) {
+      clearTimeout(state.inFlight.timer);
+    }
+    state.searchEpoch++;
+    state.treeEpoch++;
+    state.treeInFlight = null;
+    state.inFlight = null;
+    state.normalState = null;
+    state.matches = [];
+    state.deferredDirectoryTarget = null;
+    state.filter = '';
+    state.view = 'normal';
+    this.fileBrowserData = null;
+    this.fileBrowserFilter = '';
+    this.fileBrowserExpandedDirs?.clear?.();
+    this.fileBrowserAllExpanded = false;
+
+    const searchInput = this.$?.('fileBrowserSearch');
+    if (searchInput) searchInput.value = '';
+    this._syncFileBrowserExpandBtn();
+    const expandBtn = this.$?.('fileBrowserExpandBtn');
+    if (expandBtn) expandBtn.innerHTML = '\u229E';
+    const treeEl = this.$?.('fileBrowserTree');
+    if (treeEl) treeEl.innerHTML = '';
+    const statusEl = this.$?.('fileBrowserStatus');
+    if (statusEl) statusEl.textContent = '';
+  },
+
+  _setFileBrowserExpandDisabled(disabled) {
+    const btn = this.$('fileBrowserExpandBtn');
+    if (btn) btn.disabled = disabled;
+  },
+
+  _hasFileBrowserQuery() {
+    const state = this._ensureFileBrowserState();
+    const input = this.$?.('fileBrowserSearch');
+    const inputValue = typeof input?.value === 'string' ? input.value : '';
+    const filterValue = typeof state.filter === 'string' ? state.filter : '';
+    return inputValue.trim() !== '' || filterValue.trim() !== '';
+  },
+
+  _syncFileBrowserExpandBtn() {
+    this._setFileBrowserExpandDisabled(this._hasFileBrowserQuery());
+  },
+
+  _renderFileBrowserNormalStatus(data, showHidden) {
+    const statusEl = this.$('fileBrowserStatus');
+    if (!statusEl || !data) return;
+    const { totalFiles, totalDirectories, truncated } = data;
+    statusEl.textContent = `${totalFiles} files, ${totalDirectories} dirs${truncated ? ' (truncated)' : ''}${showHidden ? ' · hidden shown' : ''}`;
+  },
+
+  _isFileBrowserNormalCompatible(candidate, sessionId, showHidden, treeEpoch) {
+    return (
+      candidate?.sessionId === sessionId &&
+      candidate.showHidden === showHidden &&
+      candidate.treeEpoch === treeEpoch
+    );
+  },
+
+  _isFileBrowserTreeContextCurrent(request, requireCurrentRecord = false) {
+    const state = this._ensureFileBrowserState();
+    return (
+      (!requireCurrentRecord || state.treeInFlight === request) &&
+      state.ownerSessionId === request.sessionId &&
+      state.treeEpoch === request.treeEpoch &&
+      (this.fileBrowserShowHidden === true) === request.showHidden
+    );
+  },
+
+  _canRenderFileBrowserNormal(normalState) {
+    const state = this._ensureFileBrowserState();
+    return (
+      state.view === 'normal' &&
+      this.activeSessionId === normalState?.sessionId &&
+      this._isFileBrowserNormalCompatible(
+        normalState,
+        state.ownerSessionId,
+        this.fileBrowserShowHidden === true,
+        state.treeEpoch,
+      ) &&
+      this.$('fileBrowserPanel')?.classList.contains('visible') === true
+    );
+  },
+
+  _renderFileBrowserNormalState(normalState) {
+    if (!normalState || !this._canRenderFileBrowserNormal(normalState)) return;
+    const treeEl = this.$('fileBrowserTree');
+    const statusEl = this.$('fileBrowserStatus');
+    if (!treeEl) return;
+
+    if (normalState.phase === 'loading') {
+      this.fileBrowserData = null;
+      treeEl.innerHTML = `<div class="file-browser-loading">${escapeHtml('Loading files...')}</div>`;
+      if (statusEl) statusEl.textContent = 'Loading files...';
+      return;
+    }
+
+    if (normalState.phase === 'error') {
+      this.fileBrowserData = null;
+      const detail = normalState.error && normalState.error !== 'Failed to load files'
+        ? `: ${normalState.error}`
+        : '';
+      const message = `Failed to load files${detail}`;
+      treeEl.innerHTML = `<div class="file-browser-empty">${escapeHtml(message)}</div>`;
+      if (statusEl) statusEl.textContent = message;
+      return;
+    }
+
+    if (normalState.phase !== 'ready') return;
+    this.fileBrowserData = normalState.data;
+    this._syncFileBrowserExpandBtn();
+    this.renderFileBrowserTree(normalState.sessionId);
+    this._renderFileBrowserNormalStatus(normalState.data, normalState.showHidden);
+  },
+
+  _validateFileBrowserTreeEnvelope(result) {
+    if (!result || typeof result !== 'object' || result.success !== true) return null;
+    const data = result.data;
+    if (!data || typeof data !== 'object' || !Array.isArray(data.tree)) return null;
+    if (data.mode === 'search') return null;
+    if (
+      typeof data.totalFiles !== 'number' ||
+      !Number.isFinite(data.totalFiles) ||
+      data.totalFiles < 0 ||
+      typeof data.totalDirectories !== 'number' ||
+      !Number.isFinite(data.totalDirectories) ||
+      data.totalDirectories < 0 ||
+      typeof data.truncated !== 'boolean'
+    ) {
+      return null;
+    }
+
+    const validNodes = nodes => nodes.every(node => {
+      if (!node || typeof node !== 'object') return false;
+      if (typeof node.name !== 'string' || typeof node.path !== 'string') return false;
+      if (node.type !== 'file' && node.type !== 'directory') return false;
+      if (node.size !== undefined && (typeof node.size !== 'number' || !Number.isFinite(node.size))) return false;
+      if (node.extension !== undefined && typeof node.extension !== 'string') return false;
+      if (node.children !== undefined && (!Array.isArray(node.children) || !validNodes(node.children))) return false;
+      return true;
+    });
+
+    return validNodes(data.tree) ? data : null;
+  },
+
+  _normalizeFileBrowserTreeError(error) {
+    return typeof error?.message === 'string' && error.message ? error.message : 'Failed to load files';
+  },
+
+  _validateFileBrowserSearchEnvelope(result) {
+    if (!result || typeof result !== 'object' || result.success !== true) return null;
+    const data = result.data;
+    if (!data || typeof data !== 'object' || data.mode !== 'search' || !Array.isArray(data.matches)) return null;
+    if (typeof data.truncated !== 'boolean') return null;
+    if (
+      data.matchCount !== undefined &&
+      (typeof data.matchCount !== 'number' || !Number.isFinite(data.matchCount) || data.matchCount < 0)
+    ) {
+      return null;
+    }
+    for (const match of data.matches) {
+      if (!match || typeof match !== 'object') return null;
+      if (typeof match.name !== 'string' || typeof match.path !== 'string') return null;
+      if (match.type !== 'file' && match.type !== 'directory') return null;
+      if (match.size !== undefined && (typeof match.size !== 'number' || !Number.isFinite(match.size))) return null;
+      if (match.extension !== undefined && typeof match.extension !== 'string') return null;
+    }
+    return data;
+  },
+
+  _canRenderFileBrowserSearch(request) {
+    const state = this._ensureFileBrowserState();
+    const panel = this.$('fileBrowserPanel');
+    return (
+      state.searchEpoch === request.epoch &&
+      state.ownerSessionId === request.ownerSessionId &&
+      this.activeSessionId === request.ownerSessionId &&
+      (this.fileBrowserShowHidden === true) === request.showHidden &&
+      state.filter === request.rawInput &&
+      panel?.classList.contains('visible') === true
+    );
+  },
+
+  _renderFileBrowserSearchError() {
+    const treeEl = this.$('fileBrowserTree');
+    const statusEl = this.$('fileBrowserStatus');
+    const message = 'Search failed';
+    if (treeEl) treeEl.innerHTML = `<div class="file-browser-empty">${escapeHtml(message)}</div>`;
+    if (statusEl) statusEl.textContent = message;
+  },
+
+  _canContinueFileBrowserHiddenReload(continuation, normalState) {
+    const state = this._ensureFileBrowserState();
+    const input = this.$?.('fileBrowserSearch');
+    const currentInput = typeof input?.value === 'string' ? input.value : state.filter;
+    return (
+      state.view === 'normal' &&
+      state.searchEpoch === continuation.searchEpoch &&
+      state.treeEpoch === continuation.treeEpoch &&
+      state.ownerSessionId === continuation.ownerSessionId &&
+      this.activeSessionId === continuation.ownerSessionId &&
+      (this.fileBrowserShowHidden === true) === continuation.showHidden &&
+      state.filter === continuation.rawInput &&
+      currentInput === continuation.rawInput &&
+      currentInput.trim() === continuation.query &&
+      this.$?.('fileBrowserPanel')?.classList.contains('visible') === true &&
+      normalState?.phase === 'ready' &&
+      this._isFileBrowserNormalCompatible(
+        normalState,
+        continuation.ownerSessionId,
+        continuation.showHidden,
+        continuation.treeEpoch,
+      )
+    );
+  },
+
   async toggleFileBrowserHidden() {
+    const state = this._ensureFileBrowserState();
+    const rawInput = typeof state.filter === 'string' ? state.filter : '';
+    const query = rawInput.trim();
     this.fileBrowserShowHidden = !this.fileBrowserShowHidden;
     try {
       localStorage.setItem(FILE_BROWSER_SHOW_HIDDEN_KEY, this.fileBrowserShowHidden ? '1' : '0');
     } catch {}
     this._syncFileBrowserHiddenBtn();
+
+    if (state.inFlight?.timer !== undefined && state.inFlight?.timer !== null) {
+      clearTimeout(state.inFlight.timer);
+    }
+    state.searchEpoch++;
+    state.inFlight = null;
+    state.matches = [];
+    state.deferredDirectoryTarget = null;
+    state.normalState = null;
+    this.fileBrowserData = null;
+    if (query.length <= 256) state.view = 'normal';
+    this._syncFileBrowserExpandBtn();
+
     // Expanded-directory state is deliberately preserved so toggling does not
     // collapse the tree the user just navigated.
-    if (this.activeSessionId) await this.loadFileBrowser(this.activeSessionId);
-  },
+    const ownerSessionId = state.ownerSessionId || this.activeSessionId;
+    if (!ownerSessionId || this.activeSessionId !== ownerSessionId) return;
 
-  async loadFileBrowser(sessionId) {
-    if (!sessionId) return;
+    const searchEpoch = state.searchEpoch;
+    const showHidden = this.fileBrowserShowHidden === true;
+    const load = this.loadFileBrowser(ownerSessionId, { force: true });
+    const treeEpoch = state.treeEpoch;
+    if (!load?.then) return;
+    await load;
 
-    const treeEl = this.$('fileBrowserTree');
-    const statusEl = this.$('fileBrowserStatus');
-    this._syncFileBrowserHiddenBtn();
-    if (!treeEl) return;
-
-    // Show loading state
-    treeEl.innerHTML = '<div class="file-browser-loading">Loading files...</div>';
-
-    try {
-      const showHidden = this.fileBrowserShowHidden === true;
-      const res = await fetch(`/api/sessions/${sessionId}/files?depth=5&showHidden=${showHidden}`);
-      if (!res.ok) throw new Error('Failed to load files');
-
-      const result = await res.json();
-      if (!result.success) throw new Error(result.error || 'Failed to load files');
-
-      this.fileBrowserData = result.data;
-      this.renderFileBrowserTree();
-
-      // Update status
-      if (statusEl) {
-        const { totalFiles, totalDirectories, truncated } = result.data;
-        statusEl.textContent = `${totalFiles} files, ${totalDirectories} dirs${truncated ? ' (truncated)' : ''}${showHidden ? ' · hidden shown' : ''}`;
-      }
-    } catch (err) {
-      console.error('Failed to load file browser:', err);
-      treeEl.innerHTML = `<div class="file-browser-empty">Failed to load files: ${escapeHtml(err.message)}</div>`;
+    if (!query || query.length > 256) return;
+    const continuation = { ownerSessionId, showHidden, treeEpoch, searchEpoch, rawInput, query };
+    if (this._canContinueFileBrowserHiddenReload(continuation, state.normalState)) {
+      this.filterFileBrowser(rawInput);
     }
   },
 
-  renderFileBrowserTree() {
+  loadFileBrowser(sessionId, { force = false } = {}) {
+    if (!sessionId) return undefined;
+
+    const state = this._ensureFileBrowserState();
+    const treeEl = this.$('fileBrowserTree');
+    this._syncFileBrowserHiddenBtn();
+    if (!treeEl) return undefined;
+    if (!state.ownerSessionId) state.ownerSessionId = sessionId;
+    if (state.ownerSessionId !== sessionId) return undefined;
+
+    if (force) state.treeEpoch++;
+    const showHidden = this.fileBrowserShowHidden === true;
+    const treeEpoch = state.treeEpoch;
+    const inFlight = state.treeInFlight;
+    if (
+      !force &&
+      this._isFileBrowserNormalCompatible(inFlight, sessionId, showHidden, treeEpoch)
+    ) {
+      return inFlight.promise;
+    }
+
+    const settled = state.normalState;
+    if (
+      !force &&
+      this._isFileBrowserNormalCompatible(settled, sessionId, showHidden, treeEpoch) &&
+      (settled.phase === 'ready' || settled.phase === 'error')
+    ) {
+      if (settled.phase === 'ready') this.fileBrowserData = settled.data;
+      this._renderFileBrowserNormalState(settled);
+      return Promise.resolve(settled);
+    }
+
+    const loadingState = { sessionId, showHidden, treeEpoch, phase: 'loading' };
+    state.normalState = loadingState;
+    this.fileBrowserData = null;
+    this._renderFileBrowserNormalState(loadingState);
+
+    const record = { sessionId, showHidden, treeEpoch, promise: null };
+    const request = (async () => {
+      try {
+        const res = await fetch(
+          `/api/sessions/${encodeURIComponent(sessionId)}/files?depth=5&showHidden=${showHidden}`,
+        );
+        if (!res.ok) throw new Error('Failed to load files');
+        const result = await res.json();
+        const data = this._validateFileBrowserTreeEnvelope(result);
+        if (!data) {
+          const detail = result && typeof result === 'object' && typeof result.error === 'string'
+            ? result.error
+            : 'Failed to load files';
+          throw new Error(detail);
+        }
+        if (!this._isFileBrowserTreeContextCurrent(record, true)) return;
+
+        const nextNormalState = { sessionId, showHidden, treeEpoch, phase: 'ready', data };
+        state.normalState = nextNormalState;
+        this.fileBrowserData = data;
+        const deferredRendered = this._completeDeferredFileBrowserDirectory?.(nextNormalState) === true;
+        if (!deferredRendered) this._renderFileBrowserNormalState(nextNormalState);
+      } catch (error) {
+        if (!this._isFileBrowserTreeContextCurrent(record, true)) return;
+        const nextNormalState = {
+          sessionId,
+          showHidden,
+          treeEpoch,
+          phase: 'error',
+          error: this._normalizeFileBrowserTreeError(error),
+        };
+        state.normalState = nextNormalState;
+        this.fileBrowserData = null;
+        this._completeDeferredFileBrowserDirectory?.(nextNormalState);
+        console.error('Failed to load file browser:', error);
+        this._renderFileBrowserNormalState(nextNormalState);
+      }
+    })();
+    record.promise = request.finally(() => {
+      if (state.treeInFlight === record) state.treeInFlight = null;
+    });
+    state.treeInFlight = record;
+    return record.promise;
+  },
+
+  renderFileBrowserTree(ownerSessionId) {
     const treeEl = this.$('fileBrowserTree');
     if (!treeEl || !this.fileBrowserData) return;
+
+    const state = this._ensureFileBrowserState();
+    const owner = ownerSessionId || state.normalState?.sessionId || state.ownerSessionId || this.activeSessionId;
+    if (!owner) return;
 
     const { tree } = this.fileBrowserData;
     if (!tree || tree.length === 0) {
@@ -3035,21 +3404,10 @@ Object.assign(CodemanApp.prototype, {
     }
 
     const html = [];
-    const filter = this.fileBrowserFilter.toLowerCase();
 
     const renderNode = (node, depth) => {
       const isDir = node.type === 'directory';
       const isExpanded = this.fileBrowserExpandedDirs.has(node.path);
-      const matchesFilter = !filter || node.name.toLowerCase().includes(filter);
-
-      // For directories, check if any children match
-      let hasMatchingChildren = false;
-      if (isDir && filter && node.children) {
-        hasMatchingChildren = this.hasMatchingChild(node, filter);
-      }
-
-      const shouldShow = matchesFilter || hasMatchingChildren;
-      const hiddenClass = !shouldShow && filter ? ' hidden-by-filter' : '';
 
       const icon = isDir
         ? (isExpanded ? '\uD83D\uDCC2' : '\uD83D\uDCC1')
@@ -3066,11 +3424,11 @@ Object.assign(CodemanApp.prototype, {
       const nameClass = isDir ? 'file-tree-name directory' : 'file-tree-name';
 
       const downloadBtn = !isDir
-        ? `<a class="file-tree-download" href="/api/sessions/${this.activeSessionId}/file-raw?path=${encodeURIComponent(node.path)}&download=true" title="Download" onclick="event.stopPropagation()">&#x2B07;</a>`
+        ? `<a class="file-tree-download" href="${escapeHtml(`/api/sessions/${encodeURIComponent(owner)}/file-raw?path=${encodeURIComponent(node.path)}&download=true`)}" title="Download" onclick="event.stopPropagation()">&#x2B07;</a>`
         : '';
 
       html.push(`
-        <div class="file-tree-item${hiddenClass}" data-path="${escapeHtml(node.path)}" data-type="${node.type}" data-depth="${depth}">
+        <div class="file-tree-item" data-path="${escapeHtml(node.path)}" data-type="${escapeHtml(node.type)}" data-depth="${depth}">
           ${expandIcon}
           <span class="file-tree-icon">${icon}</span>
           <span class="${nameClass}">${escapeHtml(node.name)}</span>
@@ -3102,19 +3460,10 @@ Object.assign(CodemanApp.prototype, {
         if (type === 'directory') {
           this.toggleFileBrowserFolder(path);
         } else {
-          this.openFilePreview(path);
+          this.openFilePreview(path, owner);
         }
       });
     });
-  },
-
-  hasMatchingChild(node, filter) {
-    if (!node.children) return false;
-    for (const child of node.children) {
-      if (child.name.toLowerCase().includes(filter)) return true;
-      if (child.type === 'directory' && this.hasMatchingChild(child, filter)) return true;
-    }
-    return false;
   },
 
   toggleFileBrowserFolder(path) {
@@ -3127,12 +3476,291 @@ Object.assign(CodemanApp.prototype, {
   },
 
   filterFileBrowser(value) {
-    this.fileBrowserFilter = value;
-    // Auto-expand all if filtering
-    if (value) {
-      this.expandAllDirectories(this.fileBrowserData?.tree || []);
+    const state = this._ensureFileBrowserState();
+    const rawInput = String(value ?? '');
+    const query = rawInput.trim();
+    state.searchEpoch++;
+    state.filter = rawInput;
+    state.deferredDirectoryTarget = null;
+    this.fileBrowserFilter = rawInput;
+    this._syncFileBrowserExpandBtn();
+
+    if (state.inFlight?.timer !== undefined && state.inFlight?.timer !== null) {
+      clearTimeout(state.inFlight.timer);
     }
-    this.renderFileBrowserTree();
+    state.inFlight = null;
+
+    if (!state.ownerSessionId && this.activeSessionId) state.ownerSessionId = this.activeSessionId;
+    const ownerSessionId = state.ownerSessionId || null;
+    if (!this.activeSessionId || !ownerSessionId || this.activeSessionId !== ownerSessionId) return;
+    if (!query) {
+      state.view = 'normal';
+      state.matches = [];
+      this._syncFileBrowserExpandBtn();
+      const normal = state.normalState;
+      if (
+        ownerSessionId &&
+        this._isFileBrowserNormalCompatible(
+          normal,
+          ownerSessionId,
+          this.fileBrowserShowHidden === true,
+          state.treeEpoch,
+        )
+      ) {
+        this._renderFileBrowserNormalState(normal);
+      }
+      return;
+    }
+
+    if (query.length > 256) {
+      const message = 'Search queries are limited to 256 characters';
+      state.view = 'query-error';
+      state.matches = [];
+      this._syncFileBrowserExpandBtn();
+      const treeEl = this.$('fileBrowserTree');
+      const statusEl = this.$('fileBrowserStatus');
+      if (treeEl) treeEl.innerHTML = `<div class="file-browser-empty">${escapeHtml(message)}</div>`;
+      if (statusEl) statusEl.textContent = message;
+      return;
+    }
+
+    const panel = this.$('fileBrowserPanel');
+    const treeEl = this.$('fileBrowserTree');
+    if (!ownerSessionId || !panel || !treeEl) return;
+
+    const request = {
+      epoch: state.searchEpoch,
+      treeEpoch: state.treeEpoch,
+      ownerSessionId,
+      showHidden: this.fileBrowserShowHidden === true,
+      rawInput,
+      query,
+      timer: null,
+    };
+    state.view = 'search-pending';
+    state.matches = [];
+    state.inFlight = request;
+    this._syncFileBrowserExpandBtn();
+    treeEl.innerHTML = `<div class="file-browser-loading">${escapeHtml('Searching...')}</div>`;
+    const statusEl = this.$('fileBrowserStatus');
+    if (statusEl) statusEl.textContent = 'Searching...';
+
+    request.timer = setTimeout(async () => {
+      request.timer = null;
+      try {
+        const res = await fetch(
+          `/api/sessions/${encodeURIComponent(ownerSessionId)}/files?depth=5&showHidden=${request.showHidden}&q=${encodeURIComponent(query)}`,
+        );
+        if (!res.ok) throw new Error('Search failed');
+        const result = await res.json();
+        const data = this._validateFileBrowserSearchEnvelope(result);
+        if (!data) throw new Error('Search failed');
+        const canRender = this._canRenderFileBrowserSearch(request);
+        if (state.inFlight === request) state.inFlight = null;
+        if (!canRender) return;
+        state.view = 'search-results';
+        state.matches = data.matches;
+        this._renderFileBrowserSearchResults(data.matches, ownerSessionId, data);
+      } catch (err) {
+        const canRender = this._canRenderFileBrowserSearch(request);
+        if (state.inFlight === request) state.inFlight = null;
+        if (!canRender) return;
+        console.error('Failed to search file browser:', err);
+        state.view = 'search-error';
+        state.matches = [];
+        this._renderFileBrowserSearchError();
+      }
+    }, 250);
+  },
+
+  _renderFileBrowserSearchResults(matches, ownerSessionId, data) {
+    const treeEl = this.$('fileBrowserTree');
+    if (!treeEl || !ownerSessionId) return;
+    const state = this._ensureFileBrowserState();
+    const searchContext = {
+      ownerSessionId,
+      showHidden: this.fileBrowserShowHidden === true,
+      treeEpoch: state.treeEpoch,
+      searchEpoch: state.searchEpoch,
+      rawInput: state.filter,
+      query: state.filter.trim(),
+      view: state.view,
+    };
+    if (matches.length === 0) {
+      treeEl.innerHTML = `<div class="file-browser-empty">${escapeHtml('No matches')}</div>`;
+    } else {
+      const ownerPath = encodeURIComponent(ownerSessionId);
+      treeEl.innerHTML = matches
+        .map(match => {
+          const isDir = match.type === 'directory';
+          const icon = isDir ? '📁' : this.getFileIcon(match.extension || '');
+          const sizeStr = !isDir && match.size !== undefined
+            ? `<span class="file-tree-size">${this.formatFileSize(match.size)}</span>`
+            : '';
+          const nameClass = isDir ? 'file-tree-name directory' : 'file-tree-name';
+          const downloadBtn = !isDir
+            ? `<a class="file-tree-download" href="${escapeHtml(`/api/sessions/${ownerPath}/file-raw?path=${encodeURIComponent(match.path)}&download=true`)}" title="Download" onclick="event.stopPropagation()">&#x2B07;</a>`
+            : '';
+          return `
+            <div class="file-tree-item" data-path="${escapeHtml(match.path)}" data-type="${escapeHtml(match.type)}" data-owner="${escapeHtml(ownerSessionId)}">
+              <span class="file-tree-expand"></span>
+              <span class="file-tree-icon">${icon}</span>
+              <span class="${nameClass}">${escapeHtml(match.name)}</span>
+              ${sizeStr}
+              ${downloadBtn}
+            </div>
+          `;
+        })
+        .join('');
+    }
+
+    treeEl.querySelectorAll('.file-tree-item').forEach(item => {
+      item.addEventListener('click', () => {
+        const path = item.dataset.path;
+        if (item.dataset.type === 'directory') {
+          this._openFileBrowserSearchDirectory({ ...searchContext, path });
+        } else {
+          this.openFilePreview(path, ownerSessionId);
+        }
+      });
+    });
+
+    const statusEl = this.$('fileBrowserStatus');
+    if (statusEl) {
+      const count = data.matchCount === undefined ? matches.length : data.matchCount;
+      statusEl.textContent = `${count} ${count === 1 ? 'match' : 'matches'}${data.truncated ? ' (truncated)' : ''}`;
+    }
+  },
+
+  _findFileBrowserDirectory(nodes, targetPath, ancestors = []) {
+    if (!Array.isArray(nodes)) return null;
+    for (const node of nodes) {
+      if (!node || typeof node !== 'object') continue;
+      if (node.type === 'directory' && node.path === targetPath) {
+        return { target: node, ancestors: [...ancestors] };
+      }
+      if (node.type !== 'directory' || !Array.isArray(node.children)) continue;
+      const found = this._findFileBrowserDirectory(node.children, targetPath, [...ancestors, node.path]);
+      if (found) return found;
+    }
+    return null;
+  },
+
+  _isFileBrowserDirectoryContextCurrent(target) {
+    const state = this._ensureFileBrowserState();
+    const input = this.$?.('fileBrowserSearch');
+    const currentInput = typeof input?.value === 'string' ? input.value : state.filter;
+    return (
+      target &&
+      state.ownerSessionId === target.ownerSessionId &&
+      this.activeSessionId === target.ownerSessionId &&
+      state.treeEpoch === target.treeEpoch &&
+      state.searchEpoch === target.searchEpoch &&
+      (this.fileBrowserShowHidden === true) === target.showHidden &&
+      state.filter === target.rawInput &&
+      currentInput === target.rawInput &&
+      currentInput.trim() === target.query &&
+      state.view === target.view &&
+      this.$?.('fileBrowserPanel')?.classList.contains('visible') === true
+    );
+  },
+
+  _promptFileBrowserDirectoryReload() {
+    this.showToast?.('Reload files before opening this folder', 'info');
+  },
+
+  _openFileBrowserSearchDirectory(target) {
+    if (!this._isFileBrowserDirectoryContextCurrent(target)) return;
+    const state = this._ensureFileBrowserState();
+    const normalState = state.normalState;
+    if (
+      !this._isFileBrowserNormalCompatible(
+        normalState,
+        target.ownerSessionId,
+        target.showHidden,
+        target.treeEpoch,
+      )
+    ) {
+      state.deferredDirectoryTarget = null;
+      this._promptFileBrowserDirectoryReload();
+      return;
+    }
+
+    if (normalState.phase === 'loading') {
+      state.deferredDirectoryTarget = { ...target };
+      return;
+    }
+
+    state.deferredDirectoryTarget = null;
+    if (normalState.phase !== 'ready') {
+      this._promptFileBrowserDirectoryReload();
+      return;
+    }
+
+    const found = this._findFileBrowserDirectory(normalState.data?.tree, target.path);
+    if (!found) {
+      this._promptFileBrowserDirectoryReload();
+      return;
+    }
+    this._leaveFileBrowserSearchForDirectory([...found.ancestors, found.target.path], normalState);
+  },
+
+  _completeDeferredFileBrowserDirectory(normalState) {
+    const state = this._ensureFileBrowserState();
+    const target = state.deferredDirectoryTarget;
+    if (!target) return false;
+    if (!this._isFileBrowserDirectoryContextCurrent(target)) {
+      if (state.deferredDirectoryTarget === target) state.deferredDirectoryTarget = null;
+      return false;
+    }
+    if (
+      !this._isFileBrowserNormalCompatible(
+        normalState,
+        target.ownerSessionId,
+        target.showHidden,
+        target.treeEpoch,
+      ) ||
+      (normalState.phase !== 'ready' && normalState.phase !== 'error')
+    ) {
+      return false;
+    }
+
+    state.deferredDirectoryTarget = null;
+    if (normalState.phase === 'error') {
+      this._promptFileBrowserDirectoryReload();
+      return false;
+    }
+
+    const found = this._findFileBrowserDirectory(normalState.data?.tree, target.path);
+    if (!found) {
+      this._promptFileBrowserDirectoryReload();
+      return false;
+    }
+    this._leaveFileBrowserSearchForDirectory([...found.ancestors, found.target.path], normalState);
+    return true;
+  },
+
+  _leaveFileBrowserSearchForDirectory(paths, normalState) {
+    const state = this._ensureFileBrowserState();
+    if (state.inFlight?.timer !== undefined && state.inFlight?.timer !== null) {
+      clearTimeout(state.inFlight.timer);
+    }
+    state.searchEpoch++;
+    state.inFlight = null;
+    state.filter = '';
+    state.matches = [];
+    state.deferredDirectoryTarget = null;
+    state.view = 'normal';
+    this.fileBrowserFilter = '';
+
+    const input = this.$?.('fileBrowserSearch');
+    if (input) input.value = '';
+    this._syncFileBrowserExpandBtn();
+    for (const path of paths) {
+      if (typeof path === 'string') this.fileBrowserExpandedDirs?.add?.(path);
+    }
+    this.fileBrowserData = normalState.data;
+    this._renderFileBrowserNormalState(normalState);
   },
 
   expandAllDirectories(nodes) {
@@ -3151,6 +3779,10 @@ Object.assign(CodemanApp.prototype, {
   },
 
   toggleFileBrowserExpand() {
+    if (this._hasFileBrowserQuery()) {
+      this._syncFileBrowserExpandBtn();
+      return;
+    }
     this.fileBrowserAllExpanded = !this.fileBrowserAllExpanded;
     const btn = this.$('fileBrowserExpandBtn');
 
@@ -3165,14 +3797,28 @@ Object.assign(CodemanApp.prototype, {
   },
 
   refreshFileBrowser() {
-    if (this.activeSessionId) {
-      this.fileBrowserExpandedDirs.clear();
-      this.fileBrowserFilter = '';
-      this.fileBrowserAllExpanded = false;
-      const searchInput = this.$('fileBrowserSearch');
-      if (searchInput) searchInput.value = '';
-      this.loadFileBrowser(this.activeSessionId);
+    const state = this._ensureFileBrowserState();
+    if (state.inFlight?.timer !== undefined && state.inFlight?.timer !== null) {
+      clearTimeout(state.inFlight.timer);
     }
+    state.inFlight = null;
+    state.searchEpoch++;
+    state.filter = '';
+    state.matches = [];
+    state.deferredDirectoryTarget = null;
+    state.view = 'normal';
+    this.fileBrowserFilter = '';
+    this.fileBrowserExpandedDirs.clear();
+    this.fileBrowserAllExpanded = false;
+    const expandBtn = this.$('fileBrowserExpandBtn');
+    if (expandBtn) expandBtn.innerHTML = '\u229E';
+    const searchInput = this.$('fileBrowserSearch');
+    if (searchInput) searchInput.value = '';
+    this._syncFileBrowserExpandBtn();
+
+    const ownerSessionId = state.ownerSessionId || this.activeSessionId;
+    if (!ownerSessionId || this.activeSessionId !== ownerSessionId) return undefined;
+    return this.loadFileBrowser(ownerSessionId, { force: true });
   },
 
   // Header "File Viewer" button (opt-in via App Settings → Header Displays →
@@ -3203,6 +3849,7 @@ Object.assign(CodemanApp.prototype, {
 
   closeFileBrowserPanel() {
     const panel = this.$('fileBrowserPanel');
+    this._resetFileBrowserForHide();
     if (panel) {
       panel.classList.remove('visible');
       // Reset position so it reopens at default location

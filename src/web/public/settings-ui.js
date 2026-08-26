@@ -2901,7 +2901,8 @@ Object.assign(CodemanApp.prototype, {
             this.fileBrowserDragListeners._onFirstDrag = onFirstDrag;
           }
         }
-      } else {
+      } else if (fileBrowserPanel.classList.contains('visible')) {
+        this._resetFileBrowserForHide?.();
         fileBrowserPanel.classList.remove('visible');
       }
     }
