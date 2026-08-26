@@ -245,7 +245,11 @@ print_security_notice() {
             echo -e "  ${YELLOW}${BOLD}Security:${NC}"
             echo -e "    Codeman binds ${BOLD}127.0.0.1${NC} (this machine only) — no password needed by default."
             echo -e "    To reach it from another device, do ONE of:"
-            echo -e "      ${CYAN}•${NC} tailscale serve / cloudflared tunnel   ${DIM}(recommended)${NC}, or"
+            if check_tailscale; then
+                echo -e "      ${CYAN}•${NC} ${CYAN}bash $INSTALL_DIR/install.sh tailscale${NC}   ${DIM}(Tailscale is installed here; HTTPS, recommended)${NC}, or"
+            else
+                echo -e "      ${CYAN}•${NC} tailscale serve / cloudflared tunnel   ${DIM}(recommended)${NC}, or"
+            fi
             echo -e "      ${CYAN}•${NC} ${CYAN}codeman web --host 0.0.0.0${NC}  AND set ${CYAN}CODEMAN_PASSWORD${NC}"
             echo -e "    A non-loopback bind without a password still starts, but warns loudly."
             echo -e "    ${DIM}Details: docs/security-architecture.md${NC}"
@@ -1874,6 +1878,41 @@ setup_tailscale_access() {
     return 0
 }
 
+# A loopback install with Tailscale already connected but nothing fronting
+# Codeman is one command away from working remote access — and that is exactly
+# where a user lands when the first install died BEFORE the network-access
+# prompt (it runs after the build, so any build failure costs the network step
+# too) or when they finished a broken build by hand instead of re-running the
+# installer. Detect that state on re-run and offer the retrofit, rather than
+# leaving them to discover `install.sh tailscale` on their own. Never nags a
+# deliberate network bind, and never nags once a serve mapping already exists.
+maybe_offer_tailscale_repair() {
+    # A non-loopback bind already has network access; leave that choice alone.
+    if [[ "$EXISTING_FOUND" == "1" && -n "$EXISTING_HOST" && "$EXISTING_HOST" != "127.0.0.1" ]]; then
+        return 0
+    fi
+    check_tailscale || return 0
+    command -v node &>/dev/null || return 0
+    [[ "$(ts_status_field 's.BackendState')" == "Running" ]] || return 0
+    # Already fronting Codeman: nothing to repair.
+    [[ -z "$(detect_tailscale_serve_url)" ]] || return 0
+
+    echo ""
+    info "Tailscale is connected here, but no serve mapping fronts Codeman yet."
+    if [[ "$NONINTERACTIVE" == "1" ]] || ! has_tty; then
+        echo -e "  ${DIM}Enable HTTPS access from your tailnet with:${NC} ${CYAN}bash $INSTALL_DIR/install.sh tailscale${NC}"
+        return 0
+    fi
+    if ! prompt_yes_no "Set up Tailscale HTTPS access now? (your tailnet is the login; no password needed)" "y"; then
+        echo -e "  ${DIM}Any time later:${NC} ${CYAN}bash $INSTALL_DIR/install.sh tailscale${NC}"
+        return 0
+    fi
+    if setup_tailscale_access; then
+        verify_tailscale_access || true
+    fi
+    return 0
+}
+
 # `install.sh tailscale`: retrofit Tailscale access onto an existing install
 # (also the target of every "set it up later" hint above).
 setup_tailscale_subcommand() {
@@ -2786,6 +2825,10 @@ update() {
         BIND_PASSWORD="$EXISTING_PASSWORD"
         BIND_ACK="$EXISTING_ACK"
     fi
+
+    # An update is the only place a half-configured install gets a second
+    # chance at remote access; the fresh-install path asks outright.
+    maybe_offer_tailscale_repair
 
     print_security_notice
 }
