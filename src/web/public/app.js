@@ -679,12 +679,19 @@ class CodemanApp {
     // Terminal write batching with DEC 2026 sync support
     this.pendingWrites = [];
     this.writeFrameScheduled = false;
+    // xterm.write() parses asynchronously. Keep at most one live-output chunk
+    // inside xterm so its private WriteBuffer cannot bypass our 128KB cap.
+    this._terminalWriteInFlight = false;
+    this._terminalWriteInFlightBytes = 0;
     this._wasAtBottomBeforeWrite = true; // Default to true for sticky scroll
     this.syncWaitTimeout = null; // Timeout for incomplete sync blocks
     this._isLoadingBuffer = false; // true during chunkedTerminalWrite — blocks live SSE writes
     this._loadBufferQueue = null;  // queued SSE events during buffer load
     this._bufferLoadSeq = 0;
     this._bufferLoadOwner = null;
+    // Single-flight token for terminal buffer recovery. The identity check also
+    // lets a session switch invalidate an older fetch without blocking the new tab.
+    this._terminalRefreshOwner = null;
 
     // Flicker filter state (buffers output after screen clears)
     this.flickerFilterBuffer = '';
@@ -1606,7 +1613,15 @@ class CodemanApp {
       this._sseHandlerWrappers = new Map();
       for (const [event, method] of _SSE_HANDLER_MAP) {
         const fn = this[method];
+        const wsOwnsTerminal =
+          method === '_onSSETerminal' ||
+          method === '_onSSENeedsRefresh' ||
+          method === '_onSSEClearTerminal';
         this._sseHandlerWrappers.set(event, (e) => {
+          // While WS owns terminal I/O, the parallel SSE stream is redundant.
+          // Drop it before JSON.parse so a busy terminal cannot turn duplicate
+          // SSE traffic/backpressure into another expensive buffer replay.
+          if (wsOwnsTerminal && this._wsReady) return;
           try {
             fn.call(this, e.data ? JSON.parse(e.data) : {});
           } catch (err) {
@@ -1853,18 +1868,18 @@ class CodemanApp {
     if (this.sessions.size === 0) this.stopSystemStatsPolling();
   }
 
-  // SSE wrappers — skip terminal events when WebSocket is delivering for this session.
+  // SSE wrappers — skip terminal events while WebSocket owns active terminal I/O.
   // WS handler calls the underlying _onSession* methods directly.
   _onSSETerminal(data) {
-    if (this._wsReady && this._wsSessionId === data.id) return;
+    if (this._wsReady) return;
     this._onSessionTerminal(data);
   }
   _onSSENeedsRefresh(data) {
-    if (this._wsReady && this._wsSessionId === data?.id) return;
+    if (this._wsReady) return;
     this._onSessionNeedsRefresh(data);
   }
   _onSSEClearTerminal(data) {
-    if (this._wsReady && this._wsSessionId === data?.id) return;
+    if (this._wsReady) return;
     this._onSessionClearTerminal(data);
   }
 
@@ -1872,15 +1887,15 @@ class CodemanApp {
     if (data.id === this.activeSessionId) {
       if (data.data.length > 32768) _crashDiag.log(`TERMINAL: ${(data.data.length/1024).toFixed(0)}KB`);
 
-      // Hard cap: track total bytes queued in render buffers (pendingWrites +
-      // flickerFilterBuffer). When rAF is throttled (tab
-      // backgrounded, GPU busy), data accumulates with no flush, reaching
-      // 889KB+ and freezing Chrome for minutes. Drop data beyond 128KB and
-      // schedule a buffer reload to recover the display once the burst subsides.
+      // Hard cap all app-owned render queues plus the one xterm chunk currently
+      // parsing. Check the incoming frame too; otherwise a single large frame can
+      // jump over the cap. Dropped data is recovered from the canonical buffer.
       const queued = (this.pendingWrites?.reduce((s, w) => s + w.length, 0) || 0)
-        + (this.flickerFilterBuffer?.length || 0);
-      if (queued > 131072) { // 128KB — drop to prevent accumulation
-        // Schedule a self-recovery: reload the full terminal buffer once the
+        + (this.flickerFilterBuffer?.length || 0)
+        + (this._loadBufferQueue?.reduce((s, w) => s + w.length, 0) || 0)
+        + (this._terminalWriteInFlightBytes || 0);
+      if (queued + data.data.length > 131072) { // 128KB — drop to prevent accumulation
+        // Schedule a self-recovery once the
         // queue drains (debounced to avoid hammering the API during sustained bursts).
         if (!this._clientDropRecoveryTimer) {
           this._clientDropRecoveryTimer = setTimeout(() => {
@@ -2357,33 +2372,38 @@ class CodemanApp {
     }
   }
 
-  async _onSessionNeedsRefresh() {
+  async _onSessionNeedsRefresh(event = {}) {
     // Server sends this after SSE backpressure clears — terminal data was dropped,
     // so reload the buffer to recover from any display corruption.
-    if (!this.activeSessionId || !this.terminal) return;
+    const sessionId = this.activeSessionId;
+    if (event?.id && event.id !== sessionId) return;
+    if (!sessionId || !this.terminal) return;
     // Skip if buffer load already in progress — avoids competing clear+rewrite cycles
     if (this._isLoadingBuffer) return;
-    const sessionId = this.activeSessionId;
+    if (this._terminalRefreshOwner?.sessionId === sessionId) return;
+    const refreshOwner = { sessionId };
+    this._terminalRefreshOwner = refreshOwner;
     try {
-      // Recovery should restore the WHOLE picture, so ask for full history
-      // rather than a tail. Measured on a 900-line shell pane: the tail rewrite
-      // replaced an 869-row buffer with 158 rows, so every backpressure refresh
-      // silently destroyed most of the scrollback it was meant to repair.
-      //
-      // A repaint-mode pane is the opposite case (tmux keeps ~one frame for it),
-      // so the full capture can be SMALLER than what xterm already holds. Reuse
-      // the same downgrade guard as the scroll-to-top re-pull and fall back to
-      // the historical tail there, leaving that case exactly as it was.
-      let res = await fetch(`/api/sessions/${sessionId}/terminal?full=1`);
+      // A shell can retain a multi-megabyte/100k-line tmux history. Automatic
+      // recovery stays bounded just like normal shell selection; only the
+      // explicit "Load full history" action is allowed to pay for a full replay.
+      // TUI modes still recover the whole picture, with the downgrade guard for
+      // repaint-mode panes whose tmux capture can be smaller than xterm's buffer.
+      const useFullHistory = this.sessions.get(sessionId)?.mode !== 'shell';
+      let res = await fetch(
+        useFullHistory
+          ? `/api/sessions/${sessionId}/terminal?full=1`
+          : `/api/sessions/${sessionId}/terminal?tail=${TERMINAL_TAIL_SIZE}`
+      );
       let data = (await res.json())?.data ?? {};
-      if (data.terminalBuffer && this._replayWouldShrinkBuffer(data.terminalBuffer)) {
+      if (useFullHistory && data.terminalBuffer && this._replayWouldShrinkBuffer(data.terminalBuffer)) {
         res = await fetch(`/api/sessions/${sessionId}/terminal?tail=${TERMINAL_TAIL_SIZE}`);
         data = (await res.json())?.data ?? {};
       }
       // Bail on a tab switch mid-fetch: writing here would paint this session's
       // history into the terminal the user is now looking at. The window is two
       // fetches wide in the fallback case, so this guard is not optional.
-      if (this.activeSessionId !== sessionId) return;
+      if (this.activeSessionId !== sessionId || this._terminalRefreshOwner !== refreshOwner) return;
       if (data.terminalBuffer) {
         // This refresh is SERVER-triggered, so a user quietly reading scrollback
         // did not ask for it and must not be dragged to the bottom by it (#259).
@@ -2413,6 +2433,8 @@ class CodemanApp {
       }
     } catch (err) {
       console.error('needsRefresh reload failed:', err);
+    } finally {
+      if (this._terminalRefreshOwner === refreshOwner) this._terminalRefreshOwner = null;
     }
   }
 
@@ -3466,11 +3488,13 @@ class CodemanApp {
     this.flickerFilterActive = false;
     // Clear pending terminal writes
     this._clearTimer('syncWaitTimeout');
+    this._clearTimer('_clientDropRecoveryTimer');
     this.pendingWrites = [];
     this.writeFrameScheduled = false;
     this._isLoadingBuffer = false;
     this._loadBufferQueue = null;
     this._bufferLoadOwner = null;
+    this._terminalRefreshOwner = null;
     // Abort any in-flight chunkedTerminalWrite (SSE reconnect reloads buffers)
     this._chunkedWriteGen = (this._chunkedWriteGen || 0) + 1;
     // Preserve local echo overlay text across SSE reconnect — just hide until
@@ -5334,6 +5358,7 @@ class CodemanApp {
     this._tabCompletionBaseText = null;
     this._clearTimer('_tabCompletionFallback');
     this._clearTimer('_clientDropRecoveryTimer');
+    this._terminalRefreshOwner = null;
 
     // Clean up pending terminal writes to prevent old session data from appearing in new session
     this._clearTimer('syncWaitTimeout');
@@ -5654,6 +5679,7 @@ class CodemanApp {
       this.writeFrameScheduled = false;
       this._isLoadingBuffer = false;
       this._loadBufferQueue = null;
+      this._terminalRefreshOwner = null;
       this._chunkedWriteGen = (this._chunkedWriteGen || 0) + 1;
       this.activeSessionId = null;
     }

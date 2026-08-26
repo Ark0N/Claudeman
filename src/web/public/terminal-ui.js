@@ -3167,7 +3167,7 @@ Object.assign(CodemanApp.prototype, {
    * arrived, which looked like truncated responses and idle shell commands.
    */
   _scheduleTerminalWriteFlush() {
-    if (this.writeFrameScheduled || this.pendingWrites.length === 0) return;
+    if (this._terminalWriteInFlight || this.writeFrameScheduled || this.pendingWrites.length === 0) return;
     this.writeFrameScheduled = true;
     this._safeYield(() => {
       this.writeFrameScheduled = false;
@@ -3358,7 +3358,7 @@ Object.assign(CodemanApp.prototype, {
    * Strips markers and writes content atomically within a single frame.
    */
   flushPendingWrites() {
-    if (this.pendingWrites.length === 0 || !this.terminal) return;
+    if (this._terminalWriteInFlight || this.pendingWrites.length === 0 || !this.terminal) return;
 
     const _t0 = performance.now();
     // xterm.js 6.0+ natively handles DEC 2026 synchronized output markers.
@@ -3389,14 +3389,25 @@ Object.assign(CodemanApp.prototype, {
     const preserveViewportY =
       this.terminal.buffer?.active && !this.isTerminalAtBottom() ? this.terminal.buffer.active.viewportY : null;
 
-    if (_joinedLen <= MAX_FRAME_BYTES) {
-      this.terminal.write(joined);
-    } else {
-      // Write first chunk now, defer rest to next frame
-      this.terminal.write(joined.slice(0, MAX_FRAME_BYTES));
+    const writeChunk = joined.slice(0, MAX_FRAME_BYTES);
+    if (_joinedLen > MAX_FRAME_BYTES) {
+      // Keep the remainder app-side where the 128KB cap can see it. The next
+      // chunk is scheduled only after xterm confirms this one was parsed.
       this.pendingWrites.push(joined.slice(MAX_FRAME_BYTES));
       deferred = true;
-      this._scheduleTerminalWriteFlush();
+    }
+    this._terminalWriteInFlight = true;
+    this._terminalWriteInFlightBytes = writeChunk.length;
+    try {
+      this.terminal.write(writeChunk, () => {
+        this._terminalWriteInFlight = false;
+        this._terminalWriteInFlightBytes = 0;
+        this._scheduleTerminalWriteFlush();
+      });
+    } catch (err) {
+      this._terminalWriteInFlight = false;
+      this._terminalWriteInFlightBytes = 0;
+      throw err;
     }
     if (
       preserveViewportY !== null &&

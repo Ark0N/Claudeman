@@ -225,10 +225,11 @@ describe('OpenCode session initial resize', () => {
       await route.continue();
     });
 
-    // Dispatch the needsRefresh event directly on the EventSource
-    // (this is how the server sends SSE events — as named events)
+    // Exercise the SSE fallback path. While WebSocket owns terminal I/O these
+    // duplicate SSE terminal events are intentionally ignored.
     await page.evaluate((sid: string) => {
-      const app = (window as unknown as { app: { eventSource: EventSource } }).app;
+      const app = (window as unknown as { app: { eventSource: EventSource; _disconnectWs: () => void } }).app;
+      app._disconnectWs();
       if (app.eventSource) {
         const event = new MessageEvent('session:needsRefresh', {
           data: JSON.stringify({ id: sid }),
