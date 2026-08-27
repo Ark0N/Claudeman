@@ -1,5 +1,22 @@
 # aicodeman
 
+## 1.23.2
+
+### Patch Changes
+
+- Codex plan usage in the header chip, a visible inline rename in the session sidebar, and an installer that no longer loses Tailscale access on a re-run.
+
+  **Codex plan usage in the header chip** (#346): the plan-usage chip used to show Claude's 5-hour and weekly limits without saying they were Claude's, which stops being a detail the moment you run more than one CLI. It now renders one compact row per provider, Claude above Codex, each labelled and colour-coded by how much is used up. Claude's numbers still come from Codeman's marked `statusLine.command` exporter; Codex's come from the signed-in host CLI's read-only `account/rateLimits/read` app-server request at startup and every five minutes, so credentials stay inside the CLI and no auth material reaches the browser. Only the main `codex` bucket is read (model-specific buckets such as Spark are separate limits and are deliberately excluded), and the Codex row is omitted entirely when no 5-hour or weekly window is available, rather than inventing one.
+
+  **Inline rename is visible in the session sidebar** (#345): starting a rename on a sidebar row opened a focused input you could not see. The row's ellipsis clamp was still painting over the live editor, so text and caret went in blind. The sidebar now gets the same unclamped editor layout the vertical tab rail already had. Covered by a Chromium regression test that asserts the painted `overflow` and the input's measured width, not just the class name.
+
+  **install.sh keeps Tailscale access on a re-run**: a re-run whose build failed could drop a working Tailscale binding instead of preserving it. The installer now offers Tailscale setup again on re-run rather than losing it, and the README describes the three-way network-access prompt (Tailscale / LAN / local-only) as it actually behaves.
+
+  ### Thanks
+  - @JackStuart for #346
+  - @fibr for #345
+  - @tailong-wu for #342, whose analysis of the terminal refresh replay loop matched a fix that had landed on master a few hours earlier
+
 ## 1.23.1
 
 ### Patch Changes
