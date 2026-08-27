@@ -75,8 +75,9 @@ RUN curl -fsSL https://x.ai/cli/install.sh | bash \
 # profile itself is installed further down, into the `agent` HOME, because
 # Codeman deliberately does NOT seed `profiles/` from the host: it is a
 # per-profile node_modules tree, host-arch-specific and far too large to copy on
-# every container start.
-RUN npm install -g @deepseek-ai/dsh \
+# every container start. The harness delegates profile dependency management to
+# pnpm, so pnpm is a build dependency rather than optional runtime tooling.
+RUN npm install -g @deepseek-ai/dsh pnpm \
  && npm cache clean --force \
  && dsh --version
 
@@ -110,6 +111,10 @@ RUN useradd -g 0 -m -d /home/agent -s /bin/bash agent \
  && mkdir -p /home/agent/.npm /home/agent/.cache /home/agent/.config /home/agent/.codeman \
       /home/agent/.claude/projects /home/agent/.codex/sessions /home/agent/.pi/agent /home/agent/.grok \
       /home/agent/.dsh \
+ && DSH_HOME=/home/agent/.dsh HOME=/home/agent \
+      dsh plugin --profile dsh-tui install --ignore-scripts \
+ && printf '%s\n' '' 'allowBuilds:' '  "@google/genai": true' '  protobufjs: true' \
+      >> /home/agent/.dsh/profiles/dsh-tui/pnpm-workspace.yaml \
  && DSH_HOME=/home/agent/.dsh HOME=/home/agent \
       dsh plugin --profile dsh-tui add @deepseek-harness-tui/dsh-tui \
  && test -f /home/agent/.dsh/profiles/dsh-tui/package.json \
