@@ -42,6 +42,8 @@ codeman web
 
 The installer asks before every system change, and re-running the same line updates in place. Full details: [Quick Start - Installation](#quick-start---installation).
 
+Prefer Docker Compose? This repository includes a local-image Compose deployment: copy `docker/.env.example` to `docker/.env`, set `CODEMAN_PASSWORD`, then run `bash docker/Start-Codeman.sh` on Linux. See the [Docker deployment guide](docker/README.md) for direct Compose commands, storage, and networking options.
+
 - **One dashboard, seven CLIs** - run [Claude Code, OpenCode, Codex, Antigravity, Gemini, Pi, or Grok](#more-features) per session (plus plain shell), locally, [in Docker](#isolated-docker-sessions), or [over SSH](#remote-ssh-sessions)
 - **Truly phone-friendly** - a [touch-optimized terminal](#mobile-optimized-web-ui) with instant local echo, QR login, swipe navigation, and push notifications
 - **Runs while you sleep** - [idle detection + respawn cycling](#respawn-controller) and auto-resume when a subscription limit resets, for 24+ hour unattended runs

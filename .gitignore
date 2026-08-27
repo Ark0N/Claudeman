@@ -77,6 +77,9 @@ tmp/
 # added there). No trailing slash so it still matches the symlink, not just dirs.
 /public
 
+# Machine-specific Docker Compose handover notes
+/offload.md
+
 # Opt-in gesture overlay runtime assets: large MediaPipe wasm + model (~27 MB)
 # fetched at build/install by scripts/fetch-gesture-assets.mjs, kept out of git.
 # (The gesture bundle itself, gesture-codeman.js, IS tracked — built from

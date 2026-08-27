@@ -2994,9 +2994,9 @@ export function registerSessionRoutes(
 
       casePath = dockerCase.hostWorkspacePath; // a REAL host dir (bind-mounted into the container)
       docker = sessionDocker;
-      // Seed resume so a relaunch resumes the case's last conversation from the
-      // bind-mounted transcript (decision: resume-on-start default ON).
-      if (sessionDocker.resumeOnStart && dockerCase.lastClaudeSessionId) {
+      // Seed only Claude's resume id. Codex, Gemini, and the other CLIs have
+      // separate conversation stores and must never receive a Claude UUID.
+      if (mode === 'claude' && sessionDocker.resumeOnStart && dockerCase.lastClaudeSessionId) {
         dockerResumeId = dockerCase.lastClaudeSessionId;
       }
     } else {

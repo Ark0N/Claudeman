@@ -1,0 +1,65 @@
+name: codeman
+
+services:
+  codeman:
+    build:
+      context: ..
+      dockerfile: docker/server.Dockerfile
+      args:
+        CODEMAN_RUNTIME_USER: ${CODEMAN_RUNTIME_USER}
+        PGID: ${PGID:-1000}
+        PUID: ${PUID:-1000}
+    image: ${CODEMAN_IMAGE}
+    init: true
+    restart: unless-stopped
+    ports:
+      - "${CODEMAN_PORT}:${CODEMAN_PORT}"
+    environment:
+      CODEMAN_DOCKER_BRIDGE_HOOKS: ${CODEMAN_DOCKER_BRIDGE_HOOKS}
+      # Host-side equivalent of the runtime user's HOME. Docker case seed,
+      # credential and hook mounts are translated into the daemon namespace.
+      CODEMAN_DOCKER_HOST_HOME: ${CODEMAN_APPDATA_PATH}
+      CODEMAN_DOCKER_DISABLE_SWAP_LIMIT: ${CODEMAN_DOCKER_DISABLE_SWAP_LIMIT}
+      CODEMAN_CASES_PATH: ${CODEMAN_CASES_PATH}
+      CODEMAN_HOST: ${CODEMAN_HOST}
+      CODEMAN_PASSWORD: ${CODEMAN_PASSWORD}
+      CODEMAN_PORT: ${CODEMAN_PORT}
+      CODEMAN_USERNAME: ${CODEMAN_USERNAME}
+      GEMINI_API_KEY: ${GEMINI_API_KEY}
+      PGID: ${PGID:-1000}
+      PUID: ${PUID:-1000}
+      TZ: ${TZ}
+    group_add:
+      # Retain access to the host Docker socket without running as root.
+      - ${DOCKER_SOCKET_GID:-999}
+    volumes:
+      # Application data and CLI credentials persist on the configured host
+      # path, rather than in a Docker-managed volume.
+      - type: bind
+        source: ${CODEMAN_APPDATA_PATH}
+        target: /home/${CODEMAN_RUNTIME_USER}
+      # Docker cases are sibling containers on the host daemon. Their workspace
+      # must be visible to Codeman at the same absolute path used by that daemon.
+      - type: bind
+        source: ${CODEMAN_CASES_PATH}
+        target: ${CODEMAN_CASES_PATH}
+      # Codeman uses the host daemon to create isolated Docker cases. This is
+      # Docker-outside-of-Docker, not Docker-in-Docker.
+      - type: bind
+        source: ${DOCKER_SOCKET}
+        target: /var/run/docker.sock
+    extra_hosts:
+      - "host.docker.internal:host-gateway"
+    security_opt:
+      - no-new-privileges:true
+    cap_drop:
+      - ALL
+    healthcheck:
+      test:
+        - CMD-SHELL
+        - >-
+          node -e "fetch('http://127.0.0.1:${CODEMAN_PORT}/api/status').then((response) => process.exit(response.status < 500 ? 0 : 1)).catch(() => process.exit(1))"
+      interval: 30s
+      timeout: 5s
+      retries: 3
+      start_period: 30s

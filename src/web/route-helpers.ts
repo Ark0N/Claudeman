@@ -26,7 +26,9 @@ import { SYNTHETIC_ADMIN, findUser } from '../user-store.js';
 
 // Shared path constants used across route modules. CASES_DIR (project folders)
 // stays shared across instances; SETTINGS_PATH is per-instance runtime state.
-export const CASES_DIR = join(homedir(), 'codeman-cases');
+// Docker Compose deployments set CODEMAN_CASES_PATH to a host-absolute bind
+// mount so Docker cases can share the same workspace path with the host daemon.
+export const CASES_DIR = process.env.CODEMAN_CASES_PATH || join(homedir(), 'codeman-cases');
 export const SETTINGS_PATH = dataPath('settings.json');
 
 /**

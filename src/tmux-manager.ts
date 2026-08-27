@@ -74,6 +74,7 @@ import {
   hostGatewayAlias,
   resolveDockerClaudeArtifacts,
   resolveDockerCredentialArtifacts,
+  resolveDockerDaemonMountSource,
   type DockerCreateContext,
   type DockerMount,
   type DockerSeedCopy,
@@ -1319,8 +1320,23 @@ export function buildDockerLaunchCommand(opts: DockerLaunchOptions): string {
   const startFailMsg = shellescape(`Codeman: container ${docker.containerName} failed to start (docker daemon down?)`);
 
   const imageCheck = `${base} image inspect ${image} >/dev/null 2>&1 || { echo ${imageMissingMsg}; exit 1; }`;
-  // create-if-missing (idempotent): reconnect / boot recovery re-runs this exact chain.
-  const ensure = `${base} inspect ${name} >/dev/null 2>&1 || ${base} ${createArgs}`;
+  // create-if-missing (idempotent): reconnect / boot recovery re-runs this exact
+  // chain. A daemon without swap accounting warns whenever --memory is present,
+  // even when --memory-swap is omitted. In compatibility mode, retain the memory
+  // cap and filter ONLY that exact warning; all other stdout/stderr and the real
+  // create exit status are preserved so mount/config failures remain visible.
+  // A session-unique file avoids shell variables and command substitution, both
+  // of which would be expanded too early by the nested bash/tmux launch layers.
+  const createOutputPath = shellescape(`/tmp/codeman-create-${sessionId}.log`);
+  const filteredCreateOutput = `sed '/^WARNING: Your kernel does not support swap limit capabilities or the cgroup is not mounted\\. Memory limited without swap\\.$/d' ${createOutputPath}`;
+  const removeCreateOutput = `rm -f ${createOutputPath}`;
+  const createCommand = createContext.disableSwapLimit
+    ? `{ if ${base} ${createArgs} >${createOutputPath} 2>&1; ` +
+      `then ${filteredCreateOutput}; ${removeCreateOutput}; ` +
+      `elif ${base} inspect ${name} >/dev/null 2>&1; then ${removeCreateOutput}; ` +
+      `else ${filteredCreateOutput} >&2; ${removeCreateOutput}; false; fi; }`
+    : `${base} ${createArgs}`;
+  const ensure = `${base} inspect ${name} >/dev/null 2>&1 || ${createCommand}`;
   const start = `${base} start ${name} >/dev/null 2>&1 || { echo ${startFailMsg}; exit 1; }`;
   // Seed writable credential config from read-only host mounts ONCE per container
   // (guarded by [ -e ] so reconnects never clobber in-container config; `cp -a` for
@@ -1431,11 +1447,18 @@ export function resolveDockerLaunchOptions(
     sessionId,
     instance: CODEMAN_INSTANCE,
     userArgs,
-    credentialMounts,
-    extraMounts,
+    credentialMounts: credentialMounts.map((mount) => ({
+      ...mount,
+      src: resolveDockerDaemonMountSource(mount.src, home, process.env.CODEMAN_DOCKER_HOST_HOME),
+    })),
+    extraMounts: extraMounts.map((mount) => ({
+      ...mount,
+      src: resolveDockerDaemonMountSource(mount.src, home, process.env.CODEMAN_DOCKER_HOST_HOME),
+    })),
     envCreate,
     addHostGateway: !isDesktop,
     gatewayAlias,
+    disableSwapLimit: process.env.CODEMAN_DOCKER_DISABLE_SWAP_LIMIT === '1',
   };
 
   const execEnv: Record<string, string> = {

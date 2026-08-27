@@ -1,0 +1,13 @@
+.git
+.agents
+.claude
+.codex
+.env
+offload.md
+node_modules
+dist
+coverage
+out
+test-results
+tmp
+*.log
