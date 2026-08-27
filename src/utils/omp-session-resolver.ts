@@ -17,17 +17,30 @@
 
 import { readdirSync, statSync } from 'node:fs';
 import { homedir } from 'node:os';
-import { join } from 'node:path';
+import { join, sep } from 'node:path';
 
 /** A real OMP session file is `<ISO-ish-timestamp>_<uuid>.jsonl`; only the uuid matters here. */
 const OMP_SESSION_FILE_PATTERN = /^.+_([a-zA-Z0-9-]+)\.jsonl$/;
 
 /**
- * Mirrors `omp`'s own directory mangling: every path separator becomes a
- * dash. Pure so it's unit-testable without touching the filesystem.
+ * Mirrors `omp`'s own directory mangling. Confirmed empirically against real
+ * `~/.omp/agent/sessions/` directory names (2026-08-27): unlike Claude Code's
+ * `~/.claude/projects/*`, which keeps the home prefix (`-home-user-dev-foo`),
+ * omp collapses a home-relative workingDir to its home-relative remainder
+ * FIRST (`/home/user/dev/foo` -> `/dev/foo`) and only then dash-replaces
+ * (`-dev-foo`) — a path outside $HOME (e.g. `/tmp/...`) is dash-replaced as-is.
+ * Getting this wrong doesn't error, it just silently returns an empty
+ * directory listing: findLatestOmpSessionId() below then always falls through
+ * to null, so continuation pinning quietly degrades to omp's own ambiguous
+ * `--continue` for every case under $HOME (i.e. virtually all real Codeman
+ * cases) while appearing to work in `/tmp`-based manual testing.
+ * Pure so it's unit-testable without touching the filesystem.
  */
 export function mangleOmpWorkingDir(workingDir: string): string {
-  return workingDir.replace(/\//g, '-');
+  const home = homedir();
+  const relative =
+    workingDir === home || workingDir.startsWith(home + sep) ? workingDir.slice(home.length) : workingDir;
+  return relative.replace(/\//g, '-');
 }
 
 /** `~/.omp` — no known env override exists (unlike DSH_HOME); revisit if omp adds one. */

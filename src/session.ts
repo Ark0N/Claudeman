@@ -2075,7 +2075,12 @@ export class Session extends EventEmitter {
     }
 
     // Set claudeSessionId — when resuming, the Claude conversation ID is the resumed one.
-    this._claudeSessionId = this._resumeSessionId || this.id;
+    // Mirrors the mux branch above and must not clobber it: this line runs
+    // unconditionally after both the mux and direct-PTY paths, so it also needs
+    // the ompConfig fallback or it stomps the mux branch's correctly-resolved
+    // OMP alias back to this.id on every mux/plain-reattach boot recovery
+    // (the "third reset point" — see DECISIONS.md).
+    this._claudeSessionId = this._resumeSessionId || this._ompConfig?.resumeSessionId || this.id;
 
     this._pid = this.ptyProcess.pid;
     console.log('[Session] Interactive PTY spawned with PID:', this._pid);
