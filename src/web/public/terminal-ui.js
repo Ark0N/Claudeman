@@ -2193,7 +2193,7 @@ Object.assign(CodemanApp.prototype, {
           if (isLive && this.sessions.has(s.sessionId)) {
             this.selectSession(s.sessionId);
           } else {
-            this.resumeHistorySession(s.claudeSessionId || s.sessionId, s.workingDir || '', s.name);
+            this.resumeHistorySession(s.claudeSessionId || s.sessionId, s.workingDir || '', s.name, s.mode);
           }
         })
     );
@@ -2436,7 +2436,7 @@ Object.assign(CodemanApp.prototype, {
         } else {
           // Resume by the Claude conversation UUID when present (resumed sessions
           // carry theirs separately from their Codeman id).
-          this.resumeHistorySession(s.claudeSessionId || s.sessionId, s.workingDir || '', s.name);
+          this.resumeHistorySession(s.claudeSessionId || s.sessionId, s.workingDir || '', s.name, s.mode);
         }
         this.closeSessionManager?.();
         closeMenu();
@@ -2904,7 +2904,7 @@ Object.assign(CodemanApp.prototype, {
     return `w${startNumber}-${dirName}`;
   },
 
-  async resumeHistorySession(sessionId, workingDir, existingName) {
+  async resumeHistorySession(sessionId, workingDir, existingName, mode) {
     // Close the run mode menu if open
     document.getElementById('runModeMenu')?.classList.remove('active');
     // Close folder history modal if open
@@ -2925,13 +2925,38 @@ Object.assign(CodemanApp.prototype, {
       const globalSettings = this.loadAppSettingsFromStorage();
       const envOverrides = this.buildEnvOverrides(this.getCaseSettings(caseName), globalSettings);
       const effort = this.getEffortSetting(globalSettings);
+      // `resumeSessionId` is a Claude conversation UUID (server reads it from
+      // ~/.claude/projects); an external-CLI row has no such thing, so sending
+      // it there gets silently ignored while the OMITTED `mode` field defaults
+      // the create to plain claude — reproducing whatever conversation THAT
+      // uuid happens to collide with instead of the row's own backend. Row mode
+      // wins here. Codeman has no cross-restart PTY-reattach outside server
+      // boot, so "resume" for a non-claude row means relaunching the CLI's own
+      // continue-most-recent flag (opencode/pi/grok/omp --continue, deepseek
+      // resumeSession) in the same directory — real conversation continuity,
+      // just not the literal old process.
+      const effectiveMode = mode || 'claude';
+      const modeConfigKey = {
+        opencode: 'openCodeConfig',
+        pi: 'piConfig',
+        grok: 'grokConfig',
+        omp: 'ompConfig',
+      }[effectiveMode];
+      const modeConfig =
+        modeConfigKey
+          ? { [modeConfigKey]: { continueSession: true } }
+          : effectiveMode === 'deepseek'
+            ? { deepSeekConfig: { resumeSession: true } }
+            : {};
       const createRes = await fetch('/api/sessions', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({
           workingDir,
           name,
-          resumeSessionId: sessionId,
+          mode: effectiveMode,
+          ...(effectiveMode === 'claude' ? { resumeSessionId: sessionId } : {}),
+          ...modeConfig,
           ...(Object.keys(envOverrides).length > 0 ? { envOverrides } : {}),
           ...(effort ? { effort } : {}),
         }),

@@ -361,6 +361,7 @@ const OmpConfigSchema = z
       .max(100)
       .regex(/^[a-zA-Z0-9._-]+$/)
       .optional(),
+    continueSession: z.boolean().optional(),
   })
   .optional();
 

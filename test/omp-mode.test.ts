@@ -85,6 +85,26 @@ describe('OMP spawn command', () => {
     ).toBe('omp');
   });
 
+  it('continues the most recent session when no explicit resume id is given', () => {
+    expect(
+      buildSpawnCommand({
+        mode: 'omp',
+        sessionId: 'abc12345',
+        ompConfig: { continueSession: true },
+      })
+    ).toBe('omp --continue');
+  });
+
+  it('prefers an explicit --resume id over --continue', () => {
+    expect(
+      buildSpawnCommand({
+        mode: 'omp',
+        sessionId: 'abc12345',
+        ompConfig: { resumeSessionId: 'session-99', continueSession: true },
+      })
+    ).toBe('omp --resume session-99');
+  });
+
   it('drops unsafe model strings from the spawn command', () => {
     expect(
       buildSpawnCommand({

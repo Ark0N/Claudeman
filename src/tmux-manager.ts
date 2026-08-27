@@ -914,9 +914,14 @@ function buildOmpCommand(config?: OmpConfig): string {
     if (safeModel) parts.push('--model', safeModel);
   }
 
-  if (config?.resumeSessionId) {
-    const safeId = /^[a-zA-Z0-9._-]+$/.test(config.resumeSessionId) ? config.resumeSessionId : undefined;
-    if (safeId) parts.push('--resume', safeId);
+  // --resume and --continue conflict; a valid explicit session id wins,
+  // mirroring the sibling builders (grok/pi/opencode).
+  const safeId =
+    config?.resumeSessionId && /^[a-zA-Z0-9._-]+$/.test(config.resumeSessionId) ? config.resumeSessionId : undefined;
+  if (safeId) {
+    parts.push('--resume', safeId);
+  } else if (config?.continueSession) {
+    parts.push('--continue');
   }
 
   return parts.join(' ');

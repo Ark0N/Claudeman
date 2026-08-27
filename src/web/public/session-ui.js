@@ -692,7 +692,7 @@ Object.assign(CodemanApp.prototype, {
         btn.append(...parts);
         btn.addEventListener('click', (e) => {
           e.stopPropagation();
-          this.resumeHistorySession(s.sessionId, s.workingDir, s.name);
+          this.resumeHistorySession(s.sessionId, s.workingDir, s.name, s.mode);
         });
         container.appendChild(btn);
       }

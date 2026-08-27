@@ -350,6 +350,8 @@ export interface OmpConfig {
   model?: string;
   /** Resume a previous conversation (passed via --resume). */
   resumeSessionId?: string;
+  /** Continue the most recent session in this directory (passed via --continue). */
+  continueSession?: boolean;
 }
 
 /**

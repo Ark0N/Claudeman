@@ -670,7 +670,7 @@ Object.assign(CodemanApp.prototype, {
             } else if (record.workingDir) {
               // History rows are keyed by the Claude conversation UUID; resumed
               // sessions carry theirs separately as claudeSessionId.
-              void this.resumeHistorySession(s.claudeSessionId || s.sessionId, record.workingDir);
+              void this.resumeHistorySession(s.claudeSessionId || s.sessionId, record.workingDir, undefined, s.mode);
             }
           },
         });
