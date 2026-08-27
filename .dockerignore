@@ -3,7 +3,6 @@
 .claude
 .codex
 .env
-offload.md
 node_modules
 dist
 coverage
