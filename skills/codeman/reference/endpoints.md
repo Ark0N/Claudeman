@@ -351,8 +351,8 @@ the mode yourself: `GET /api/v1/claude/status`, `GET /api/v1/opencode/status`,
 Pi's, grok's and OMP's also carry `.data.version`, because `pi` is a short generic name,
 `grok` is a name with npm squatters, and `omp` is a similarly short name, so an unrelated
 binary on `$PATH` can shadow any of them: the resolver rejects one whose `--version` is
-not version-shaped, so `available:false` there can mean "a different `pi`/`grok`/`omp` is
-in front" rather than "nothing is installed". `shell` has no CLI to probe.
+not version-shaped, so `available:false` there can mean "a different program of the same
+name is in front" rather than "nothing is installed". `shell` has no CLI to probe.
 
 ⚠️ **Branch on `.success` before reading `.data.sessionId`.** On any failure the field
 is absent, `jq -r` prints the literal string `null`, and every later call then targets
