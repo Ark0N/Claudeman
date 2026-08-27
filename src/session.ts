@@ -1630,7 +1630,13 @@ export class Session extends EventEmitter {
       piConfig: this._piConfig,
       grokConfig: this._grokConfig,
       deepSeekConfig: this._deepSeekConfig,
-      ompConfig: this._ompConfig,
+      // Respawning a dead pane means the CLI process exited (crash, idle
+      // respawn, or the user's own /exit) but this is still the same
+      // conversation from the user's perspective — unlike a brand-new
+      // `createSession` call, defaulting to --continue here is the honest
+      // behavior. Only when the session has no resume id of its own already
+      // (an explicit resumeSessionId always wins in buildOmpCommand).
+      ompConfig: this._ompConfig?.resumeSessionId ? this._ompConfig : { ...this._ompConfig, continueSession: true },
       resumeSessionId: this._resumeSessionId,
       envOverrides: this._envOverrides,
       effort: this._effort,
