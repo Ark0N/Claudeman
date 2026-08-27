@@ -449,7 +449,7 @@ export const CreateSessionSchema = z.object({
   effort: effortLevelSchema,
   /** Model override to write to .claude/settings.local.json (e.g., "opus[1m]"). Empty string clears. */
   modelOverride: z.string().max(50).optional(),
-  /** Inject the plan-usage statusLine exporter into the case (App Settings → Display → "Plan Usage Limits"). Claude-only. */
+  /** Inject the Claude statusLine source for the shared plan-usage chip. Claude sessions only; Codex is host-polled. */
   statusLineTelemetry: z.boolean().optional(),
   openCodeConfig: OpenCodeConfigSchema,
   codexConfig: CodexConfigSchema,

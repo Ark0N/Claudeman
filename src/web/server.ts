@@ -143,7 +143,9 @@ import { MAX_CONCURRENT_SESSIONS, MAX_SSE_CLIENTS } from '../config/map-limits.j
 import { MAX_PASTE_IMAGE_BYTES } from '../config/buffer-limits.js';
 import { resolveTerminalHistoryConfig } from '../config/terminal-history.js';
 import { SseEvent } from './sse-events.js';
-import { getLatestPlanUsage } from './plan-usage-latest.js';
+import { getLatestPlanUsage, setLatestCodexPlanUsage } from './plan-usage-latest.js';
+import { telemetrySignature } from '../usage-telemetry.js';
+import { readCodexPlanUsage, resolveCodexBinaryPath } from '../utils/codex-cli-resolver.js';
 import type { ScheduledRun } from './ports/index.js';
 import { registerAuthMiddleware, registerSecurityHeaders, registerHostGuard } from './middleware/auth.js';
 import { isMultiUserMode } from '../config/multiuser.js';
@@ -186,6 +188,7 @@ const __dirname = dirname(fileURLToPath(import.meta.url));
 // Length range covers crypto.randomUUID() (36 chars) plus any short stable IDs,
 // while capping growth of `sseClientsById` and blocking pathological inputs.
 const SSE_CLIENT_ID_RE = /^[A-Za-z0-9_-]{8,64}$/;
+const CODEX_USAGE_POLL_INTERVAL_MS = 5 * 60_000;
 
 function escapeHtmlText(value: string): string {
   return value.replaceAll('&', '&amp;').replaceAll('<', '&lt;').replaceAll('>', '&gt;');
@@ -268,6 +271,8 @@ export class WebServer extends EventEmitter {
   private cachedSessionsList: { data: unknown[]; timestamp: number } | null = null;
   // Token recording for daily stats (track what's been recorded to avoid double-counting)
   private lastRecordedTokens: Map<string, { input: number; output: number }> = new Map();
+  private codexUsageRefreshInFlight = false;
+  private lastCodexUsageSignature: string | null = null;
   // Server startup time for respawn grace period calculation
   private readonly serverStartTime: number = Date.now();
   // Pending respawn start timers (for cleanup on shutdown)
@@ -2394,6 +2399,23 @@ export class WebServer extends EventEmitter {
     }
   }
 
+  private async refreshCodexPlanUsage(): Promise<void> {
+    if (this.codexUsageRefreshInFlight) return;
+    this.codexUsageRefreshInFlight = true;
+    try {
+      const binaryPath = resolveCodexBinaryPath();
+      const usage = binaryPath ? await readCodexPlanUsage(binaryPath, APP_VERSION) : null;
+      const signature = usage ? telemetrySignature(usage) : '';
+      if (signature === this.lastCodexUsageSignature) return;
+      this.lastCodexUsageSignature = signature;
+      const snapshot = setLatestCodexPlanUsage(usage);
+      this.cachedLightState = null;
+      this.broadcast(SseEvent.SessionStatusTelemetry, snapshot);
+    } finally {
+      this.codexUsageRefreshInFlight = false;
+    }
+  }
+
   async start(): Promise<void> {
     // Multi-user first boot: create the initial admin from CODEMAN_USERNAME/PASSWORD
     // if there are no users yet, else refuse to start (there would be no way in).
@@ -2530,6 +2552,15 @@ export class WebServer extends EventEmitter {
     // Ensure the COD-54 hook secret exists on disk before any session exports
     // $CODEMAN_HOOK_SECRET_FILE — hook curls cat that path at execution time.
     getHookSecret();
+
+    // Main Codex subscription limits come from the signed-in local CLI. Keep
+    // this read-only and host-scoped; multi-user SSE routing makes it admin-only.
+    if (!this.testMode) {
+      void this.refreshCodexPlanUsage();
+      this.cleanup.setInterval(() => void this.refreshCodexPlanUsage(), CODEX_USAGE_POLL_INTERVAL_MS, {
+        description: 'Codex plan-usage refresh',
+      });
+    }
 
     // Start scheduled runs cleanup timer
     this.cleanup.setInterval(

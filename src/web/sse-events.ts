@@ -116,7 +116,7 @@ export const SessionMessage = 'session:message' as const;
 export const SessionInteractive = 'session:interactive' as const;
 /** Prompt sent to session for execution. */
 export const SessionRunning = 'session:running' as const;
-/** Claude plan-usage telemetry (5-hour + weekly limits) parsed from the statusline. */
+/** Combined Claude and main Codex plan-usage telemetry for the shared header chip. */
 export const SessionStatusTelemetry = 'session:statusTelemetry' as const;
 
 // ─── Session: Ralph ──────────────────────────────────────────────────────────

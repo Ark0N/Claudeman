@@ -2597,8 +2597,8 @@ class CodemanApp {
     }
   }
 
-  // Claude plan usage limits (5-hour + weekly) — account-global, so the latest
-  // sample from any session drives the shared header chip.
+  // Claude + Codex plan usage limits — account-global, so the latest sample
+  // drives the shared header chip.
   _onSessionStatusTelemetry(data) {
     this.updatePlanUsageChip(data);
     // Persist last-known so the chip shows immediately on the next page load /
@@ -2625,9 +2625,6 @@ class CodemanApp {
     const chip = document.getElementById('planUsageChip');
     if (!chip || !data) return;
     const pct = (w) => (w && typeof w.usedPercentage === 'number' ? Math.round(w.usedPercentage) : null);
-    const five = pct(data.fiveHour);
-    const seven = pct(data.sevenDay);
-    if (five === null && seven === null) return;
     // Per-window color by how much is used up: green < 60%, yellow 60–84%, red ≥ 85%.
     const colorClass = (p) => (p >= 85 ? 'pu-red' : p >= 60 ? 'pu-yellow' : 'pu-green');
     // innerHTML here is XSS-safe ONLY because every interpolated value is a
@@ -2641,12 +2638,23 @@ class CodemanApp {
       if (!Number.isFinite(n)) return '';
       return `<span class="pu-win"><span class="pu-label">${label}</span><span class="pu-val ${colorClass(n)}">${n}%</span></span>`;
     };
-    chip.innerHTML = [seg('5h', five), seg('7d', seven)].filter(Boolean).join('<span class="pu-sep">·</span>');
+    const row = (provider, usage) => {
+      const windows = [seg('5h', pct(usage?.fiveHour)), seg('7d', pct(usage?.sevenDay))].filter(Boolean);
+      if (!windows.length) return '';
+      return `<span class="pu-row"><span class="pu-provider">${provider}</span><span class="pu-windows">${windows.join('<span class="pu-sep">·</span>')}</span></span>`;
+    };
+    const rows = [row('Claude', data), row('Codex', data.codex)].filter(Boolean);
+    chip.innerHTML = rows.length ? rows.join('') : '—';
     const resetStr = (w) => (w && w.resetAt ? new Date(w.resetAt).toLocaleString() : '—');
-    chip.title =
-      `Claude plan usage\n` +
-      `5-hour limit: ${five ?? '—'}% used (resets ${resetStr(data.fiveHour)})\n` +
-      `Weekly limit: ${seven ?? '—'}% used (resets ${resetStr(data.sevenDay)})`;
+    const details = (provider, usage) => {
+      const lines = [];
+      const five = pct(usage?.fiveHour);
+      const seven = pct(usage?.sevenDay);
+      if (five !== null) lines.push(`5-hour limit: ${five}% used (resets ${resetStr(usage.fiveHour)})`);
+      if (seven !== null) lines.push(`Weekly limit: ${seven}% used (resets ${resetStr(usage.sevenDay)})`);
+      return lines.length ? `${provider} plan usage\n${lines.join('\n')}` : '';
+    };
+    chip.title = [details('Claude', data), details('Codex', data.codex)].filter(Boolean).join('\n\n') || 'Plan usage limits';
   }
 
   // Scheduled runs

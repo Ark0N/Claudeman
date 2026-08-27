@@ -1,10 +1,11 @@
 /**
  * @fileoverview Process-wide last-known plan-usage telemetry (account-global).
  *
- * The status-telemetry route writes the latest broadcast value here; the SSE
- * init snapshot (`getLightState`) replays it so the header "Plan Usage Limits"
- * chip shows immediately on a fresh page load / SSE reconnect — before any new
- * statusline render arrives, and without relying on per-browser localStorage.
+ * The Claude status-telemetry route and host Codex poll merge their latest
+ * values here. The SSE init snapshot (`getLightState`) replays the combined
+ * value so the header "Plan Usage Limits" chip shows immediately on a fresh
+ * page load / SSE reconnect — before either source emits another sample, and
+ * without relying on per-browser localStorage.
  *
  * Null until the first telemetry of the process; cleared naturally on restart.
  *
@@ -13,8 +14,15 @@
 
 let latest: Record<string, unknown> | null = null;
 
-export function setLatestPlanUsage(value: Record<string, unknown>): void {
-  latest = value;
+export function setLatestPlanUsage(value: Record<string, unknown>): Record<string, unknown> {
+  const codex = latest?.codex;
+  latest = { ...value, ...(codex !== undefined ? { codex } : {}) };
+  return latest;
+}
+
+export function setLatestCodexPlanUsage(value: object | null): Record<string, unknown> {
+  latest = { ...(latest ?? {}), codex: value };
+  return latest;
 }
 
 export function getLatestPlanUsage(): Record<string, unknown> | null {

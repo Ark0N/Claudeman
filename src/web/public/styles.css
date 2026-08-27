@@ -12372,17 +12372,20 @@ kbd {
 }
 
 /* Plan-usage chip (App Settings → Display → "Plan Usage Limits"). Shows the
-   live 5-hour + weekly plan limits parsed from the Claude statusline. Ships
+   live Claude and Codex plan limits in provider rows. Ships
    hidden via the marker class below because display is PER-DEVICE and the
    server cannot read localStorage; settings-ui.js reveals it on load (desktop
    default ON, handhelds OFF) and on a live toggle. */
 .header-plan-usage {
   display: inline-flex !important;
-  align-items: center;
-  height: 22px;
-  padding: 0 0.5rem;
-  border-radius: 11px;
+  flex-direction: column;
+  align-items: stretch;
+  justify-content: center;
+  min-height: 22px;
+  padding: 3px 0.5rem;
+  border-radius: 8px;
   font-size: 0.7rem;
+  line-height: 1.1;
   font-weight: 500;
   font-family: 'SF Mono', Monaco, monospace;
   color: var(--text-dim);
@@ -12390,6 +12393,23 @@ kbd {
   border: 1px solid rgba(255, 255, 255, 0.08);
   white-space: nowrap;
   cursor: default;
+}
+.header-plan-usage .pu-row {
+  display: flex;
+  align-items: baseline;
+}
+.header-plan-usage .pu-provider {
+  width: 46px;
+  flex: 0 0 46px;
+  font-size: 0.58rem;
+  font-weight: 700;
+  color: var(--text-dim);
+  text-transform: uppercase;
+  letter-spacing: 0.04em;
+}
+.header-plan-usage .pu-windows {
+  display: inline-flex;
+  align-items: baseline;
 }
 /* Readable two-window layout: dim uppercase label + bold, color-coded value. */
 .header-plan-usage .pu-win {
