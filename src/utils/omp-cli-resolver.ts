@@ -76,7 +76,11 @@ function probeOmpVersion(binPath: string): string | null {
 
 type OmpVersionProbe = (binPath: string) => string | null;
 
-function createOmpResolver(host?: CliResolverHost, versionProbe: OmpVersionProbe = probeOmpVersion, now?: () => number) {
+function createOmpResolver(
+  host?: CliResolverHost,
+  versionProbe: OmpVersionProbe = probeOmpVersion,
+  now?: () => number
+) {
   return createCliExecutableResolver<string>(
     {
       binary: 'omp',

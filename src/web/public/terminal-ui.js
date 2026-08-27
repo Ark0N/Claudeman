@@ -2969,6 +2969,16 @@ Object.assign(CodemanApp.prototype, {
       // Start interactive
       await fetch(`/api/sessions/${newSessionId}/interactive`, { method: 'POST' });
 
+      // Retire the row being resumed: a non-claude "resume" is really a brand
+      // new Codeman session pointed at the same directory (there is no id to
+      // reattach to), so without this every resume leaves the old row behind
+      // as a duplicate — click it 3 times, see the same name 3 times. Claude
+      // rows are left alone: `sessionId` there is a claudeSessionId, which
+      // usually has no live/persisted Codeman session of its own to delete.
+      if (effectiveMode !== 'claude' && sessionId !== newSessionId) {
+        fetch(`/api/sessions/${sessionId}?killMux=true`, { method: 'DELETE' }).catch(() => {});
+      }
+
       this.terminal.writeln(`\x1b[90m Session ${name} ready\x1b[0m`);
       await this.selectSession(newSessionId);
       this.terminal.focus();

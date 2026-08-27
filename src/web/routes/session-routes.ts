@@ -1134,8 +1134,31 @@ export function registerSessionRoutes(
     const query = req.query as { killMux?: string };
     const killMux = query.killMux !== 'false'; // Default to true
 
-    // Security: owner-scoped lookup 404s foreign/missing sessions uniformly (no existence leak, no cross-user kill).
-    const session = findSessionOrFail(ctx, id, req);
+    // A resumed/detached-but-never-live row (e.g. a non-claude "Resume" that
+    // relaunched into a NEW session and wants to retire the old one it can no
+    // longer reattach to) has no entry in ctx.sessions at all — only in
+    // persisted state. Fall back to removing that persisted record directly
+    // rather than 404ing: the caller means "make this row go away", and a
+    // stale duplicate row is exactly what's left behind otherwise. Pinned
+    // sessions keep their existing demote-not-delete protection.
+    const session = ctx.sessions.get(id);
+    if (!session) {
+      const persisted = ctx.store.getSession(id);
+      if (!persisted || !canAccessOwned(getAuthUser(req), persisted.owner)) {
+        throw Object.assign(new Error(`Session ${id} not found`), {
+          statusCode: 404,
+          body: createErrorResponse(ApiErrorCode.NOT_FOUND, `Session ${id} not found`),
+        });
+      }
+      ctx.store.demoteOrRemoveSession(id);
+      return {};
+    }
+    if (req && !canAccessOwned(getAuthUser(req), session.owner)) {
+      throw Object.assign(new Error(`Session ${id} not found`), {
+        statusCode: 404,
+        body: createErrorResponse(ApiErrorCode.NOT_FOUND, `Session ${id} not found`),
+      });
+    }
 
     await ctx.cleanupSession(session.id, killMux, 'user_delete');
     return {};
