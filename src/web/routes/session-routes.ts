@@ -760,7 +760,7 @@ async function injectAgentSkill(casePath: string): Promise<void> {
  * dead-pane-respawn path in session.ts does, so even the FIRST relaunch of a
  * resumed conversation is pinned rather than guessed.
  */
-function resolveOmpConfigForCreate(
+export function resolveOmpConfigForCreate(
   mode: SessionMode,
   workingDir: string,
   ompConfig: OmpConfig | undefined
@@ -770,6 +770,11 @@ function resolveOmpConfigForCreate(
     return ompConfig;
   }
   const resolvedId = findLatestOmpSessionId(workingDir);
+  if (!resolvedId) {
+    console.warn(
+      `[Session] OMP: no session file found under ${workingDir} to pin --resume; falling back to ambiguous --continue`
+    );
+  }
   return resolvedId ? { ...ompConfig, resumeSessionId: resolvedId } : ompConfig;
 }
 

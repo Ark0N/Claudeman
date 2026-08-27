@@ -100,7 +100,10 @@ function parseOmpSessionFile(filePath: string): OmpHistorySession | null {
     }
     if (!entry || typeof entry !== 'object') continue;
     const e = entry as Record<string, unknown>;
-    if (e.type === 'session' && typeof e.id === 'string' && typeof e.cwd === 'string') {
+    if (e.type === 'session' && typeof e.id === 'string' && typeof e.cwd === 'string' && e.cwd.startsWith('/')) {
+      // A corrupted or malformed session file could carry a relative or empty
+      // cwd; requiring an absolute path keeps a downstream resume attempt
+      // from being pointed at a nonsense working directory.
       sessionId = e.id;
       workingDir = e.cwd;
     } else if (e.type === 'message') {

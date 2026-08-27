@@ -1686,6 +1686,9 @@ export class Session extends EventEmitter {
     }
     // Nothing on disk yet (the dying process never got far enough to write a
     // session file) — fall back to the CLI's own "most recent" heuristic.
+    console.warn(
+      `[Session] OMP: no session file found under ${this.workingDir} to pin --resume on respawn; falling back to ambiguous --continue`
+    );
     return { ...this._ompConfig, continueSession: true };
   }
 

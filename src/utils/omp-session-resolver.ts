@@ -37,6 +37,13 @@ const OMP_SESSION_FILE_PATTERN = /^.+_([a-zA-Z0-9-]+)\.jsonl$/;
  * Pure so it's unit-testable without touching the filesystem.
  */
 export function mangleOmpWorkingDir(workingDir: string): string {
+  // UNVERIFIED EDGE CASE: if $HOME is itself a symlink, this compares against
+  // the literal homedir() string, not a realpath()-resolved one. Whether that
+  // matches omp's own behavior is unconfirmed — we only empirically verified
+  // omp strips a literal $HOME prefix (2026-08-27), not that it canonicalizes
+  // symlinks first. Do not "fix" this with realpathSync() without confirming
+  // omp's actual behavior on a symlinked-home setup; guessing wrong here would
+  // trade one silent mismatch for a different one.
   const home = homedir();
   const relative =
     workingDir === home || workingDir.startsWith(home + sep) ? workingDir.slice(home.length) : workingDir;

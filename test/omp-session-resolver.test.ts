@@ -21,6 +21,7 @@ import { homedir } from 'node:os';
 import { join } from 'node:path';
 import { afterEach, describe, expect, it } from 'vitest';
 import { findLatestOmpSessionId, mangleOmpWorkingDir } from '../src/utils/omp-session-resolver.js';
+import { resolveOmpConfigForCreate } from '../src/web/routes/session-routes.js';
 
 describe('mangleOmpWorkingDir', () => {
   it('strips the home prefix before dash-replacing a home-relative path', () => {
@@ -65,5 +66,63 @@ describe('findLatestOmpSessionId', () => {
 
   it('returns null when the mangled directory does not exist', () => {
     expect(findLatestOmpSessionId(join(homedir(), 'never-launched'))).toBeNull();
+  });
+});
+
+describe('resolveOmpConfigForCreate', () => {
+  // The exact pipeline "resume this OMP row from the history list" drives:
+  // POST /api/sessions with mode:'omp' + ompConfig:{continueSession:true}
+  // must come back with resumeSessionId PINNED to the real omp transcript
+  // uuid, not left as the ambiguous continueSession flag alone. This was the
+  // one path flagged by review as having zero coverage despite being the
+  // exact mechanism the whole resolver module exists to serve.
+  const workingDir = join(homedir(), 'codeman-cases', 'resume-test');
+  const sessionDir = join(homedir(), '.omp', 'agent', 'sessions', '-codeman-cases-resume-test');
+
+  afterEach(() => {
+    rmSync(join(homedir(), '.omp'), { recursive: true, force: true });
+  });
+
+  it('pins resumeSessionId from disk when resuming with only continueSession set', () => {
+    mkdirSync(sessionDir, { recursive: true });
+    writeFileSync(join(sessionDir, '2026-08-27T17-31-08-001Z_real-omp-uuid.jsonl'), '{}');
+
+    const resolved = resolveOmpConfigForCreate('omp', workingDir, { continueSession: true });
+
+    expect(resolved).toEqual({ continueSession: true, resumeSessionId: 'real-omp-uuid' });
+  });
+
+  it('does not attempt resolution when resumeSessionId is already explicit', () => {
+    mkdirSync(sessionDir, { recursive: true });
+    writeFileSync(join(sessionDir, '2026-08-27T17-31-08-001Z_disk-uuid.jsonl'), '{}');
+
+    const resolved = resolveOmpConfigForCreate('omp', workingDir, {
+      continueSession: true,
+      resumeSessionId: 'already-pinned',
+    });
+
+    // Must return the caller's id unchanged, never overwrite it with whatever
+    // happens to be newest on disk.
+    expect(resolved).toEqual({ continueSession: true, resumeSessionId: 'already-pinned' });
+  });
+
+  it('leaves ompConfig unchanged when continueSession is not set', () => {
+    const resolved = resolveOmpConfigForCreate('omp', workingDir, {});
+    expect(resolved).toEqual({});
+  });
+
+  it('leaves ompConfig unchanged when nothing is on disk to resolve', () => {
+    const resolved = resolveOmpConfigForCreate('omp', join(homedir(), 'never-launched'), {
+      continueSession: true,
+    });
+    expect(resolved).toEqual({ continueSession: true });
+  });
+
+  it('returns undefined for a non-omp mode regardless of ompConfig', () => {
+    expect(resolveOmpConfigForCreate('claude', workingDir, { continueSession: true })).toBeUndefined();
+  });
+
+  it('returns undefined when ompConfig is undefined', () => {
+    expect(resolveOmpConfigForCreate('omp', workingDir, undefined)).toBeUndefined();
   });
 });
