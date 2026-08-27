@@ -80,6 +80,22 @@ RUN npm install -g @deepseek-ai/dsh \
  && npm cache clean --force \
  && dsh --version
 
+# OMP (Oh My Pi) is NOT on npm: a standalone binary via omp.sh's installer, which
+# targets $HOME/.local/bin with no --dir override (verified 2026-08-27 — the
+# resolver's OMP_SEARCH_DIRS lists ~/.omp/bin first, which turned out to be the
+# WRONG guess for the installer's actual target; build this step for real
+# rather than trust that ordering). At build time $HOME is root's home and
+# unreachable by the `agent` user, so copy the binary into /usr/local/bin and
+# drop root's ~/.local/bin/omp in the same layer so the image does not carry
+# the download twice.
+RUN curl -fsSL https://omp.sh/install | sh \
+ && cp -L /root/.local/bin/omp /usr/local/bin/omp.real \
+ && rm -f /usr/local/bin/omp \
+ && mv /usr/local/bin/omp.real /usr/local/bin/omp \
+ && chmod 755 /usr/local/bin/omp \
+ && rm -f /root/.local/bin/omp \
+ && omp --version
+
 # `agent` user (gid 0) with an arbitrary-uid-writable HOME. The uid is
 # auto-assigned (node:22-slim already occupies uid 1000 with its `node` user); at
 # runtime Codeman overrides with `--user <hostUid>:0` on Linux, so the baked uid
@@ -106,10 +122,14 @@ ENV HOME=/home/agent
 # writable by the arbitrary uid the container actually runs as, and a profile
 # installed after it would miss that fixup. DSH_HOME points the launcher at the
 # agent's dir while this still runs as root.
+# `.omp/agent` is pre-created for the same reason `.codex` is: it is a MIXED
+# store (per-file config seeds PLUS a shared `sessions/` RW bind mount for
+# Codeman's own host-side history/resume reads), and neither kind of artifact
+# creates its own parent directory.
 RUN useradd -g 0 -m -d /home/agent -s /bin/bash agent \
  && mkdir -p /home/agent/.npm /home/agent/.cache /home/agent/.config /home/agent/.codeman \
       /home/agent/.claude/projects /home/agent/.codex/sessions /home/agent/.pi/agent /home/agent/.grok \
-      /home/agent/.dsh \
+      /home/agent/.dsh /home/agent/.omp/agent \
  && DSH_HOME=/home/agent/.dsh HOME=/home/agent \
       dsh plugin --profile dsh-tui add @deepseek-harness-tui/dsh-tui \
  && test -f /home/agent/.dsh/profiles/dsh-tui/package.json \
