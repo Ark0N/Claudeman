@@ -99,6 +99,13 @@ export type HistoryInput = {
   gitBranch?: string;
   worktreeName?: string;
   worktreeRepo?: string;
+  /**
+   * Set only by a non-claude transcript source (currently omp); the Claude
+   * scanner never stamps this; the meaningfulness floor below still counts a
+   * row with a `mode` as real, since that also signals "not claude" — see
+   * where it's read below for the isReal check this touches.
+   */
+  mode?: string;
 };
 
 /** Mux process-stat view. */
@@ -175,6 +182,10 @@ export function mergeUnifiedSessions(sources: UnifiedSources): UnifiedSessionIte
     overwrite(item, 'gitBranch', h.gitBranch);
     overwrite(item, 'worktreeName', h.worktreeName);
     overwrite(item, 'worktreeRepo', h.worktreeRepo);
+    // Claude rows never set this (they're implicitly claude); a non-claude
+    // transcript source (currently only omp) does, so a history-only row
+    // still gets a mode badge instead of reading as claude by default.
+    overwrite(item, 'mode', h.mode);
     const ms = Date.parse(h.lastModified);
     if (!Number.isNaN(ms) && item.lastActivityAt === undefined) item.lastActivityAt = ms;
   }

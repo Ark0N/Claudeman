@@ -20,12 +20,14 @@ import {
   type ApiResponse,
   type SessionColor,
   type SessionStatus,
+  type SessionMode,
   type CodexConfig,
   type GeminiConfig,
   type AntigravityConfig,
   type PiConfig,
   type GrokConfig,
   type DeepSeekConfig,
+  type OmpConfig,
 } from '../../types.js';
 import { Session, isAltScreenStripMode, isMuxAltScreenOnlyStripMode } from '../../session.js';
 import { SseEvent } from '../sse-events.js';
@@ -136,6 +138,8 @@ import {
   toSessionDocker,
 } from '../../docker-hosts.js';
 import { LRUMap } from '../../utils/lru-map.js';
+import { findLatestOmpSessionId } from '../../utils/omp-session-resolver.js';
+import { scanOmpSessionsHistory } from '../../omp-transcript.js';
 import {
   getLastTranscriptResponse,
   isExternalCliTranscriptMode,
@@ -744,6 +748,31 @@ async function injectAgentSkill(casePath: string): Promise<void> {
 // bypassing the `workspaceHooksEnabled` setting. Route handlers here resolve the
 // setting through the ConfigPort (tests stub it) and pass it as the second arg.
 
+/**
+ * A "Resume"/"continue" request for a NEW omp-mode session (the frontend's
+ * resumeHistorySession(), or anyone hitting the API directly) carries
+ * `continueSession: true` but no id — omp has none to give it, since Codeman
+ * has never tracked its own conversation UUID. Left as `--continue`, that
+ * picks whichever session file in the directory is newest, which silently
+ * drifts to the WRONG conversation the moment a second omp session (this
+ * one, a sibling worker, a stray manual run) has touched the same directory
+ * more recently. Resolve the real id up front instead, same as the
+ * dead-pane-respawn path in session.ts does, so even the FIRST relaunch of a
+ * resumed conversation is pinned rather than guessed.
+ */
+function resolveOmpConfigForCreate(
+  mode: SessionMode,
+  workingDir: string,
+  ompConfig: OmpConfig | undefined
+): OmpConfig | undefined {
+  if (mode !== 'omp') return undefined;
+  if (!ompConfig || ompConfig.resumeSessionId || !ompConfig.continueSession) {
+    return ompConfig;
+  }
+  const resolvedId = findLatestOmpSessionId(workingDir);
+  return resolvedId ? { ...ompConfig, resumeSessionId: resolvedId } : ompConfig;
+}
+
 export function registerSessionRoutes(
   app: FastifyInstance,
   ctx: SessionPort & EventPort & ConfigPort & InfraPort & AuthPort & TabLayoutPort
@@ -1065,7 +1094,7 @@ export function registerSessionRoutes(
       piConfig: mode === 'pi' ? gatedPiConfig : undefined,
       grokConfig: mode === 'grok' ? gatedGrokConfig : undefined,
       deepSeekConfig: mode === 'deepseek' ? gatedDeepSeekConfig : undefined,
-      ompConfig: mode === 'omp' ? body.ompConfig : undefined,
+      ompConfig: resolveOmpConfigForCreate(mode, workingDir, body.ompConfig),
       resumeSessionId: validatedResumeId,
       envOverrides: await clampEnvOverridesForOwner(owner, body.envOverrides),
       effort: body.effort,
@@ -3304,7 +3333,7 @@ export function registerSessionRoutes(
       piConfig: mode === 'pi' ? qsGatedPiConfig : undefined,
       grokConfig: mode === 'grok' ? qsGatedGrokConfig : undefined,
       deepSeekConfig: mode === 'deepseek' ? qsGatedDeepSeekConfig : undefined,
-      ompConfig: mode === 'omp' ? ompConfig : undefined,
+      ompConfig: resolveOmpConfigForCreate(mode, resolvedCasePath, ompConfig),
       envOverrides: qsGatedEnvOverrides,
       effort,
       remote,
@@ -4151,6 +4180,24 @@ export function registerSessionRoutes(
       }
     } catch {
       // Projects dir may not exist.
+    }
+
+    // OMP's own session files (~/.omp/agent/sessions) — the non-claude twin
+    // of the scan above; see omp-transcript.ts for why this exists at all.
+    try {
+      for (const h of scanOmpSessionsHistory()) {
+        history.push({
+          sessionId: h.sessionId,
+          workingDir: h.workingDir,
+          sizeBytes: h.sizeBytes,
+          lastModified: h.lastModified,
+          firstPrompt: h.firstPrompt,
+          lastPrompt: h.lastPrompt,
+          mode: 'omp',
+        });
+      }
+    } catch {
+      // Best-effort, same as the claude scan above.
     }
 
     // Mux process stats (best-effort; guard against mocks lacking the method).
