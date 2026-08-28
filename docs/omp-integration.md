@@ -47,12 +47,30 @@ result is interpolated into the pane's spawn command.
 
 **omp reads its own model routing and hooks from `~/.omp`, so no trust or
 permission flags are needed** — unlike every sibling CLI in this family, there is no
-bypass-permissions equivalent to wire up, and the multi-user owner clamp has nothing
-to gate for `omp` (no branch needed, no privileged flag exists to strip).
+bypass-permissions equivalent to wire up, so `buildOmpCommand()` only ever passes
+`--model`/`--resume`/`--continue`. ⚠️ That does NOT mean omp is unrestricted: its
+documented default `tools.approvalMode` is `yolo`, so an omp pane auto-approves exec
+with no flag from Codeman — the CLI's own config, not Codeman, is what would need to
+change that.
 
-Env overrides: the `OMP_*` prefix is allowlisted. omp has no documented vendor-key
-namespace of its own (its provider credentials live in `~/.omp` config files, not
-environment variables), so nothing beyond `OMP_*` is admitted.
+Env overrides: the `OMP_*` prefix is allowlisted, and per omp's own
+`docs/environment-variables.md` it is not the narrow surface it looks like. omp reads
+roughly 40 provider keys from the environment (`ANTHROPIC_API_KEY`, `OPENAI_API_KEY`,
+`XAI_API_KEY`, `HF_TOKEN`, ...) — pi's 34-key problem in the same shape — which is why
+none of those get a dedicated allowlist entry; a session authenticates from `~/.omp`
+config or the server process's own env instead, like pi. omp's own documented knobs
+are mostly `PI_*`, not `OMP_*` (`PI_CONFIG_DIR`, `PI_CODING_AGENT_DIR`,
+`PI_CODING_AGENT_SESSION_DIR`, `PI_SUBPROCESS_CMD`, `PI_SHELL_PREFIX`,
+`OMP_PROFILE`/`PI_PROFILE`), and `PI_*` is already allowlisted globally because pi
+mode needs it — so an omp session today already accepts all of those. The first three
+also move the tree `omp-session-resolver.ts` and `omp-transcript.ts` hardcode
+(`resolveOmpHome()` assumes `~/.omp` unconditionally), so pinning and history quietly
+stop working under a redirected config root; this is a known gap, not fixed here.
+
+The `OMP_` prefix itself brings in `OMP_AUTH_BROKER_URL` / `OMP_AUTH_BROKER_TOKEN`,
+where omp resolves credentials from — the same shape `DEEPSEEK_BASE_URL` is dropped
+for in `clampEnvOverridesForOwner()` (session-routes.ts), so both are clamped there
+for a non-granted owner in multi-user mode. None of this matters in single-user mode.
 
 ## Exact-id pinning: why `--resume`, not just `--continue`
 

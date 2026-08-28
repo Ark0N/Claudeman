@@ -399,10 +399,10 @@ export const _clampExternalCliBypassForOwner = clampExternalCliBypassForOwner;
 
 /**
  * Env-var keys a non-granted owner must not be able to set, because each one
- * hands back privilege the config clamp above just removed — or, for the last,
- * redirects a credential the server injects.
+ * hands back privilege the config clamp above just removed, or redirects a
+ * credential-resolution endpoint.
  *
- * All are DeepSeek's, and all are reachable because `DSH_*` and `DEEPSEEK_*` are
+ * The DeepSeek three are reachable because `DSH_*` and `DEEPSEEK_*` are
  * allowlisted `envOverrides` prefixes (schemas.ts) — which they have to be, since
  * that is also how a user configures the harness's non-privileged knobs.
  *
@@ -419,8 +419,24 @@ export const _clampExternalCliBypassForOwner = clampExternalCliBypassForOwner;
  *   URL would have the operator's API key sent as a bearer credential to a host
  *   of their choosing. (`DEEPSEEK_API_KEY` itself stays overridable: supplying
  *   your OWN key removes privilege rather than granting it.)
+ * - `OMP_AUTH_BROKER_URL`/`OMP_AUTH_BROKER_TOKEN` are where omp resolves
+ *   credentials from — the same shape as `DEEPSEEK_BASE_URL` above, reachable
+ *   because `OMP_*` is an allowlisted prefix. Unlike DeepSeek, Codeman does not
+ *   forward any operator-held key into an omp pane today (omp's provider
+ *   credentials live in `~/.omp` config files, not env vars), so there is no
+ *   known concrete exfiltration path yet — clamped defensively anyway, since a
+ *   non-granted owner redirecting where a shared multi-tenant deployment
+ *   resolves auth from is not something to allow silently (found in
+ *   Ark0N/Codeman#353 review; omp's own knobs are otherwise mostly `PI_*`,
+ *   already allowlisted for pi and not addressed here — see resolveOmpHome()).
  */
-const OWNER_CLAMPED_ENV_KEYS = ['DSH_PERMISSION_MODE', 'DSH_HOME', 'DEEPSEEK_BASE_URL'] as const;
+const OWNER_CLAMPED_ENV_KEYS = [
+  'DSH_PERMISSION_MODE',
+  'DSH_HOME',
+  'DEEPSEEK_BASE_URL',
+  'OMP_AUTH_BROKER_URL',
+  'OMP_AUTH_BROKER_TOKEN',
+] as const;
 
 /**
  * Env-var half of the multi-user bypass clamp.

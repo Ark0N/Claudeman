@@ -1,9 +1,10 @@
-import { describe, expect, it } from 'vitest';
+import { describe, expect, it, beforeEach, afterEach } from 'vitest';
 import { CreateSessionSchema, QuickStartSchema } from '../src/web/schemas.js';
 import { buildSpawnCommand } from '../src/tmux-manager.js';
 import { defaultDockerCommandForMode } from '../src/docker-hosts.js';
 import { defaultRemoteCommandForMode } from '../src/remote-hosts.js';
 import { isExternalCliMode, isAltScreenStripMode } from '../src/session.js';
+import { _clampEnvOverridesForOwner } from '../src/web/routes/session-routes.js';
 
 describe('OMP mode schemas', () => {
   it('accepts OMP session creation config', () => {
@@ -130,5 +131,35 @@ describe('OMP mode gates', () => {
     // Routed through an interactive login shell so per-user PATH entries resolve —
     // same fix as the other remote agent CLIs (see defaultRemoteCommandForMode).
     expect(defaultRemoteCommandForMode('omp')).toBe('exec "${SHELL:-/bin/sh}" -i -l -c \'omp\'');
+  });
+});
+
+describe('OMP multi-user clamp: the env-var half', () => {
+  // Unlike DeepSeek, omp has no permission FLAG or CONFIG for the clamp to
+  // gate (buildOmpCommand() only ever emits --model/--resume/--continue), so
+  // the only privilege surface is the two credential-resolution env vars the
+  // OMP_* prefix admits.
+  const ORIGINAL = process.env.CODEMAN_MULTIUSER;
+  beforeEach(() => {
+    process.env.CODEMAN_MULTIUSER = '1';
+  });
+  afterEach(() => {
+    if (ORIGINAL === undefined) delete process.env.CODEMAN_MULTIUSER;
+    else process.env.CODEMAN_MULTIUSER = ORIGINAL;
+  });
+
+  it('strips OMP_AUTH_BROKER_URL and OMP_AUTH_BROKER_TOKEN, leaving unrelated overrides alone', async () => {
+    const out = await _clampEnvOverridesForOwner('nobody', {
+      OMP_AUTH_BROKER_URL: 'https://attacker.example/broker',
+      OMP_AUTH_BROKER_TOKEN: 'stolen-token',
+      OMP_PROFILE: 'default',
+    });
+    expect(out).toEqual({ OMP_PROFILE: 'default' });
+  });
+
+  it('is a no-op in single-user mode', async () => {
+    delete process.env.CODEMAN_MULTIUSER;
+    const input = { OMP_AUTH_BROKER_URL: 'https://attacker.example/broker' };
+    expect(await _clampEnvOverridesForOwner(undefined, input)).toBe(input);
   });
 });

@@ -50,7 +50,13 @@ export function mangleOmpWorkingDir(workingDir: string): string {
   return relative.replace(/\//g, '-');
 }
 
-/** `~/.omp` — no known env override exists (unlike DSH_HOME); revisit if omp adds one. */
+/**
+ * `~/.omp` — omp's own env overrides are mostly `PI_*` (shared with pi mode, already
+ * allowlisted in schemas.ts), and `PI_CONFIG_DIR` in particular can move this root.
+ * That is not honored here: a session with a redirected `PI_CONFIG_DIR` silently
+ * degrades pinning/history to omp's own ambiguous `--continue` instead of erroring,
+ * a known gap (found in Ark0N/Codeman#353 review) shared with pi and not fixed here.
+ */
 function resolveOmpHome(): string {
   return join(homedir(), '.omp');
 }
