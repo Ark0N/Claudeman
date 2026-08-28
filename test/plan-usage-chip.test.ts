@@ -79,4 +79,36 @@ describe('header plan usage chip', () => {
     expect(codexRow).not.toContain('5h');
     expect(codexRow).toContain('7d');
   });
+
+  it('drops the provider label when Claude is the only provider with limits', () => {
+    const { CodemanApp, chip } = loadCodemanAppClass();
+    const app = Object.create((CodemanApp as { prototype: object }).prototype) as UsageApp;
+
+    app.updatePlanUsageChip({
+      fiveHour: { usedPercentage: 60, resetAt: 1000 },
+      sevenDay: { usedPercentage: 23, resetAt: 2000 },
+    });
+
+    expect(chip.innerHTML).toContain('class="pu-row"');
+    expect(chip.innerHTML).not.toContain('pu-provider');
+    expect(chip.innerHTML).not.toContain('Claude');
+    expect(chip.innerHTML).toContain('60%');
+    expect(chip.innerHTML).toContain('23%');
+    // The tooltip still names the provider — it has room, and the chip no longer does.
+    expect(chip.title).toContain('Claude plan usage');
+  });
+
+  it('drops the provider label when Codex is the only provider with limits', () => {
+    const { CodemanApp, chip } = loadCodemanAppClass();
+    const app = Object.create((CodemanApp as { prototype: object }).prototype) as UsageApp;
+
+    app.updatePlanUsageChip({
+      codex: { fiveHour: { usedPercentage: 12, resetAt: 3000 } },
+    });
+
+    expect(chip.innerHTML).toContain('class="pu-row"');
+    expect(chip.innerHTML).not.toContain('pu-provider');
+    expect(chip.innerHTML).toContain('12%');
+    expect(chip.title).toContain('Codex plan usage');
+  });
 });

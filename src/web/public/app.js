@@ -2638,10 +2638,15 @@ class CodemanApp {
       if (!Number.isFinite(n)) return '';
       return `<span class="pu-win"><span class="pu-label">${label}</span><span class="pu-val ${colorClass(n)}">${n}%</span></span>`;
     };
+    // The provider label only earns its space when there is more than one
+    // provider to tell apart: a machine with Claude alone shows bare windows.
+    const hasWindows = (usage) => pct(usage?.fiveHour) !== null || pct(usage?.sevenDay) !== null;
+    const labelled = hasWindows(data) && hasWindows(data.codex);
     const row = (provider, usage) => {
       const windows = [seg('5h', pct(usage?.fiveHour)), seg('7d', pct(usage?.sevenDay))].filter(Boolean);
       if (!windows.length) return '';
-      return `<span class="pu-row"><span class="pu-provider">${provider}</span><span class="pu-windows">${windows.join('<span class="pu-sep">·</span>')}</span></span>`;
+      const label = labelled ? `<span class="pu-provider">${provider}</span>` : '';
+      return `<span class="pu-row">${label}<span class="pu-windows">${windows.join('<span class="pu-sep">·</span>')}</span></span>`;
     };
     const rows = [row('Claude', data), row('Codex', data.codex)].filter(Boolean);
     chip.innerHTML = rows.length ? rows.join('') : '—';
