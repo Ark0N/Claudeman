@@ -2942,12 +2942,19 @@ Object.assign(CodemanApp.prototype, {
         grok: 'grokConfig',
         omp: 'ompConfig',
       }[effectiveMode];
+      // codex/gemini/antigravity have no wired continuation here yet (their
+      // configs use an exact conversation id, not a "continue most recent"
+      // flag, and the row's own `sessionId` is not verified to carry that
+      // id for these three modes) — `continuesSomething` below is what keeps
+      // their row from being retired for a resume that didn't actually
+      // continue anything.
       const modeConfig =
         modeConfigKey
           ? { [modeConfigKey]: { continueSession: true } }
           : effectiveMode === 'deepseek'
             ? { deepSeekConfig: { resumeSession: true } }
             : {};
+      const continuesSomething = Boolean(modeConfigKey) || effectiveMode === 'deepseek';
       const createRes = await fetch('/api/sessions', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
@@ -2975,7 +2982,12 @@ Object.assign(CodemanApp.prototype, {
       // as a duplicate — click it 3 times, see the same name 3 times. Claude
       // rows are left alone: `sessionId` there is a claudeSessionId, which
       // usually has no live/persisted Codeman session of its own to delete.
-      if (effectiveMode !== 'claude' && sessionId !== newSessionId) {
+      // Gated on `continuesSomething`: for codex/gemini/antigravity (no
+      // continuation wired above), this is really a FRESH session with no
+      // relation to the old row's conversation, so retiring it would discard
+      // the old conversation with no recovery — worse than the duplicate row
+      // this guard exists to prevent for the modes that DO continue.
+      if (effectiveMode !== 'claude' && continuesSomething && sessionId !== newSessionId) {
         fetch(`/api/sessions/${sessionId}?killMux=true`, { method: 'DELETE' }).catch(() => {});
       }
 

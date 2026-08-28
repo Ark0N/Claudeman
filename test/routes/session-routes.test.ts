@@ -356,6 +356,10 @@ describe('session-routes', () => {
       expect(body.success).toBe(true);
       expect(harness.ctx.store.demoteOrRemoveSession).toHaveBeenCalledWith('ghost-session');
       expect(harness.ctx.cleanupSession).not.toHaveBeenCalled();
+      // Ark0N/Codeman#353 review: the persisted-only branch used to demote/remove
+      // with no broadcast, so other open tabs kept showing the retired row until
+      // their next unrelated fetch.
+      expect(harness.ctx.broadcast).toHaveBeenCalledWith('session:deleted', { id: 'ghost-session' });
     });
 
     it('404s a persisted-only session id the state store does not recognize either', async () => {

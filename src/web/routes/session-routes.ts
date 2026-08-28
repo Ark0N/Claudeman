@@ -67,6 +67,7 @@ import {
   autoConfigureRalph,
   canAccessOwned,
   CASES_DIR,
+  findPersistedSessionOrFail,
   findSessionOrFail,
   getAuthUser,
   isAdmin,
@@ -1191,25 +1192,19 @@ export function registerSessionRoutes(
     // rather than 404ing: the caller means "make this row go away", and a
     // stale duplicate row is exactly what's left behind otherwise. Pinned
     // sessions keep their existing demote-not-delete protection.
-    const session = ctx.sessions.get(id);
-    if (!session) {
-      const persisted = ctx.store.getSession(id);
-      if (!persisted || !canAccessOwned(getAuthUser(req), persisted.owner)) {
-        throw Object.assign(new Error(`Session ${id} not found`), {
-          statusCode: 404,
-          body: createErrorResponse(ApiErrorCode.NOT_FOUND, `Session ${id} not found`),
-        });
-      }
+    if (!ctx.sessions.has(id)) {
+      // Called for its existence/ownership 404 side effect only — demoteOrRemoveSession
+      // below re-looks-up the record by id, so the returned SessionState is unused here.
+      findPersistedSessionOrFail(ctx.store, id, req);
       ctx.store.demoteOrRemoveSession(id);
+      // Mirrors the broadcast at the tail of the live-session cleanup path
+      // (_doCleanupSession in server.ts) — without it, other open tabs keep
+      // showing the retired row until their next unrelated fetch.
+      ctx.broadcast(SseEvent.SessionDeleted, { id });
       return {};
     }
-    if (req && !canAccessOwned(getAuthUser(req), session.owner)) {
-      throw Object.assign(new Error(`Session ${id} not found`), {
-        statusCode: 404,
-        body: createErrorResponse(ApiErrorCode.NOT_FOUND, `Session ${id} not found`),
-      });
-    }
 
+    const session = findSessionOrFail(ctx, id, req);
     await ctx.cleanupSession(session.id, killMux, 'user_delete');
     return {};
   });
