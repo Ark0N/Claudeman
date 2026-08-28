@@ -57,7 +57,7 @@ import {
   type SessionRemote,
   type SessionDocker,
 } from './types.js';
-import { findLatestOmpSessionId } from './utils/omp-session-resolver.js';
+import { resolveAndClaimOmpSessionId } from './utils/omp-session-resolver.js';
 import { probeDockerCliVersion } from './docker-hosts.js';
 import { probeRemoteCliVersion } from './remote-hosts.js';
 import type { TerminalMultiplexer, MuxSession } from './mux-interface.js';
@@ -1514,7 +1514,11 @@ export class Session extends EventEmitter {
     let needsNewSession = false;
     if (this._muxSession && mux.isPaneDead(this._muxSession.muxName)) {
       console.log('[Session] Dead pane detected, respawning:', this._muxSession.muxName);
-      const newPid = await mux.respawnPane(options.respawnPaneOptions);
+      // Confirmed dead — safe to resolve/pin now (see `_pinOmpRespawnId()`).
+      // `options.respawnPaneOptions` was built eagerly before this dead-pane
+      // check ran, so it still carries the pre-pin ompConfig; rebuild it.
+      this._pinOmpRespawnId();
+      const newPid = await mux.respawnPane(this._buildRespawnPaneOptions());
       if (!newPid) {
         console.error('[Session] Failed to respawn pane, will create new session');
         needsNewSession = true;
@@ -1605,6 +1609,9 @@ export class Session extends EventEmitter {
       return false;
     }
 
+    // Confirmed the mux session (and thus the pane) exists but this reattach
+    // is about to respawn it — safe to resolve/pin now.
+    this._pinOmpRespawnId();
     const newPid = await mux.respawnPane(this._buildRespawnPaneOptions());
     if (!newPid) {
       console.error('[Session] reattachRemote: respawnPane failed for', this._muxSession.muxName);
@@ -1637,21 +1644,16 @@ export class Session extends EventEmitter {
       piConfig: this._piConfig,
       grokConfig: this._grokConfig,
       deepSeekConfig: this._deepSeekConfig,
-      // Respawning a dead pane means the CLI process exited (crash, idle
-      // respawn, or the user's own /exit) but this is still the same
-      // conversation from the user's perspective — unlike a brand-new
-      // `createSession` call, defaulting to continuation here is the honest
-      // behavior. `--continue` alone is ambiguous the moment ANY other omp
-      // conversation has touched this directory more recently (ours resumed
-      // elsewhere, a second Codeman session opened here, ...) since it just
-      // picks the newest session file — so resolve and PIN the exact id the
-      // pane that just died was writing to, once. The dead pane's file is
-      // already fully flushed at this point, so "newest file" here is
-      // unambiguous by construction; every later respawn then reuses the
-      // pinned id instead of re-guessing. Only when the session already
-      // carries an explicit resumeSessionId does this skip straight past it
-      // (that one always wins in buildOmpCommand regardless).
-      ompConfig: this._resolvedOmpRespawnConfig(),
+      // OMP resolution/pinning does NOT happen here. This object is built
+      // EAGERLY — including on every boot-recovery reattach, before anyone
+      // knows whether the pane is actually dead — so resolving here mutated
+      // `_ompConfig`/`_claudeSessionId` even for a pane that was simply being
+      // reattached to, not respawned; with two omp tabs in the same case dir
+      // that mis-pinned the ALIVE session onto whichever file happened to be
+      // newest on disk (reported live in the Ark0N/Codeman#353 review). The
+      // real pin now happens in `_pinOmpRespawnId()`, called by callers ONLY
+      // once they've confirmed an actual respawn is about to happen.
+      ompConfig: this._ompConfig,
       resumeSessionId: this._resumeSessionId,
       envOverrides: this._envOverrides,
       effort: this._effort,
@@ -1671,23 +1673,18 @@ export class Session extends EventEmitter {
    * "newest file on disk" is safe here specifically. Non-omp modes and a
    * session that already carries an explicit id pass through untouched.
    */
-  private _resolvedOmpRespawnConfig(): OmpConfig | undefined {
-    if (this.mode !== 'omp') return this._ompConfig;
-    if (this._ompConfig?.resumeSessionId) return this._ompConfig;
-    // Resolving-and-pinning is only correct when a mux session ALREADY exists for
-    // this Session object — a dead-pane respawn, or a boot-recovery reattach (the
-    // constructor sets _muxSession from persisted state before startInteractive()
-    // ever runs there). A genuinely brand-new session (Run OMP -> POST
-    // /api/quick-start -> a fresh Session with no muxSession in its create config)
-    // has _muxSession still null at this point. Without this guard, the eager
-    // `respawnPaneOptions: this._buildRespawnPaneOptions()` in startInteractive()
-    // mutates this._ompConfig via the side effect below BEFORE
-    // createSessionOptions.ompConfig is even read in the SAME object literal, so a
-    // fresh "Run OMP" click silently inherited whatever omp conversation happened
-    // to be newest on disk for this working directory instead of starting clean
-    // (reported live 2026-08-27).
-    if (!this._muxSession) return this._ompConfig;
-    const resolvedId = findLatestOmpSessionId(this.workingDir);
+  private _pinOmpRespawnId(): void {
+    if (this.mode !== 'omp') return;
+    if (this._ompConfig?.resumeSessionId) return;
+    // Callers MUST call this only immediately before an ACTUAL respawn (a
+    // confirmed-dead pane, or a genuine remote reattach) — never while merely
+    // building options that might not lead to a respawn. A fresh "Run OMP"
+    // click has no _muxSession yet and must never inherit whatever omp
+    // conversation happens to be newest on disk for this working directory
+    // (reported live 2026-08-27, fixed in 13a19f79); this guard keeps that
+    // fix intact now that resolution has moved out of the eager options build.
+    if (!this._muxSession) return;
+    const resolvedId = resolveAndClaimOmpSessionId(this.workingDir);
     if (resolvedId) {
       this._ompConfig = { ...this._ompConfig, resumeSessionId: resolvedId };
       // Alias omp's own session uuid to this Codeman id — see the
@@ -1695,14 +1692,15 @@ export class Session extends EventEmitter {
       // (generically-named) mechanism that folds a Past-Sessions row back
       // into its live/persisted session instead of duplicating it.
       this._claudeSessionId = resolvedId;
-      return this._ompConfig;
+      return;
     }
-    // Nothing on disk yet (the dying process never got far enough to write a
-    // session file) — fall back to the CLI's own "most recent" heuristic.
+    // Nothing unclaimed on disk (the dying process never got far enough to
+    // write a session file, or a sibling already claimed the only candidate)
+    // — fall back to the CLI's own "most recent" heuristic.
     console.warn(
       `[Session] OMP: no session file found under ${this.workingDir} to pin --resume on respawn; falling back to ambiguous --continue`
     );
-    return { ...this._ompConfig, continueSession: true };
+    this._ompConfig = { ...this._ompConfig, continueSession: true };
   }
 
   /**
@@ -1968,10 +1966,11 @@ export class Session extends EventEmitter {
         });
 
         // Set claudeSessionId — when resuming, the Claude conversation ID is the
-        // resumed one. `_resolvedOmpRespawnConfig()` (called above while building
-        // respawnPaneOptions) may have JUST aliased this to omp's own session
-        // uuid — that already-resolved id must win over the generic
-        // `this.id` fallback, or this line clobbers it back to the Codeman id
+        // resumed one. `_pinOmpRespawnId()` (called just above, inside
+        // `_setupOrAttachMuxSession()`'s dead-pane branch) may have JUST aliased
+        // this to omp's own session uuid — that already-resolved id must win
+        // over the generic `this.id` fallback, or this line clobbers it back
+        // to the Codeman id
         // on every single respawn.
         this._claudeSessionId = this._resumeSessionId || this._ompConfig?.resumeSessionId || this.id;
 
@@ -2394,7 +2393,7 @@ export class Session extends EventEmitter {
 
   /**
    * A brand-new omp session (never yet respawned, so
-   * {@link _resolvedOmpRespawnConfig} has never run) has no captured
+   * {@link _pinOmpRespawnId} has never run) has no captured
    * omp-native session id: `_claudeSessionId` still defaults to this
    * session's OWN Codeman id from the constructor. Until something aliases
    * it, the omp history scan's row for this exact conversation (keyed by
@@ -2407,7 +2406,7 @@ export class Session extends EventEmitter {
   private _maybeCaptureOmpSessionId(): void {
     if (this.mode !== 'omp' || this._claudeSessionId !== this.id) return;
     try {
-      const resolvedId = findLatestOmpSessionId(this.workingDir);
+      const resolvedId = resolveAndClaimOmpSessionId(this.workingDir);
       if (resolvedId) {
         this._claudeSessionId = resolvedId;
         this._ompConfig = { ...this._ompConfig, resumeSessionId: resolvedId };

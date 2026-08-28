@@ -15,7 +15,7 @@
  * @module utils/omp-session-resolver
  */
 
-import { readdirSync, statSync } from 'node:fs';
+import { closeSync, openSync, readdirSync, readSync, statSync } from 'node:fs';
 import { homedir } from 'node:os';
 import { join, sep } from 'node:path';
 
@@ -90,5 +90,97 @@ export function findLatestOmpSessionId(workingDir: string): string | null {
       newestId = match[1];
     }
   }
+  return newestId;
+}
+
+/**
+ * The session header line is always near the top of the file (the
+ * transcript's own "second line" — see omp-transcript.ts), so identifying a
+ * file never needs reading the whole thing (up to multi-MB, per that same
+ * module's size cap). Bounded read only.
+ */
+const HEADER_READ_BYTES = 8 * 1024;
+
+function readOmpSessionHeader(filePath: string): { id: string; cwd: string } | null {
+  let raw: string;
+  try {
+    const fd = openSync(filePath, 'r');
+    try {
+      const buf = Buffer.alloc(HEADER_READ_BYTES);
+      const bytesRead = readSync(fd, buf, 0, HEADER_READ_BYTES, 0);
+      raw = buf.toString('utf-8', 0, bytesRead);
+    } finally {
+      closeSync(fd);
+    }
+  } catch {
+    return null;
+  }
+  for (const line of raw.split('\n')) {
+    if (!line) continue;
+    let entry: unknown;
+    try {
+      entry = JSON.parse(line);
+    } catch {
+      continue;
+    }
+    if (!entry || typeof entry !== 'object') continue;
+    const e = entry as Record<string, unknown>;
+    if (e.type === 'session' && typeof e.id === 'string' && typeof e.cwd === 'string') {
+      return { id: e.id, cwd: e.cwd };
+    }
+  }
+  return null;
+}
+
+/**
+ * Process-wide registry of OMP session ids already pinned to a live Codeman
+ * session. Two omp tabs in the same case dir (`w1-foo`, `w2-foo`) resolve
+ * against the SAME directory on disk — without this, both could pick the
+ * newest file and alias onto each other's conversation (found in upstream PR
+ * review, Ark0N/Codeman#353). Never released: this holds at most a handful of
+ * short ids per real omp conversation ever pinned in this process's lifetime,
+ * immaterial memory even after weeks of uptime — correctness here matters
+ * more than reclaiming it.
+ */
+const claimedOmpSessionIds = new Set<string>();
+
+/**
+ * Safe variant of {@link findLatestOmpSessionId} for callers where two omp
+ * sessions CAN share the same case directory — a dead-pane respawn, a
+ * boot-recovery reattach, or a first-idle capture — instead of the narrower
+ * cases where "newest file" is unambiguous by construction. Verifies each
+ * candidate's own header `cwd` against `workingDir` (mangling is a lossy
+ * one-way transform — see {@link mangleOmpWorkingDir} — so trusting the
+ * filename-derived id alone isn't enough) and skips any id a sibling session
+ * has already claimed. Claims the id it returns so a concurrent caller
+ * resolving the same directory in the same tick can't double-claim it.
+ */
+export function resolveAndClaimOmpSessionId(workingDir: string): string | null {
+  const dir = join(resolveOmpHome(), 'agent', 'sessions', mangleOmpWorkingDir(workingDir));
+  let entries: string[];
+  try {
+    entries = readdirSync(dir);
+  } catch {
+    return null;
+  }
+
+  let newestMtime = -Infinity;
+  let newestId: string | null = null;
+  for (const entry of entries) {
+    if (!OMP_SESSION_FILE_PATTERN.test(entry)) continue;
+    const filePath = join(dir, entry);
+    let mtimeMs: number;
+    try {
+      mtimeMs = statSync(filePath).mtimeMs;
+    } catch {
+      continue;
+    }
+    if (mtimeMs <= newestMtime) continue;
+    const header = readOmpSessionHeader(filePath);
+    if (!header || header.cwd !== workingDir || claimedOmpSessionIds.has(header.id)) continue;
+    newestMtime = mtimeMs;
+    newestId = header.id;
+  }
+  if (newestId) claimedOmpSessionIds.add(newestId);
   return newestId;
 }
