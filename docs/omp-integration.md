@@ -1,10 +1,10 @@
 # OMP (Oh My Pi) sessions
 
-Codeman can drive [OMP](https://github.com/can1357/omp) (`omp`, Oh My Pi) as a session
+Codeman can drive [OMP](https://github.com/can1357/oh-my-pi) (`omp`, Oh My Pi) as a session
 backend, alongside Claude Code, OpenCode, Codex, Gemini, Antigravity, Pi, Grok and
-DeepSeek Harness. `omp` is an eighth **run mode**: its own PTY, its own tmux session,
-its own tab identity. It is not a location overlay like Docker or remote-SSH cases,
-and it is not a web tab.
+DeepSeek Harness. `omp` is the ninth CLI backend (tenth `SessionMode`, counting
+`shell`): its own PTY, its own tmux session, its own tab identity. It is not a
+location overlay like Docker or remote-SSH cases, and it is not a web tab.
 
 ## Install
 
@@ -12,17 +12,19 @@ and it is not a web tab.
 curl -fsSL https://omp.sh/install | sh
 ```
 
-The installer places the binary in `~/.omp/bin`. Codeman resolves the binary via the
-server PATH and then the usual install locations (`~/.omp/bin` first, then
-`~/.local/bin`, `/usr/local/bin`, `~/.bun/bin`, `~/.npm-global/bin`, `~/bin`).
+The installer places the binary in `~/.local/bin` (verified against a real
+`--no-cache` Docker build — see `docker/agent.Dockerfile`; an earlier guess of
+`~/.omp/bin` was wrong). Codeman resolves the binary via the server PATH and then
+the usual install locations (`~/.local/bin` first, then `~/.omp/bin`,
+`/usr/local/bin`, `~/.bun/bin`, `~/.npm-global/bin`, `~/bin`).
 
 **`omp` is a short name**, so like `pi` and `grok` the resolver does not trust a PATH
 hit on its own: it runs `omp --version` and requires `omp/<semver>`-shaped output
-(e.g. `omp/17.4.0`) before accepting a candidate. Check what it resolved:
+(e.g. `omp/18.0.8`) before accepting a candidate. Check what it resolved:
 
 ```bash
 curl -s localhost:3000/api/omp/status | jq
-# { "available": true, "path": "/home/you/.omp/bin", "version": "17.4.0" }
+# { "available": true, "path": "/home/you/.local/bin", "version": "18.0.8" }
 ```
 
 ## Authenticate
@@ -115,12 +117,20 @@ alt-screen-strip list and lands on the `'buffer'` local-echo policy via the
 ## Docker cases
 
 The agent image installs omp in its own Dockerfile step (not npm; omp's installer
-targets `$HOME/.omp/bin` with no `--dir` override, the same shape as grok's
+targets `$HOME/.local/bin` with no `--dir` override, the same shape as grok's
 installer). Rebuild with the mandatory `--no-cache`:
 
 ```bash
 node scripts/build-agent-image.mjs --no-cache
 ```
+
+⚠️ **`--resume` pinning does not currently reach an in-container omp process.**
+Docker panes are built from `defaultDockerCommandForMode`, which never sees
+`ompConfig` — `appendResumeFlag()`'s `case 'omp'` keys off the top-level
+`resumeSessionId` field, which nothing populates for omp today. Host-side history
+recovery still works (the shared `sessions/` mount below), but a respawned
+in-container omp pane falls back to its own ambiguous `--continue`, not a pinned
+id. Flagged in upstream review, not yet fixed.
 
 Credentials are **mostly seeded**, but `sessions/` is the one exception in this CLI
 family: `~/.omp/agent/{config.yml,mcp.json,models.yml,settings.yml}` are seeded
@@ -140,7 +150,7 @@ shared nor seeded.
 
 `omp` mode is routed through an interactive login shell
 (`exec "$SHELL" -i -l -c 'omp'`), because sshd's remote-command PATH does not
-include `~/.omp/bin`. Per-session config and `envOverrides` do not cross ssh and are
+include `~/.local/bin`. Per-session config and `envOverrides` do not cross ssh and are
 rejected rather than silently ignored; use the per-host command override instead.
 
 ## Known gaps

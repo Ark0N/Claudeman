@@ -23,10 +23,16 @@ import {
   type CliResolverHost,
 } from './cli-executable-resolver.js';
 
-/** Common directories where the OMP CLI binary may be installed */
+/**
+ * Common directories where the OMP CLI binary may be installed. `~/.local/bin`
+ * leads: omp.sh's installer targets `$HOME/.local/bin` with no `--dir`
+ * override (verified against a real `--no-cache` Docker build — see
+ * docker/agent.Dockerfile); `~/.omp/bin` was an unverified guess that turned
+ * out wrong, kept after `~/.local/bin` only as a defensive fallback.
+ */
 const OMP_SEARCH_DIRS = [
-  join(homedir(), '.omp', 'bin'),
   join(homedir(), '.local', 'bin'),
+  join(homedir(), '.omp', 'bin'),
   '/usr/local/bin',
   join(homedir(), '.bun', 'bin'),
   join(homedir(), '.npm-global', 'bin'),

@@ -3243,7 +3243,6 @@ export function registerSessionRoutes(
     // rule the existing-case branch above states; this branch used to exclude just
     // the five external CLIs and let `shell` through).
     if (docker && docker.hooksEnabled && mode === 'claude') {
-      // configured project. Skipped for external CLIs (they use their own systems).
       try {
         if (!existsSync(join(resolvedCasePath, 'CLAUDE.md'))) {
           const templatePath = await ctx.getDefaultClaudeMdPath();

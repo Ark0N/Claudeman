@@ -3892,7 +3892,8 @@ body.touch-device .terminal-container .xterm .xterm-helper-textarea {
   background: linear-gradient(135deg, #312e81 0%, #6366f1 55%, #818cf8 100%);
   box-shadow: 0 4px 20px rgba(129, 140, 248, 0.3), 0 0 40px rgba(79, 70, 229, 0.12), inset 0 1px 0 rgba(255, 255, 255, 0.08);
   border-color: rgba(165, 180, 252, 0.5);
-  color: #eef2ff;  transform: translateY(-1px);
+  color: #eef2ff;
+  transform: translateY(-1px);
 }
 
 /* Grok (xAI): monochrome charcoal identity, matching .btn-toolbar.btn-run.mode-grok
@@ -5016,7 +5017,8 @@ body.touch-device .terminal-container .xterm .xterm-helper-textarea {
   background: linear-gradient(135deg, #3730a3 0%, #6366f1 55%, #818cf8 100%);
   box-shadow: 0 0 12px rgba(129, 140, 248, 0.35), 0 2px 8px rgba(79, 70, 229, 0.2), inset 0 1px 0 rgba(255, 255, 255, 0.08);
   border-color: rgba(165, 180, 252, 0.6);
-  color: #eef2ff;}
+  color: #eef2ff;
+}
 
 /* Grok mode colors. Same cascade note as pi above: this base-sheet pair only
    renders on the `og` skin — the nested `html:not([data-skin="og"])` block

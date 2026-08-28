@@ -5,7 +5,9 @@
 feat: add OMP as a first-class CLI backend (SessionMode 'omp')
 
 Codeman can now spawn the OMP CLI (`omp`) in local, Docker, and remote-SSH
-sessions, alongside Claude Code, OpenCode, Codex, Gemini, and Antigravity.
+sessions, alongside Claude Code, OpenCode, Codex, Gemini, Antigravity, Pi, Grok
+Build, and DeepSeek Harness — the ninth CLI backend (tenth `SessionMode`,
+counting `shell`).
 
 - New `SessionMode = ... | 'omp'` with an `OmpConfig` (model, resumeSessionId)
 - `src/utils/omp-cli-resolver.ts` PATH probe + `/api/omp/status` + `codeman doctor` entry
