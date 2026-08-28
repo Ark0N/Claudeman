@@ -1674,6 +1674,19 @@ export class Session extends EventEmitter {
   private _resolvedOmpRespawnConfig(): OmpConfig | undefined {
     if (this.mode !== 'omp') return this._ompConfig;
     if (this._ompConfig?.resumeSessionId) return this._ompConfig;
+    // Resolving-and-pinning is only correct when a mux session ALREADY exists for
+    // this Session object — a dead-pane respawn, or a boot-recovery reattach (the
+    // constructor sets _muxSession from persisted state before startInteractive()
+    // ever runs there). A genuinely brand-new session (Run OMP -> POST
+    // /api/quick-start -> a fresh Session with no muxSession in its create config)
+    // has _muxSession still null at this point. Without this guard, the eager
+    // `respawnPaneOptions: this._buildRespawnPaneOptions()` in startInteractive()
+    // mutates this._ompConfig via the side effect below BEFORE
+    // createSessionOptions.ompConfig is even read in the SAME object literal, so a
+    // fresh "Run OMP" click silently inherited whatever omp conversation happened
+    // to be newest on disk for this working directory instead of starting clean
+    // (reported live 2026-08-27).
+    if (!this._muxSession) return this._ompConfig;
     const resolvedId = findLatestOmpSessionId(this.workingDir);
     if (resolvedId) {
       this._ompConfig = { ...this._ompConfig, resumeSessionId: resolvedId };
