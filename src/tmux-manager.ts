@@ -1138,8 +1138,11 @@ export function buildRemoteLaunchCommand(options: {
   sessionId: string;
   claudeMode?: ClaudeMode;
   allowedTools?: string;
+  /** OMP only — resume/continue overrides for the remote omp relaunch (dead-pane respawn). */
+  ompConfig?: OmpConfig;
+  resumeSessionId?: string;
 }): string {
-  const { mode, remote, sessionId, claudeMode, allowedTools } = options;
+  const { mode, remote, sessionId, claudeMode, allowedTools, ompConfig, resumeSessionId } = options;
   // §6.3: honor the session's EFFECTIVE claude permission mode on remote instead of
   // hardcoding --dangerously-skip-permissions, so a non-granted multi-user user's
   // downgraded 'auto' actually reaches the remote agent (the default command otherwise
@@ -1166,6 +1169,20 @@ export function buildRemoteLaunchCommand(options: {
     modeCommand = remoteLoginShellCommand(
       `claude${permFlags} --session-id ${sessionId} || claude${permFlags} --resume ${sessionId}`
     );
+  } else if (mode === 'omp') {
+    // Remote OMP respawn must RESUME the same conversation instead of
+    // relaunching fresh (found live 2026-08-29: remote ctrl-c/ctrl-d relaunched
+    // a brand-new omp session). The pinned id, when known, is passed as an
+    // explicit --resume; otherwise fall back to omp's own "most recent"
+    // --continue so a dead-pane respawn still lands back in the conversation.
+    // The docker path uses the same buildOmpCommand() shape via
+    // appendResumeFlag(); the remote builder just reuses the local builder
+    // directly so the flags can't drift.
+    const ompCmd = buildOmpCommand({
+      ...ompConfig,
+      resumeSessionId: resumeSessionId || ompConfig?.resumeSessionId,
+    });
+    modeCommand = remoteLoginShellCommand(ompCmd);
   } else {
     modeCommand = defaultRemoteCommandForMode(mode);
   }
@@ -1602,6 +1619,9 @@ function buildRemoteSessionCommand(options: {
   sessionId: string;
   claudeMode?: ClaudeMode;
   allowedTools?: string;
+  /** OMP only — resume/continue overrides for a remote omp relaunch. */
+  ompConfig?: OmpConfig;
+  resumeSessionId?: string;
 }): string {
   const { remote, sessionId } = options;
   if (remote.owned === false) {
@@ -2291,7 +2311,7 @@ export class TmuxManager extends EventEmitter implements TerminalMultiplexer {
       const fullCmd = docker
         ? buildDockerLaunchCommand(resolveDockerLaunchOptions(mode, docker, sessionId, resumeSessionId))
         : remote
-          ? buildRemoteSessionCommand({ mode, remote, sessionId, claudeMode, allowedTools })
+          ? buildRemoteSessionCommand({ mode, remote, sessionId, claudeMode, allowedTools, ompConfig, resumeSessionId })
           : localFullCmd;
 
       // Create tmux session in three steps to handle cold-start (no server running)
@@ -2559,7 +2579,7 @@ export class TmuxManager extends EventEmitter implements TerminalMultiplexer {
     const fullCmd = docker
       ? buildDockerLaunchCommand(resolveDockerLaunchOptions(mode, docker, sessionId, resumeSessionId))
       : remote
-        ? buildRemoteSessionCommand({ mode, remote, sessionId, claudeMode, allowedTools })
+        ? buildRemoteSessionCommand({ mode, remote, sessionId, claudeMode, allowedTools, ompConfig, resumeSessionId })
         : localFullCmd;
 
     try {
