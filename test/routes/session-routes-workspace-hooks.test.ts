@@ -168,11 +168,22 @@ describe('POST /api/sessions workspace hooks', () => {
     // `user@host:session` — locally a RELATIVE path, so a mkdir would create it
     // as a junk directory under the server cwd. statusLineTelemetry rides along:
     // applyStatusLineConfig mkdirs the same way and used to run for remote attaches.
-    await mkdir(getDataDir(), { recursive: true });
-    await writeFile(
-      join(getDataDir(), 'remote-hosts.json'),
-      JSON.stringify([{ id: 'h1', label: 'box', host: '10.0.0.5', username: 'dev' }])
-    );
+    // SAFETY (2026-08-29): `getDataDir()` is call-time so stub the env to a
+    // throwaway dir for this write — otherwise this test overwrites the PROD
+    // `~/.codeman/remote-hosts.json` with the fixture below, wiping every
+    // user-defined remote host (caught live: a full-suite run emptied the
+    // launch-case dropdown and broke remote session creation).
+    const fixtureDataDir = join(tmpdir(), `codeman-hook-fixture-${process.pid}`);
+    vi.stubEnv('CODEMAN_DATA_DIR', fixtureDataDir);
+    try {
+      await mkdir(getDataDir(), { recursive: true });
+      await writeFile(
+        join(getDataDir(), 'remote-hosts.json'),
+        JSON.stringify([{ id: 'h1', label: 'box', host: '10.0.0.5', username: 'dev' }])
+      );
+    } finally {
+      vi.unstubAllEnvs();
+    }
 
     const res = await createSession({
       name: 'hooks-remote',
