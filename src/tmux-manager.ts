@@ -60,6 +60,7 @@ import {
   type DockerCommandMode,
 } from './types.js';
 import { buildEffortCliArgs, buildNameCliArgs } from './session-cli-builder.js';
+import { resolveStatusLineCliCommand } from './hooks-config.js';
 import {
   buildSshConnectionArgs,
   defaultRemoteCommandForMode,
@@ -941,10 +942,32 @@ function buildOmpCommand(config?: OmpConfig): string {
  *
  * Injection-safe: effort is validated against the EFFORT_LEVELS allowlist inside
  * buildEffortCliArgs, so the single-quoted values contain no user-controlled characters.
+ *
+ * Also folds in the ephemeral plan-usage statusLine exporter (see
+ * resolveStatusLineCliCommand in hooks-config.ts) when one was resolved for
+ * this spawn: `ultracode` and the statusLine both ride the SAME `--settings`
+ * JSON object, since Claude Code accepts only one `--settings` flag per
+ * invocation — passing it twice would let the second one silently win.
+ * `statusLineCommand` embeds the exporter's own curl command, which itself
+ * contains single AND double quotes, so it goes through this file's own
+ * `shellescape()` rather than hand-wrapped quotes (a bare `'...'` wrap would
+ * be broken out of by the exporter's embedded `'`).
  */
-function buildEffortSettingsFlag(effort?: EffortLevel): string {
-  const [flag, value] = buildEffortCliArgs(effort);
-  return flag && value ? ` ${flag} '${value}'` : '';
+function buildClaudeSettingsFlag(effort?: EffortLevel, statusLineCommand?: string): string {
+  const [effortFlag, effortValue] = buildEffortCliArgs(effort);
+  const settingsObj: Record<string, unknown> = {};
+  let effortCliPart = '';
+  if (effortFlag === '--settings' && effortValue) {
+    Object.assign(settingsObj, JSON.parse(effortValue));
+  } else if (effortFlag && effortValue) {
+    effortCliPart = ` ${effortFlag} ${shellescape(effortValue)}`;
+  }
+  if (statusLineCommand) {
+    settingsObj.statusLine = { type: 'command', command: statusLineCommand };
+  }
+  const settingsPart =
+    Object.keys(settingsObj).length > 0 ? ` --settings ${shellescape(JSON.stringify(settingsObj))}` : '';
+  return `${effortCliPart}${settingsPart}`;
 }
 
 /**
@@ -977,6 +1000,8 @@ export function buildSpawnCommand(options: {
   ompConfig?: OmpConfig;
   resumeSessionId?: string;
   effort?: EffortLevel;
+  /** Resolved by resolveStatusLineCliCommand (hooks-config.ts) — undefined skips the exporter. Claude only. */
+  statusLineCommand?: string;
   /** Codeman session name, passed to claude as `--name` (version-gated, sanitized; local spawns only). */
   sessionName?: string;
   /**
@@ -991,7 +1016,7 @@ export function buildSpawnCommand(options: {
     // Validate model to prevent command injection
     const safeModel = options.model && /^[a-zA-Z0-9._\-[\]]+$/.test(options.model) ? options.model : undefined;
     const modelFlag = safeModel ? ` --model "${safeModel}"` : '';
-    const effortFlag = buildEffortSettingsFlag(options.effort);
+    const effortFlag = buildClaudeSettingsFlag(options.effort, options.statusLineCommand);
     const nameFlag = buildClaudeNameFlag(
       options.sessionName,
       options.claudeCliVersion !== undefined ? options.claudeCliVersion : getClaudeCliVersion()
@@ -2114,6 +2139,7 @@ export class TmuxManager extends EventEmitter implements TerminalMultiplexer {
       resumeSessionId,
       envOverrides,
       effort,
+      statusLineTelemetry,
       historyLimit = DEFAULT_TMUX_HISTORY_LIMIT,
       remote,
       docker,
@@ -2183,6 +2209,15 @@ export class TmuxManager extends EventEmitter implements TerminalMultiplexer {
 
     const envExportsStr = this.buildEnvExports(sessionId, muxName, mode).join(' && ');
 
+    // Claude-only, local spawns only (remote/docker have their own separate
+    // command builders — out of scope here). Also self-heals: strips any
+    // legacy disk-written exporter from an older Codeman build the first
+    // time a session starts in that workspace again.
+    const statusLineCommand =
+      mode === 'claude' && !remote && !docker
+        ? await resolveStatusLineCliCommand(workingDir, statusLineTelemetry === true)
+        : undefined;
+
     const baseCmd = buildSpawnCommand({
       mode,
       sessionId,
@@ -2199,6 +2234,7 @@ export class TmuxManager extends EventEmitter implements TerminalMultiplexer {
       ompConfig,
       resumeSessionId,
       effort,
+      statusLineCommand,
       sessionName: name,
     });
 
@@ -2430,6 +2466,7 @@ export class TmuxManager extends EventEmitter implements TerminalMultiplexer {
       resumeSessionId,
       envOverrides,
       effort,
+      statusLineTelemetry,
       remote,
       docker,
       name,
@@ -2444,6 +2481,12 @@ export class TmuxManager extends EventEmitter implements TerminalMultiplexer {
     const { pathExport } = this.buildPathExport(mode);
 
     const envExportsStr = this.buildEnvExports(sessionId, muxName, mode).join(' && ');
+
+    // See createSession()'s identical resolution for rationale.
+    const statusLineCommand =
+      mode === 'claude' && !remote && !docker
+        ? await resolveStatusLineCliCommand(workingDir, statusLineTelemetry === true)
+        : undefined;
 
     const baseCmd = buildSpawnCommand({
       mode,
@@ -2461,6 +2504,7 @@ export class TmuxManager extends EventEmitter implements TerminalMultiplexer {
       ompConfig,
       resumeSessionId,
       effort,
+      statusLineCommand,
       sessionName: name,
     });
     const config = niceConfig || DEFAULT_NICE_CONFIG;
