@@ -67,6 +67,7 @@ import {
   legacyConfigForMode,
 } from './session-cli-registry-bridge.js';
 import type { CliEntry } from './config/cli-registry/types.js';
+import { resolveStatusLineCliCommand } from './hooks-config.js';
 import {
   buildSshConnectionArgs,
   defaultRemoteCommandForMode,
@@ -661,6 +662,8 @@ export function buildSpawnCommand(options: {
   ompConfig?: OmpConfig;
   resumeSessionId?: string;
   effort?: EffortLevel;
+  /** Resolved by resolveStatusLineCliCommand (hooks-config.ts) — undefined skips the exporter. Claude only. */
+  statusLineCommand?: string;
   /** Codeman session name, passed to claude as `--name` (version-gated, sanitized; local spawns only). */
   sessionName?: string;
   /**
@@ -1729,6 +1732,7 @@ export class TmuxManager extends EventEmitter implements TerminalMultiplexer {
       resumeSessionId,
       envOverrides,
       effort,
+      statusLineTelemetry,
       historyLimit = DEFAULT_TMUX_HISTORY_LIMIT,
       remote,
       docker,
@@ -1787,6 +1791,15 @@ export class TmuxManager extends EventEmitter implements TerminalMultiplexer {
 
     const envExportsStr = this.buildEnvExports(sessionId, muxName, mode).join(' && ');
 
+    // Claude-only, local spawns only (remote/docker have their own separate
+    // command builders — out of scope here). Also self-heals: strips any
+    // legacy disk-written exporter from an older Codeman build the first
+    // time a session starts in that workspace again.
+    const statusLineCommand =
+      mode === 'claude' && !remote && !docker
+        ? await resolveStatusLineCliCommand(workingDir, statusLineTelemetry === true)
+        : undefined;
+
     const baseCmd = buildSpawnCommand({
       mode,
       sessionId,
@@ -1803,6 +1816,7 @@ export class TmuxManager extends EventEmitter implements TerminalMultiplexer {
       ompConfig,
       resumeSessionId,
       effort,
+      statusLineCommand,
       sessionName: name,
     });
 
@@ -2027,6 +2041,7 @@ export class TmuxManager extends EventEmitter implements TerminalMultiplexer {
       resumeSessionId,
       envOverrides,
       effort,
+      statusLineTelemetry,
       remote,
       docker,
       name,
@@ -2041,6 +2056,12 @@ export class TmuxManager extends EventEmitter implements TerminalMultiplexer {
     const { pathExport } = this.buildPathExport(mode);
 
     const envExportsStr = this.buildEnvExports(sessionId, muxName, mode).join(' && ');
+
+    // See createSession()'s identical resolution for rationale.
+    const statusLineCommand =
+      mode === 'claude' && !remote && !docker
+        ? await resolveStatusLineCliCommand(workingDir, statusLineTelemetry === true)
+        : undefined;
 
     const baseCmd = buildSpawnCommand({
       mode,
@@ -2058,6 +2079,7 @@ export class TmuxManager extends EventEmitter implements TerminalMultiplexer {
       ompConfig,
       resumeSessionId,
       effort,
+      statusLineCommand,
       sessionName: name,
     });
     const config = niceConfig || DEFAULT_NICE_CONFIG;
