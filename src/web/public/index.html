@@ -2644,6 +2644,7 @@
             <div class="form-row docker-quick-row">
               <label class="checkbox-row"><input type="checkbox" id="newCaseDocker"> 🐳 Run in an isolated Docker container</label>
               <span class="form-hint">Runs this case in a hardened, isolated container. The base image is built automatically on first use. Docker/Podman must be installed.</span>
+              <span class="form-hint">Already have a container running? <button type="button" class="btn-inline-check" id="dockerAdoptJumpBtn">Attach to it instead</button> — Codeman only <code>docker exec</code>s in and never touches its lifecycle.</span>
             </div>
             <details class="advanced-options docker-quick-settings" id="dockerQuickSettings">
               <summary><svg class="set-adv-chev" width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.4" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M6 9l6 6 6-6"/></svg><span>Container settings (optional, sensible defaults)</span></summary>
