@@ -16652,6 +16652,18 @@ html[data-tab-orientation='vertical'] .home-sessions {
    panel stays exactly as it was until the checkbox is ticked. Rules carry
    `!important` because the adapter block above paints `.form-row` as a row card
    and `details.advanced-options` has its own display. */
+/* Run-menu notice: why a container case is offering no agent modes. Lives at the
+   top of the menu so the reason is where the missing entries would have been. */
+.run-mode-notice {
+  padding: 8px 12px;
+  margin: 0 0 4px;
+  font-size: 12px;
+  line-height: 1.45;
+  color: var(--text-muted, #9aa0a6);
+  border-bottom: 1px solid var(--border, #333);
+  white-space: normal;
+}
+
 #createCaseModal .docker-adopt-only {
   display: none !important;
 }

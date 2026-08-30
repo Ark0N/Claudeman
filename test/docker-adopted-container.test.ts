@@ -123,7 +123,7 @@ describe('adopted container: the launch chain never mutates lifecycle', () => {
     expect(adopted).not.toContain('"');
     expect(adopted).not.toContain('$(');
     // Every other line already quotes with the single-quote helper.
-    expect(adopted).toContain("grep -qx true");
+    expect(adopted).toContain('grep -qx true');
   });
 
   it('skips the base-image gate, which describes an image adoption never uses', () => {
@@ -139,6 +139,44 @@ describe('adopted container: the launch chain never mutates lifecycle', () => {
   it('still execs into the in-container tmux, which is the whole point', () => {
     expect(adopted).toContain('docker exec -it');
     expect(adopted).toContain('new-session -A');
+  });
+});
+
+describe('adopted container: the probe request must reach the server', () => {
+  const ui = readFileSync(new URL('../src/web/public/session-ui.js', import.meta.url), 'utf8');
+  const api = readFileSync(new URL('../src/web/public/api-client.js', import.meta.url), 'utf8');
+
+  it('never hands _apiJson an already-stringified body', () => {
+    // _api serializes `body` and sets Content-Type itself. Passing a string
+    // double-encodes it, the server sees a JSON string where it expects an
+    // object, and answers 400 INVALID_INPUT — which the caller reads as "the
+    // container could not be probed", so the menu silently showed every mode.
+    expect(api).toContain('fetchOpts.body = JSON.stringify(body)');
+    const calls = [...ui.matchAll(/_apiJson\([^)]*\{[\s\S]{0,400}?\}\s*\)/g)].map((m) => m[0]);
+    expect(calls.length).toBeGreaterThan(0);
+    for (const call of calls) expect(call).not.toContain('body: JSON.stringify');
+  });
+
+  it('hides every agent mode and says why when the container cannot be read', () => {
+    // Offering claude on a container that is not running is a click that can
+    // only fail, with the reason visible nowhere.
+    // Brace-matched, not a character window: slicing between two call sites
+    // silently yields '' when the second one appears ABOVE the first, and the
+    // assertion then passes over nothing. That has bitten this file twice.
+    const start = ui.indexOf('async _probeDockerCaseModes(activeCase, menu) {');
+    expect(start).toBeGreaterThan(-1);
+    const open = ui.indexOf('{', start);
+    let depth = 0;
+    let fn = '';
+    for (let i = open; i < ui.length; i++) {
+      if (ui[i] === '{') depth++;
+      else if (ui[i] === '}' && --depth === 0) {
+        fn = ui.slice(start, i + 1);
+        break;
+      }
+    }
+    expect(fn).toContain('_dockerCaseProbeError');
+    expect(ui).toContain('_renderRunModeNotice');
   });
 });
 
@@ -249,10 +287,22 @@ describe('adopted container: run modes come from the CONTAINER, not the host', (
   /** Slice the method BODY. Anchored on the definition, not a call site: the
    *  menu opener calls _loadRunModeHistory() ABOVE this definition, so slicing
    *  between call sites silently yields an empty string and passes nothing. */
+  /**
+   * The method BODY, delimited by brace depth rather than a character budget.
+   * A fixed window silently truncates the moment the method grows — which is
+   * exactly what happened twice: a comment added above the assertion pushed the
+   * asserted line past the cutoff and CI failed on a test that was still true.
+   */
   const refreshFn = (src) => {
     const start = src.indexOf('_refreshRunModeAvailability(menu) {');
     expect(start).toBeGreaterThan(-1);
-    return src.slice(start, start + 2000);
+    const open = src.indexOf('{', start);
+    let depth = 0;
+    for (let i = open; i < src.length; i++) {
+      if (src[i] === '{') depth++;
+      else if (src[i] === '}' && --depth === 0) return src.slice(start, i + 1);
+    }
+    throw new Error('unbalanced braces in _refreshRunModeAvailability');
   };
 
   it('gates a docker case on availableModes instead of host CLI probes', () => {

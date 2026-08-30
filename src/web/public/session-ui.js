@@ -501,14 +501,18 @@ Object.assign(CodemanApp.prototype, {
       ? this._dockerCaseModes?.[caseName] || activeCase.docker?.availableModes || null
       : null;
     if (isDocker && !this._dockerCaseModes?.[caseName]) void this._probeDockerCaseModes(activeCase, menu);
+    // An unreachable container hides every agent mode and explains why, instead
+    // of silently offering modes that cannot start.
+    const probeError = isDocker ? this._dockerCaseProbeError?.[caseName] : null;
     for (const mode of ['claude', 'opencode', 'codex', 'gemini', 'antigravity', 'pi', 'grok', 'deepseek', 'omp']) {
       const btn = menu.querySelector(`.run-mode-option[data-mode="${mode}"]`);
       if (!btn) continue;
       let available;
-      if (activeCase?.location === 'docker') available = containerModes ? containerModes.includes(mode) : true;
+      if (isDocker) available = probeError ? false : containerModes ? containerModes.includes(mode) : true;
       else available = this.isCliAvailable(mode);
       btn.style.display = available ? 'flex' : 'none';
     }
+    this._renderRunModeNotice(menu, probeError);
     // DeepSeek is the one mode whose availability has two halves: `dsh` can be
     // perfectly installed while no pane-capable profile exists, because DeepSeek
     // ships no terminal front door. In that state the honest offer is "add one",
@@ -651,6 +655,27 @@ Object.assign(CodemanApp.prototype, {
   },
 
   /**
+   * One-line explanation at the top of the run menu. Only a container that could
+   * not be read produces one; everything else removes it, so a stale reason can
+   * never outlive the condition that caused it.
+   */
+  _renderRunModeNotice(menu, message) {
+    if (!menu) return;
+    let el = menu.querySelector('.run-mode-notice');
+    if (!message) {
+      el?.remove();
+      return;
+    }
+    if (!el) {
+      el = document.createElement('div');
+      el.className = 'run-mode-notice';
+      menu.prepend(el);
+    }
+    // Server-supplied text: set it, never parse it as markup.
+    el.textContent = message;
+  },
+
+  /**
    * Ask the container which CLIs it actually has, and re-gate the menu once the
    * answer lands. Cached per case for the page's lifetime: the menu re-opens
    * often and the probe is a `docker exec` round trip.
@@ -671,16 +696,27 @@ Object.assign(CodemanApp.prototype, {
     this._dockerModeProbeInFlight = this._dockerModeProbeInFlight || {};
     this._dockerModeProbeInFlight[name] = true;
     try {
+      // ⚠️ _api serializes `body` and sets Content-Type itself. Passing an
+      // already-stringified body double-encodes it and the server rejects a
+      // JSON string where it expects an object (400 INVALID_INPUT).
       const probe = await this._apiJson('/api/docker-cases/adopt-preflight', {
         method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ hostId, container }),
+        body: { hostId, container },
       });
       if (probe?.ok && Array.isArray(probe.availableModes)) {
         this._dockerCaseModes[name] = probe.availableModes;
-        // Only repaint while the menu the user opened is still on screen.
-        if (menu?.classList.contains('active')) this._refreshRunModeAvailability(menu);
+        delete this._dockerCaseProbeError?.[name];
+      } else {
+        // A container that cannot be probed — recreated, stopped, engine down —
+        // must NOT fall through to "show everything". Offering claude on a
+        // container that is not running is a click that can only fail, with the
+        // reason visible nowhere. Record the reason and say it in the menu.
+        this._dockerCaseProbeError = this._dockerCaseProbeError || {};
+        this._dockerCaseProbeError[name] = probe?.error || `Could not read container "${container}".`;
+        delete this._dockerCaseModes[name];
       }
+      // Only repaint while the menu the user opened is still on screen.
+      if (menu?.classList.contains('active')) this._refreshRunModeAvailability(menu);
     } finally {
       delete this._dockerModeProbeInFlight[name];
     }
@@ -2987,8 +3023,7 @@ Object.assign(CodemanApp.prototype, {
       fetchListing: async (path) => {
         const data = await this._apiJson('/api/docker-cases/browse', {
           method: 'POST',
-          headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify({ hostId, container, path: path || '/' }),
+          body: { hostId, container, path: path || '/' },
         });
         if (!data) return { success: false, error: `Could not read ${container}. Is it running?` };
         if (data.error) return { success: false, error: data.error };
@@ -3162,8 +3197,7 @@ Object.assign(CodemanApp.prototype, {
     // reason it failed, so the envelope is unwrapped by hand here.
     const probe = await this._apiJson('/api/docker-cases/adopt-preflight', {
       method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ hostId, container, ...(containerWorkdir ? { containerWorkdir } : {}) }),
+      body: { hostId, container, ...(containerWorkdir ? { containerWorkdir } : {}) },
     });
     if (!statusEl) return;
     if (!probe) {
