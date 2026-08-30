@@ -67,7 +67,7 @@ import {
   legacyConfigForMode,
 } from './session-cli-registry-bridge.js';
 import type { CliEntry } from './config/cli-registry/types.js';
-import { resolveStatusLineCliCommand } from './hooks-config.js';
+import { resolveStatusLineCliCommand, findEffectiveUserStatusLineCommand } from './hooks-config.js';
 import {
   buildSshConnectionArgs,
   defaultRemoteCommandForMode,
@@ -1708,6 +1708,30 @@ export class TmuxManager extends EventEmitter implements TerminalMultiplexer {
   }
 
   /**
+   * Export the user's own REAL statusLine command (found by
+   * findEffectiveUserStatusLineCommand) via tmux setenv, so the shared
+   * exporter script (statusLineExporterScriptContent in hooks-config.ts) can
+   * wrap it. Via setenv rather than embedding it in the spawn command line:
+   * tmux stores a setenv value verbatim and never re-parses it as shell
+   * syntax, so once safely escaped for THIS one command, the command's own
+   * `$`/quotes survive untouched into the claude process's environment — the
+   * same reasoning that made the exporter script itself necessary (see
+   * ensureStatusLineExporterScript's doc comment). Only this ONE line needs
+   * shellescape(); the stored value itself is opaque to tmux from then on.
+   */
+  private _configureStatusLineUserCommand(muxName: string, command: string | undefined): void {
+    if (!command) return;
+    try {
+      execSync(`${this.tmux()} setenv -t ${shellescape(muxName)} CODEMAN_USER_STATUSLINE_CMD ${shellescape(command)}`, {
+        timeout: EXEC_TIMEOUT_MS,
+        stdio: 'ignore',
+      });
+    } catch {
+      // Non-critical — the exporter just falls back to the plain "codeman" marker.
+    }
+  }
+
+  /**
    * Creates a new tmux session wrapping Claude CLI or a shell.
    * In test mode: creates an in-memory session only (no real tmux session).
    */
@@ -1799,6 +1823,10 @@ export class TmuxManager extends EventEmitter implements TerminalMultiplexer {
       mode === 'claude' && !remote && !docker
         ? await resolveStatusLineCliCommand(workingDir, statusLineTelemetry === true)
         : undefined;
+    // The user's own REAL statusLine, if any (walked via Claude Code's own
+    // settings precedence) — exported below so the shared exporter script
+    // can wrap it. Only worth discovering when we're actually injecting.
+    const userStatusLineCommand = statusLineCommand ? await findEffectiveUserStatusLineCommand(workingDir) : undefined;
 
     const baseCmd = buildSpawnCommand({
       mode,
@@ -1879,6 +1907,7 @@ export class TmuxManager extends EventEmitter implements TerminalMultiplexer {
         mode,
         legacyConfigForMode(mode, options as unknown as Record<string, unknown>)
       );
+      this._configureStatusLineUserCommand(muxName, userStatusLineCommand);
 
       // Apply user-supplied env overrides (e.g., CLAUDE_CODE_EFFORT_LEVEL) via tmux setenv
       // so secret values stay off the bash command line. Must run before respawn-pane.
@@ -2062,6 +2091,7 @@ export class TmuxManager extends EventEmitter implements TerminalMultiplexer {
       mode === 'claude' && !remote && !docker
         ? await resolveStatusLineCliCommand(workingDir, statusLineTelemetry === true)
         : undefined;
+    const userStatusLineCommand = statusLineCommand ? await findEffectiveUserStatusLineCommand(workingDir) : undefined;
 
     const baseCmd = buildSpawnCommand({
       mode,
@@ -2099,6 +2129,7 @@ export class TmuxManager extends EventEmitter implements TerminalMultiplexer {
         mode,
         legacyConfigForMode(mode, options as unknown as Record<string, unknown>)
       );
+      this._configureStatusLineUserCommand(muxName, userStatusLineCommand);
 
       // Re-apply user env overrides before respawn so the new shell inherits them.
       this.applyEnvOverrides(muxName, envOverrides);
