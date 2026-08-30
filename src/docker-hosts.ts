@@ -1049,6 +1049,55 @@ export interface AdoptedContainerProbe {
   error?: string;
 }
 
+/** One container on the engine, as offered to the adoption picker. */
+export interface DockerContainerInfo {
+  name: string;
+  image: string;
+  running: boolean;
+  /** Engine's own status string, e.g. "Up 3 hours" / "Exited (0) 2 days ago". */
+  status: string;
+}
+
+/**
+ * List the engine's containers for the adoption picker (mirror of
+ * `listRemoteCodemanSessions`). Read-only and NEVER throws: an unreachable
+ * daemon, a missing engine or zero containers all return `[]`, because this
+ * feeds a convenience picker whose input the user can always type by hand.
+ *
+ * Stopped containers ARE included, sorted after running ones and carrying their
+ * status: adoption requires a running container, but hiding a stopped one turns
+ * "my container is not in the list" into a dead end with no explanation, while
+ * showing `my-box (Exited (0) 2 days ago)` says exactly what to fix.
+ */
+export async function listDockerContainers(
+  docker: Pick<SessionDocker, 'engine' | 'context' | 'daemonHost'>
+): Promise<DockerContainerInfo[]> {
+  if (IS_TEST_MODE) return [];
+  const argv = dockerEngineArgv(docker);
+  try {
+    const { stdout } = await execFileAsync(
+      argv[0],
+      [...argv.slice(1), 'ps', '-a', '--format', '{{.Names}}\t{{.Image}}\t{{.State}}\t{{.Status}}'],
+      { timeout: DOCKER_PROBE_TIMEOUT_MS }
+    );
+    const rows = stdout
+      .split('\n')
+      .map((line) => line.split('\t'))
+      .filter((parts) => parts.length >= 4 && parts[0])
+      .map(([name, image, state, status]) => ({
+        name,
+        image: image || '',
+        running: state === 'running',
+        status: status || '',
+      }));
+    // Running first, then by name, so the containers a user can actually adopt
+    // are the ones at the top of the list.
+    return rows.sort((a, b) => Number(b.running) - Number(a.running) || a.name.localeCompare(b.name));
+  } catch {
+    return [];
+  }
+}
+
 /**
  * Preflight an EXISTING container for adoption. Read-only by construction: it
  * runs `inspect` plus one `exec` of `command -v`, and never creates, starts or

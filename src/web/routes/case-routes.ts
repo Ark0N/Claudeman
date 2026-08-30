@@ -69,6 +69,7 @@ import {
   dockerContainerName,
   dockerDisplayPath,
   probeAdoptableContainer,
+  listDockerContainers,
   DOCKER_ADOPT_PROBE_MODES,
   readDockerCases,
   readDockerHosts,
@@ -77,7 +78,7 @@ import {
   writeDockerCases,
   writeDockerHosts,
 } from '../../docker-hosts.js';
-import type { AdoptedContainerProbe } from '../../docker-hosts.js';
+import type { AdoptedContainerProbe, DockerContainerInfo } from '../../docker-hosts.js';
 import { buildDockerRemoveCommand } from '../../tmux-manager.js';
 import {
   checkRemoteTmuxAvailable,
@@ -868,6 +869,27 @@ export function registerCaseRoutes(app: FastifyInstance, ctx: EventPort & Config
    * the user "not running" / "no tmux" / "codex present, claude missing" before
    * they commit to a case name. Read-only; never touches container lifecycle.
    */
+  /**
+   * Containers on the host's engine, for the adoption picker. Read-only and
+   * best-effort (mirror of the remote `:hostId/sessions` discovery route): an
+   * unreachable daemon yields an empty list rather than an error, because the
+   * container name is a free-text field the user can always type by hand.
+   */
+  app.get(
+    '/api/docker-hosts/:hostId/containers',
+    async (req): Promise<ApiResponse<{ containers: DockerContainerInfo[] }>> => {
+      const { hostId } = req.params as { hostId: string };
+      const host = (await readDockerHosts(CODEMAN_CONFIG_DIR)).find((item) => item.id === hostId);
+      if (!host) return createErrorResponse(ApiErrorCode.NOT_FOUND, 'Docker host not found');
+      const containers = await listDockerContainers({
+        engine: host.engine ?? 'docker',
+        context: host.context,
+        daemonHost: host.daemonHost,
+      });
+      return { success: true, data: { containers } };
+    }
+  );
+
   app.post('/api/docker-cases/adopt-preflight', async (req): Promise<ApiResponse<AdoptedContainerProbe>> => {
     const body = parseBody(DockerAdoptPreflightSchema, req.body);
     const host = (await readDockerHosts(CODEMAN_CONFIG_DIR)).find((item) => item.id === body.hostId);
