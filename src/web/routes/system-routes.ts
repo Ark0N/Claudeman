@@ -688,9 +688,8 @@ export function registerSystemRoutes(
         `Installing ${pkg} into profile "${profile}" failed: ${detail}`
       );
     }
-    const { listDeepSeekProfiles, resolveDefaultDeepSeekProfile, isDeepSeekRunnable } = await import(
-      '../../utils/deepseek-cli-resolver.js'
-    );
+    const { listDeepSeekProfiles, resolveDefaultDeepSeekProfile, isDeepSeekRunnable } =
+      await import('../../utils/deepseek-cli-resolver.js');
     return {
       profile,
       package: pkg,

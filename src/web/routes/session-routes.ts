@@ -1006,9 +1006,8 @@ export function registerSessionRoutes(
       }
     }
     if (body.mode === 'antigravity') {
-      const { isAntigravityAvailable, getAntigravityNotFoundMessage } = await import(
-        '../../utils/antigravity-cli-resolver.js'
-      );
+      const { isAntigravityAvailable, getAntigravityNotFoundMessage } =
+        await import('../../utils/antigravity-cli-resolver.js');
       if (!isAntigravityAvailable()) {
         return createErrorResponse(ApiErrorCode.OPERATION_FAILED, getAntigravityNotFoundMessage());
       }
@@ -3261,9 +3260,8 @@ export function registerSessionRoutes(
       // Check OpenCode availability if requested. Error text comes from the
       // resolver so it carries the resolution diagnostics; same for the modes below.
       if (mode === 'opencode') {
-        const { isOpenCodeAvailable, getOpenCodeNotFoundMessage } = await import(
-          '../../utils/opencode-cli-resolver.js'
-        );
+        const { isOpenCodeAvailable, getOpenCodeNotFoundMessage } =
+          await import('../../utils/opencode-cli-resolver.js');
         if (!isOpenCodeAvailable()) {
           return createErrorResponse(ApiErrorCode.OPERATION_FAILED, getOpenCodeNotFoundMessage());
         }
@@ -3287,9 +3285,8 @@ export function registerSessionRoutes(
 
       // Check Antigravity availability if requested
       if (mode === 'antigravity') {
-        const { isAntigravityAvailable, getAntigravityNotFoundMessage } = await import(
-          '../../utils/antigravity-cli-resolver.js'
-        );
+        const { isAntigravityAvailable, getAntigravityNotFoundMessage } =
+          await import('../../utils/antigravity-cli-resolver.js');
         if (!isAntigravityAvailable()) {
           return createErrorResponse(ApiErrorCode.OPERATION_FAILED, getAntigravityNotFoundMessage());
         }
