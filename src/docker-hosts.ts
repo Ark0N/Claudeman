@@ -67,8 +67,18 @@ export const DOCKER_ADOPT_PROBE_MODES = [
   'gemini',
   'antigravity',
   'pi',
+  'grok',
+  'deepseek',
   'shell',
 ] as const satisfies readonly SessionMode[];
+
+/**
+ * The BINARY a mode looks for inside a container. Not always the mode name:
+ * `antigravity` ships as `agy` and `deepseek` as `dsh`, so probing by mode name
+ * would report those two as missing on a container that has them. Single source
+ * with `defaultDockerCommandForMode`, which launches the same binaries.
+ */
+const MODE_BINARIES: Partial<Record<SessionMode, string>> = { antigravity: 'agy', deepseek: 'dsh' };
 
 /** Per-case container name prefix. The `case` letters deliberately do NOT matter to
  * tmux; this is a DOCKER name (`^[a-zA-Z0-9][a-zA-Z0-9_.-]+$`), and case names are
@@ -1154,7 +1164,9 @@ export async function probeAdoptableContainer(
   }
   // One exec resolves tmux plus every requested CLI, so adoption costs a single
   // round trip. Binaries are fixed mode names, never user input.
-  const probes = ['tmux', ...modes.filter((m) => m !== 'shell')];
+  const wanted = modes.filter((m) => m !== 'shell');
+  const binaryFor = (mode: SessionMode) => MODE_BINARIES[mode] ?? mode;
+  const probes = ['tmux', ...wanted.map(binaryFor)];
   // `; exit 0` is load-bearing: the script's status is its LAST command's, so a
   // missing final CLI made the whole `sh -lc` exit 1 and the probe reported
   // "could not exec into the container" for a container that was perfectly fine.
@@ -1206,7 +1218,7 @@ export async function probeAdoptableContainer(
       running: true,
       image,
       tmuxPath: 'tmux',
-      availableModes: modes.filter((m) => m === 'shell' || found.has(m)),
+      availableModes: modes.filter((m) => m === 'shell' || found.has(binaryFor(m))),
       workdirExists,
     };
   } catch (err) {
