@@ -834,6 +834,14 @@ export const DockerAdoptPreflightSchema = z.object({
     .min(2)
     .max(128)
     .regex(/^[a-zA-Z0-9][a-zA-Z0-9_.-]+$/, 'Invalid container name'),
+  /** Optional: also verify this path exists INSIDE the container. */
+  containerWorkdir: z
+    .string()
+    .min(1)
+    .max(2000)
+    .regex(/^\//, 'Container workdir must be absolute')
+    .regex(NO_SHELL_META, 'Invalid characters in container workdir')
+    .optional(),
 });
 
 export const DockerExportSchema = z.object({

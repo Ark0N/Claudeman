@@ -2922,6 +2922,7 @@ Object.assign(CodemanApp.prototype, {
   async _dockerAdoptPreflight() {
     const statusEl = document.getElementById('dockerLinkStatus');
     const container = document.getElementById('dockerContainerName')?.value.trim();
+    const containerWorkdir = document.getElementById('dockerAdoptWorkdir')?.value.trim();
     const hostId = document.getElementById('dockerHostId').value.trim() || 'local';
     if (!container) {
       if (statusEl) statusEl.textContent = 'Enter a container name first.';
@@ -2933,7 +2934,7 @@ Object.assign(CodemanApp.prototype, {
     const probe = await this._apiJson('/api/docker-cases/adopt-preflight', {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ hostId, container }),
+      body: JSON.stringify({ hostId, container, ...(containerWorkdir ? { containerWorkdir } : {}) }),
     });
     if (!statusEl) return;
     if (!probe) {
@@ -2956,6 +2957,7 @@ Object.assign(CodemanApp.prototype, {
     const hostId = document.getElementById('dockerHostId').value.trim() || 'local';
     const adopting = !!document.getElementById('dockerAdoptExisting')?.checked;
     const container = document.getElementById('dockerContainerName')?.value.trim() || '';
+    const adoptWorkdir = document.getElementById('dockerAdoptWorkdir')?.value.trim() || '';
     const image = document.getElementById('dockerImage').value.trim() || 'codeman/agent:base';
     const network = document.getElementById('dockerNetwork').value;
     const memory = document.getElementById('dockerMemory').value.trim();
@@ -3023,7 +3025,11 @@ Object.assign(CodemanApp.prototype, {
       const caseRes = await fetch(adopting ? '/api/cases/docker-adopt' : '/api/cases/docker-link', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify(adopting ? { name, hostId, hostWorkspacePath, container } : { name, hostId, hostWorkspacePath }),
+        body: JSON.stringify(
+          adopting
+            ? { name, hostId, hostWorkspacePath, container, ...(adoptWorkdir ? { containerWorkdir: adoptWorkdir } : {}) }
+            : { name, hostId, hostWorkspacePath }
+        ),
       });
       const caseData = await caseRes.json();
       if (caseData.success) {

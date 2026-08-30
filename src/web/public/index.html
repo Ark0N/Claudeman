@@ -2840,6 +2840,11 @@
               <input type="text" id="dockerContainerName" placeholder="my-dev-box" pattern="[a-zA-Z0-9][a-zA-Z0-9_.-]+" autocomplete="off" autocapitalize="off" spellcheck="false">
               <span class="form-hint">Must be running already. <button type="button" class="btn-inline-check" id="dockerAdoptCheckBtn">Check container</button></span>
             </div>
+            <div class="form-row docker-adopt-only">
+              <label>Container Workdir</label>
+              <input type="text" id="dockerAdoptWorkdir" placeholder="/workspace" autocomplete="off" autocapitalize="off" autocorrect="off" spellcheck="false">
+              <span class="form-hint">A path that already exists <em>inside</em> the container. Adoption mounts nothing, so this need not match the host workspace path — leave blank to reuse it only if you mounted it there yourself.</span>
+            </div>
             <div class="form-row">
               <label>Case Name</label>
               <input type="text" id="dockerCaseName" placeholder="sandbox" pattern="[a-zA-Z0-9_-]+" autocomplete="off" autocapitalize="off" spellcheck="false">
