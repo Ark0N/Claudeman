@@ -47,7 +47,15 @@ export type ClaudeMode = 'dangerously-skip-permissions' | 'auto' | 'normal' | 'a
 
 /** Session mode: which CLI backend a session runs */
 export type SessionMode =
-  'claude' | 'shell' | 'opencode' | 'codex' | 'gemini' | 'antigravity' | 'pi' | 'grok' | 'deepseek';
+  | 'claude'
+  | 'shell'
+  | 'opencode'
+  | 'codex'
+  | 'gemini'
+  | 'antigravity'
+  | 'pi'
+  | 'grok'
+  | 'deepseek';
 
 export type RemoteCommandMode = Extract<
   SessionMode,
