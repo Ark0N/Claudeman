@@ -272,6 +272,40 @@ describe('adopted container: run modes come from the CONTAINER, not the host', (
   });
 });
 
+describe('adopted container: both path fields get a folder picker', () => {
+  const html = readFileSync(new URL('../src/web/public/index.html', import.meta.url), 'utf8');
+  const ui = readFileSync(new URL('../src/web/public/session-ui.js', import.meta.url), 'utf8');
+  const picker = readFileSync(new URL('../src/web/public/keyboard-accessory.js', import.meta.url), 'utf8');
+
+  it('wires a Browse button to each of the two paths', () => {
+    expect(html).toContain('app.openDockerWorkspacePathPicker()');
+    expect(html).toContain('app.openDockerWorkdirPicker()');
+    // Same markup Link Existing uses, so the two look and behave alike.
+    expect(html.match(/path-input-browse/g)?.length).toBeGreaterThanOrEqual(3);
+  });
+
+  it('browses the CONTAINER for the container workdir, not the host', () => {
+    // For an adopted container nothing is mounted at a matching host path, so a
+    // host listing would be a different filesystem — and typing this field blind
+    // is what makes the launch fail with an OCI chdir error.
+    const fn = ui.slice(ui.indexOf('openDockerWorkdirPicker()'), ui.indexOf('async linkRemoteCase()'));
+    expect(fn).toContain('/api/docker-cases/browse');
+    expect(fn).not.toContain('/api/filesystem/browse');
+    expect(fn).toContain('fetchListing');
+  });
+
+  it('keeps the host picker for the host workspace path', () => {
+    const fn = ui.slice(ui.indexOf('openDockerWorkspacePathPicker()'), ui.indexOf('openDockerWorkdirPicker()'));
+    expect(fn).toContain('PathPicker.open');
+    expect(fn).not.toContain('fetchListing');
+  });
+
+  it('reuses one PathPicker via an optional source rather than forking it', () => {
+    expect(picker).toContain('this._options.fetchListing');
+    expect(picker).toContain('/api/filesystem/browse');
+  });
+});
+
 describe('adopted container: drift is not evaluated', () => {
   it('reports no drift rather than demanding a recreate we may not perform', async () => {
     // An adopted container carries no codeman.confighash label, so a real

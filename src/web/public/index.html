@@ -2860,7 +2860,10 @@
             </div>
             <div class="form-row docker-adopt-only">
               <label>Container Workdir</label>
-              <input type="text" id="dockerAdoptWorkdir" placeholder="/workspace" autocomplete="off" autocapitalize="off" autocorrect="off" spellcheck="false">
+              <div class="path-input-group">
+                <input type="text" id="dockerAdoptWorkdir" placeholder="/workspace" autocomplete="off" autocapitalize="off" autocorrect="off" spellcheck="false">
+                <button type="button" class="btn path-input-browse" onclick="app.openDockerWorkdirPicker()">Browse&hellip;</button>
+              </div>
               <span class="form-hint">A path that already exists inside the container. Adoption mounts nothing, so this need not match the host workspace path.</span>
             </div>
             <div class="form-row">
@@ -2870,7 +2873,10 @@
             </div>
             <div class="form-row">
               <label>Workspace Path</label>
-              <input type="text" id="dockerWorkspacePath" placeholder="/home/user/projects/sandbox" autocomplete="off" autocapitalize="off" autocorrect="off" spellcheck="false">
+              <div class="path-input-group">
+                <input type="text" id="dockerWorkspacePath" placeholder="/home/user/projects/sandbox" autocomplete="off" autocapitalize="off" autocorrect="off" spellcheck="false">
+                <button type="button" class="btn path-input-browse" onclick="app.openDockerWorkspacePathPicker()">Browse&hellip;</button>
+              </div>
               <span class="form-hint">Absolute HOST directory, bind-mounted into the container. Codeman scaffolds CLAUDE.md + hooks into it.</span>
             </div>
             <div class="form-row">

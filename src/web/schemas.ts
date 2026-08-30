@@ -867,6 +867,22 @@ export const DockerAdoptPreflightSchema = z.object({
     .optional(),
 });
 
+/** Read-only directory listing inside a container (adoption workdir picker). */
+export const DockerBrowseSchema = z.object({
+  hostId: z.string().regex(/^[a-zA-Z0-9_-]+$/, 'Invalid docker host id'),
+  container: z
+    .string()
+    .min(2)
+    .max(128)
+    .regex(/^[a-zA-Z0-9][a-zA-Z0-9_.-]+$/, 'Invalid container name'),
+  path: z
+    .string()
+    .max(2000)
+    .regex(/^\//, 'Path must be absolute')
+    .regex(NO_SHELL_META, 'Invalid characters in path')
+    .optional(),
+});
+
 export const DockerExportSchema = z.object({
   mode: z.enum(['full', 'workspace']).optional(),
 });

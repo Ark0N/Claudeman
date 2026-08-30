@@ -2948,6 +2948,62 @@ Object.assign(CodemanApp.prototype, {
     });
   },
 
+  /** HOST workspace directory — the same picker Link Existing uses. */
+  openDockerWorkspacePathPicker() {
+    const pathInput = document.getElementById('dockerWorkspacePath');
+    PathPicker.open({
+      title: 'Select Host Workspace Folder',
+      initialPath: pathInput.value.trim(),
+      directoriesOnly: true,
+      onSelect: (path) => {
+        pathInput.value = path;
+        const nameInput = document.getElementById('dockerCaseName');
+        if (nameInput && !nameInput.value.trim()) {
+          const folder = path.split('/').filter(Boolean).pop() || '';
+          if (/^[a-zA-Z0-9_-]+$/.test(folder)) nameInput.value = folder;
+        }
+      },
+    });
+  },
+
+  /**
+   * Container workdir. Browses INSIDE the container, because for an adopted
+   * container nothing is mounted at a matching host path — the host picker would
+   * be listing a different filesystem, and typing this field blind is exactly
+   * what makes the launch fail with an OCI chdir error.
+   */
+  openDockerWorkdirPicker() {
+    const pathInput = document.getElementById('dockerAdoptWorkdir');
+    const container = document.getElementById('dockerContainerName')?.value.trim();
+    const hostId = document.getElementById('dockerHostId')?.value.trim() || 'local';
+    if (!container) {
+      this.showToast('Enter the container name first', 'error');
+      return;
+    }
+    PathPicker.open({
+      title: `Select Folder Inside ${container}`,
+      initialPath: pathInput.value.trim() || '/',
+      directoriesOnly: true,
+      fetchListing: async (path) => {
+        const data = await this._apiJson('/api/docker-cases/browse', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ hostId, container, path: path || '/' }),
+        });
+        if (!data) return { success: false, error: `Could not read ${container}. Is it running?` };
+        if (data.error) return { success: false, error: data.error };
+        // Shape it like the host endpoint: one root, so Up/Location behave.
+        return {
+          success: true,
+          data: { ...data, root: '/', roots: [{ label: container, path: '/' }], truncated: false },
+        };
+      },
+      onSelect: (path) => {
+        pathInput.value = path;
+      },
+    });
+  },
+
   async linkRemoteCase() {
     const name = document.getElementById('remoteCaseName').value.trim();
     const remotePath = document.getElementById('remoteCasePath').value.trim();

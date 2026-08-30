@@ -185,9 +185,13 @@ const PathPicker = {
     if (this._options.sessionId) params.set('sessionId', this._options.sessionId);
     if (this._showHidden) params.set('showHidden', 'true');
     try {
-      const response = await fetch(`/api/filesystem/browse?${params.toString()}`);
-      const result = await response.json();
-      if (!response.ok || !result.success) throw new Error(result.error || 'Failed to browse this folder');
+      // A caller may supply its own source (the container-workdir picker browses
+      // INSIDE a container, which the host filesystem endpoint cannot answer).
+      // It returns the same shape, so everything below is unchanged.
+      const result = this._options.fetchListing
+        ? await this._options.fetchListing(path)
+        : await (await fetch(`/api/filesystem/browse?${params.toString()}`)).json();
+      if (!result?.success) throw new Error(result?.error || 'Failed to browse this folder');
       if (!this.overlay || loadSequence !== this._loadSequence) return;
       this.render(result.data);
     } catch (error) {
