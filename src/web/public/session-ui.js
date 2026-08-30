@@ -2387,6 +2387,14 @@ Object.assign(CodemanApp.prototype, {
     modal.querySelectorAll('.set-rail-item').forEach(btn => {
       btn.onclick = () => this.switchCaseModalTab(btn.dataset.tab);
     });
+    // Adopt-an-existing-container toggle + its read-only preflight. Assigned (not
+    // addEventListener) so reopening the modal cannot stack duplicate handlers,
+    // matching the rail wiring right above.
+    const adoptToggle = document.getElementById('dockerAdoptExisting');
+    if (adoptToggle) adoptToggle.onchange = () => this._syncDockerAdoptMode();
+    const adoptCheck = document.getElementById('dockerAdoptCheckBtn');
+    if (adoptCheck) adoptCheck.onclick = () => this._dockerAdoptPreflight();
+    this._syncDockerAdoptMode();
     // Scroll-into-view on focus for mobile keyboard visibility
     modal.querySelectorAll('input[type="text"]').forEach(input => {
       if (!input._mobileScrollWired) {
@@ -2943,10 +2951,64 @@ Object.assign(CodemanApp.prototype, {
     }
   },
 
+  /**
+   * Reflect the "attach to an existing container" checkbox onto the modal so CSS
+   * can swap which half of the Docker panel applies. An attribute rather than
+   * per-row inline styles: the panel is rebuilt by nothing, but the create-time
+   * rows are a SET (image, network, advanced block) and one attribute keeps them
+   * in lockstep with the container-name row.
+   */
+  _syncDockerAdoptMode() {
+    const modal = document.getElementById('createCaseModal');
+    if (!modal) return;
+    const adopting = document.getElementById('dockerAdoptExisting')?.checked;
+    if (adopting) modal.setAttribute('data-docker-adopt', '1');
+    else modal.removeAttribute('data-docker-adopt');
+  },
+
+  /**
+   * Read-only preflight against an existing container. It links nothing, so the
+   * user can find out "not running" / "no tmux" / "codex present, claude missing"
+   * before committing to a case name — the same reason the server refuses at link
+   * time rather than at session launch.
+   */
+  async _dockerAdoptPreflight() {
+    const statusEl = document.getElementById('dockerLinkStatus');
+    const container = document.getElementById('dockerContainerName')?.value.trim();
+    const hostId = document.getElementById('dockerHostId').value.trim() || 'local';
+    if (!container) {
+      if (statusEl) statusEl.textContent = 'Enter a container name first.';
+      return;
+    }
+    if (statusEl) statusEl.textContent = 'Inspecting container...';
+    // _apiJson folds every failure to null, and a preflight's whole value is the
+    // reason it failed, so the envelope is unwrapped by hand here.
+    const probe = await this._apiJson('/api/docker-cases/adopt-preflight', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ hostId, container }),
+    });
+    if (!statusEl) return;
+    if (!probe) {
+      statusEl.textContent = 'Could not reach the docker host profile. Save a Host ID first.';
+      return;
+    }
+    if (!probe.ok) {
+      statusEl.textContent = probe.error || 'Container is not adoptable.';
+      return;
+    }
+    const modes = (probe.availableModes || []).filter((m) => m !== 'shell');
+    statusEl.textContent = modes.length
+      ? `Running (${probe.image || 'unknown image'}). Available: ${modes.join(', ')}.`
+      : `Running (${probe.image || 'unknown image'}), but no agent CLI found inside — only Shell will work.`;
+  },
+
   async linkDockerCase() {
     const name = document.getElementById('dockerCaseName').value.trim();
     const hostWorkspacePath = document.getElementById('dockerWorkspacePath').value.trim();
     const hostId = document.getElementById('dockerHostId').value.trim() || 'local';
+    const adopting = !!document.getElementById('dockerAdoptExisting')?.checked;
+    const container = document.getElementById('dockerContainerName')?.value.trim() || '';
     const image = document.getElementById('dockerImage').value.trim() || 'codeman/agent:base';
     const network = document.getElementById('dockerNetwork').value;
     const memory = document.getElementById('dockerMemory').value.trim();
@@ -2967,9 +3029,15 @@ Object.assign(CodemanApp.prototype, {
       this.showToast('Workspace path must be absolute', 'error');
       return;
     }
+    if (adopting && !container) {
+      this.showToast('Enter the name of the running container to attach to', 'error');
+      return;
+    }
 
     try {
-      if (statusEl) statusEl.textContent = 'Checking docker daemon + base image...';
+      if (statusEl) {
+        statusEl.textContent = adopting ? 'Inspecting the existing container...' : 'Checking docker daemon + base image...';
+      }
       // omitted optionals sent as UNDEFINED (never null — Zod .optional() rejects null)
       const resources = {};
       if (memory) resources.memory = memory;
@@ -3000,16 +3068,23 @@ Object.assign(CodemanApp.prototype, {
       }
       if (!hostData.success) throw new Error(hostData.error || 'Failed to save docker host');
 
-      const caseRes = await fetch('/api/cases/docker-link', {
+      // Adoption reuses this whole flow and differs only in the final call: a
+      // different endpoint (which never creates a container) plus the container
+      // name. The host upsert above still applies — it is what resolves the
+      // engine/context/daemon for the `docker exec`; its create-time fields are
+      // simply never read for an adopted case.
+      const caseRes = await fetch(adopting ? '/api/cases/docker-adopt' : '/api/cases/docker-link', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ name, hostId, hostWorkspacePath }),
+        body: JSON.stringify(adopting ? { name, hostId, hostWorkspacePath, container } : { name, hostId, hostWorkspacePath }),
       });
       const caseData = await caseRes.json();
       if (caseData.success) {
         this.closeCreateCaseModal();
         const caps = caseData.data?.capsEnforced === false ? ' (resource caps are advisory on this engine)' : '';
-        this.showToast(`Docker case "${name}" linked${caps}`, 'success');
+        const modes = (caseData.data?.availableModes || []).filter((m) => m !== 'shell');
+        const found = adopting && modes.length ? ` — found ${modes.join(', ')}` : '';
+        this.showToast(`Docker case "${name}" ${adopting ? 'attached' : 'linked'}${caps}${found}`, 'success');
         await this.loadQuickStartCases(name);
         await this.saveLastUsedCase(name);
       } else {
