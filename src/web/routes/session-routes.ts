@@ -3050,6 +3050,9 @@ export function registerSessionRoutes(
         if (!probe.ok) {
           return createErrorResponse(ApiErrorCode.OPERATION_FAILED, probe.error || 'container is not usable');
         }
+        // The probe already exec'd into the container; carry its facts onto the
+        // live session so the launch chain does not have to re-ask.
+        sessionDocker.runsAsRoot = probe.runsAsRoot;
         if (mode !== 'shell' && !probe.availableModes?.includes(mode)) {
           return createErrorResponse(
             ApiErrorCode.OPERATION_FAILED,

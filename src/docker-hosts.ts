@@ -160,11 +160,16 @@ export function dockerContainerName(caseName: string): string {
 }
 
 /** Default pane command per CLI mode (mirror of defaultRemoteCommandForMode). */
-export function defaultDockerCommandForMode(mode: SessionMode): string {
+export function defaultDockerCommandForMode(mode: SessionMode, runsAsRoot = false): string {
   const commands: Record<DockerCommandMode, string> = {
     shell: 'exec bash -l',
-    // Mirror the LOCAL claude default so the in-container agent runs non-interactively.
-    claude: 'exec claude --dangerously-skip-permissions',
+    // Mirror the LOCAL claude default so the in-container agent runs
+    // non-interactively — EXCEPT as root, where Claude Code refuses the flag
+    // outright ("cannot be used with root/sudo privileges"). Our base image runs
+    // a non-root user so an owned container never hits this; an adopted
+    // container's user belongs to its owner and is frequently root, and keeping
+    // the flag there kills the pane with a message only visible inside it.
+    claude: runsAsRoot ? 'exec claude' : 'exec claude --dangerously-skip-permissions',
     opencode: 'exec opencode',
     codex: 'exec codex',
     gemini: 'exec gemini',
@@ -1096,6 +1101,8 @@ export interface AdoptedContainerProbe {
   availableModes?: SessionMode[];
   /** Whether the requested working directory exists INSIDE the container. */
   workdirExists?: boolean;
+  /** Whether the container's exec user is root (uid 0). */
+  runsAsRoot?: boolean;
   error?: string;
 }
 
@@ -1219,6 +1226,10 @@ export async function probeAdoptableContainer(
   // --workdir <missing>` fails with an OCI chdir error the pane surfaces as a bare
   // "execvp failed", so it is resolved here into an actionable message.
   if (containerWorkdir) steps.push(`[ -d ${shellescape(containerWorkdir)} ] && echo __workdir__`);
+  // Claude Code REFUSES --dangerously-skip-permissions as root. Our own base
+  // image runs a non-root user so an owned container never hits it; an adopted
+  // container's user belongs to its owner and is frequently root.
+  steps.push(`[ "$(id -u)" = 0 ] && echo __root__`);
   const script = `${steps.join('; ')}; exit 0`;
   try {
     const { stdout } = await execFileAsync(
@@ -1260,6 +1271,7 @@ export async function probeAdoptableContainer(
       tmuxPath: 'tmux',
       availableModes: modes.filter((m) => m === 'shell' || found.has(binaryFor(m))),
       workdirExists,
+      runsAsRoot: found.has('__root__'),
     };
   } catch (err) {
     const msg = err instanceof Error ? err.message : String(err);

@@ -187,6 +187,13 @@ Object.assign(CodemanApp.prototype, {
     this.closeCasePicker();
     this.updateDirDisplayForCase(select.value);
     this.updateMobileCaseLabel(select.value);
+    // Warm the container's CLI list HERE rather than when the run menu opens.
+    // The probe is a `docker exec` round trip, so gating it on the menu meant the
+    // menu painted every mode first and only narrowed a moment later — which
+    // reads as "it shows all of them" and lets a mode be picked that the
+    // container does not have.
+    const picked = (this.cases || []).find((c) => c.name === select.value);
+    if (picked?.location === 'docker') void this._probeDockerCaseModes(picked, null);
     if (save) {
       this.saveLastUsedCase(select.value);
     }

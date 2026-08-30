@@ -304,6 +304,13 @@ export interface SessionDocker {
   /** Stable hash of the drift-relevant create args (recreate-on-drift detection). */
   configHash?: string;
   /**
+   * Whether the container's exec user is root. Claude Code REFUSES
+   * `--dangerously-skip-permissions` as root, and an adopted container's user
+   * belongs to its owner, so the flag is omitted rather than letting the pane
+   * die with a message only visible inside the container.
+   */
+  runsAsRoot?: boolean;
+  /**
    * Mirror of `DockerCase.owned`, flattened onto the live session so every
    * lifecycle decision (launch chain, drift, stop, remove) can see it without
    * re-reading docker-cases.json. Absent = owned. See `DockerCase.owned`.
