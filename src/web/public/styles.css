@@ -16601,6 +16601,32 @@ html[data-tab-orientation='vertical'] .home-sessions {
    label as a row label, its `.form-hint` as a row description. Scoped to the
    document, so `.form-row` everywhere else is untouched.
    ─────────────────────────────────────────────────────────────────────────── */
+/* Adopt-an-existing-container mode swaps which half of the Docker panel applies:
+   the create-time fields (image, network, resources, credential mounts) describe
+   a `docker create` that adoption never runs, and the container name is the one
+   field only adoption needs. `.docker-adopt-only` is hidden by default so the
+   panel stays exactly as it was until the checkbox is ticked. Rules carry
+   `!important` because the adapter block above paints `.form-row` as a row card
+   and `details.advanced-options` has its own display. */
+#createCaseModal .docker-adopt-only {
+  display: none !important;
+}
+#createCaseModal[data-docker-adopt='1'] .docker-adopt-only {
+  display: block !important;
+}
+#createCaseModal[data-docker-adopt='1'] .docker-create-only {
+  display: none !important;
+}
+#createCaseModal .btn-inline-check {
+  background: none;
+  border: none;
+  padding: 0;
+  font: inherit;
+  color: var(--accent, #4a9eff);
+  cursor: pointer;
+  text-decoration: underline;
+}
+
 #createCaseModal .set-doc .form-row {
   margin: 0 0 3px;
   padding: 7px 10px;

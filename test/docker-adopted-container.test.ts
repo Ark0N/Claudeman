@@ -10,6 +10,7 @@
  * Mirror of the `owned:false` remote-SSH contract (COD-105).
  */
 import { describe, it, expect } from 'vitest';
+import { readFileSync } from 'node:fs';
 import {
   toSessionDocker,
   isAdoptedContainer,
@@ -155,6 +156,41 @@ describe('adopted container: mutating verbs fail closed at the builder', () => {
     const ownedDocker = toSessionDocker(HOST, caseFor(undefined));
     expect(buildDockerStopCommand(ownedDocker)).toContain('stop -t 10');
     expect(buildDockerRemoveCommand(ownedDocker)).toContain('rm -f');
+  });
+});
+
+describe('adopted container: the Add Case panel id contract', () => {
+  // The modal's load/save contract is getElementById by fixed id, so a renamed or
+  // dropped id stops the control working with no error anywhere. Static guard in
+  // the style of app-settings-structure / session-options-structure.
+  const html = readFileSync(new URL('../src/web/public/index.html', import.meta.url), 'utf8');
+  const ui = readFileSync(new URL('../src/web/public/session-ui.js', import.meta.url), 'utf8');
+  const css = readFileSync(new URL('../src/web/public/styles.css', import.meta.url), 'utf8');
+
+  it('ships every id session-ui.js reads back', () => {
+    for (const id of ['dockerAdoptExisting', 'dockerContainerName', 'dockerAdoptCheckBtn']) {
+      expect(html).toContain(`id="${id}"`);
+      expect(ui).toContain(`'${id}'`);
+    }
+  });
+
+  it('routes adoption to the endpoint that never creates a container', () => {
+    expect(ui).toContain('/api/cases/docker-adopt');
+    expect(ui).toContain('/api/docker-cases/adopt-preflight');
+    // The create path must survive untouched beside it.
+    expect(ui).toContain('/api/cases/docker-link');
+  });
+
+  it('hides the adopt-only row until the toggle is on, so the panel is unchanged by default', () => {
+    expect(css).toContain('#createCaseModal .docker-adopt-only');
+    expect(css).toMatch(/#createCaseModal \.docker-adopt-only \{\s*display: none/);
+    expect(css).toContain("#createCaseModal[data-docker-adopt='1'] .docker-adopt-only");
+  });
+
+  it('marks the create-time rows so adoption hides the fields it never uses', () => {
+    // image / network / advanced describe a `docker create` adoption never runs.
+    expect(html.match(/docker-create-only/g)?.length).toBeGreaterThanOrEqual(3);
+    expect(css).toContain("#createCaseModal[data-docker-adopt='1'] .docker-create-only");
   });
 });
 

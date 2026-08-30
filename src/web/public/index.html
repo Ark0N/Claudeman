@@ -2832,6 +2832,15 @@
             </div>
             <p class="set-section-blurb">Run the case inside a container: one per case, shared by all its sessions.</p>
             <div class="form-row">
+              <label class="checkbox-row"><input type="checkbox" id="dockerAdoptExisting"> Attach to an existing container</label>
+              <span class="form-hint">On: Codeman only <code>docker exec</code>s into a container you already built and run — it never creates, starts, stops or removes it. The CLIs must already be installed and logged in inside it.</span>
+            </div>
+            <div class="form-row docker-adopt-only">
+              <label>Container Name</label>
+              <input type="text" id="dockerContainerName" placeholder="my-dev-box" pattern="[a-zA-Z0-9][a-zA-Z0-9_.-]+" autocomplete="off" autocapitalize="off" spellcheck="false">
+              <span class="form-hint">Must be running already. <button type="button" class="btn-inline-check" id="dockerAdoptCheckBtn">Check container</button></span>
+            </div>
+            <div class="form-row">
               <label>Case Name</label>
               <input type="text" id="dockerCaseName" placeholder="sandbox" pattern="[a-zA-Z0-9_-]+" autocomplete="off" autocapitalize="off" spellcheck="false">
               <span class="form-hint">Runs inside an isolated container. Multiple sessions can share the same container.</span>
@@ -2846,12 +2855,12 @@
               <input type="text" id="dockerHostId" placeholder="local" pattern="[a-zA-Z0-9_-]+" autocomplete="off" autocapitalize="off" spellcheck="false">
               <span class="form-hint">A reusable docker host profile. Reuse the same ID across cases to share settings.</span>
             </div>
-            <div class="form-row">
+            <div class="form-row docker-create-only">
               <label>Image</label>
               <input type="text" id="dockerImage" placeholder="codeman/agent:base" autocomplete="off" autocapitalize="off" spellcheck="false">
               <span class="form-hint">Build it once with <code>node scripts/build-agent-image.mjs</code>. Contains node + claude/codex/gemini/opencode/agy/pi/grok/dsh + tmux.</span>
             </div>
-            <div class="form-row">
+            <div class="form-row docker-create-only">
               <label>Network</label>
               <select id="dockerNetwork">
                 <option value="bridge">bridge (internet on, default)</option>
@@ -2859,7 +2868,7 @@
                 <option value="custom">custom bridge</option>
               </select>
             </div>
-            <details class="advanced-options">
+            <details class="advanced-options docker-create-only">
               <summary><svg class="set-adv-chev" width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.4" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M6 9l6 6 6-6"/></svg><span>Advanced container settings</span></summary>
               <div class="advanced-options-content">
                 <div class="form-row">
