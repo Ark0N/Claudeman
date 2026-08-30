@@ -47,15 +47,7 @@ export type ClaudeMode = 'dangerously-skip-permissions' | 'auto' | 'normal' | 'a
 
 /** Session mode: which CLI backend a session runs */
 export type SessionMode =
-  | 'claude'
-  | 'shell'
-  | 'opencode'
-  | 'codex'
-  | 'gemini'
-  | 'antigravity'
-  | 'pi'
-  | 'grok'
-  | 'deepseek';
+  'claude' | 'shell' | 'opencode' | 'codex' | 'gemini' | 'antigravity' | 'pi' | 'grok' | 'deepseek';
 
 export type RemoteCommandMode = Extract<
   SessionMode,
@@ -302,6 +294,13 @@ export interface SessionDocker {
   extraExecArgs?: string[];
   /** Stable hash of the drift-relevant create args (recreate-on-drift detection). */
   configHash?: string;
+  /**
+   * Whether the container's exec user is root. Claude Code REFUSES
+   * `--dangerously-skip-permissions` as root, and an adopted container's user
+   * belongs to its owner, so the flag is omitted rather than letting the pane
+   * die with a message only visible inside the container.
+   */
+  runsAsRoot?: boolean;
   /**
    * Mirror of `DockerCase.owned`, flattened onto the live session so every
    * lifecycle decision (launch chain, drift, stop, remove) can see it without

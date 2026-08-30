@@ -12,6 +12,7 @@
 import { describe, it, expect } from 'vitest';
 import { readFileSync } from 'node:fs';
 import {
+  defaultDockerCommandForMode,
   toSessionDocker,
   isAdoptedContainer,
   removeDockerContainer,
@@ -113,6 +114,18 @@ describe('adopted container: the launch chain never mutates lifecycle', () => {
     expect(adopted).toMatch(/not running.*never starts a container it does not own/i);
   });
 
+  it('uses no double quote and no command substitution in the launch chain', () => {
+    // The whole chain is embedded in an outer `bash -c "…"`. An unescaped `"`
+    // closes that string early, the remainder is re-tokenized, and tmux fails to
+    // exec with a bare `execvp(3) failed: No such file or directory` — no hint
+    // that the command was ever malformed. `$(…)` is banned with it because it
+    // is then evaluated by the wrong shell at the wrong time.
+    expect(adopted).not.toContain('"');
+    expect(adopted).not.toContain('$(');
+    // Every other line already quotes with the single-quote helper.
+    expect(adopted).toContain("grep -qx true");
+  });
+
   it('skips the base-image gate, which describes an image adoption never uses', () => {
     expect(owned).toContain('image inspect');
     expect(adopted).not.toContain('image inspect');
@@ -126,6 +139,43 @@ describe('adopted container: the launch chain never mutates lifecycle', () => {
   it('still execs into the in-container tmux, which is the whole point', () => {
     expect(adopted).toContain('docker exec -it');
     expect(adopted).toContain('new-session -A');
+  });
+});
+
+describe('adopted container: claude as root', () => {
+  it('drops --dangerously-skip-permissions when the container runs as root', () => {
+    // Claude Code refuses the flag as root ("cannot be used with root/sudo
+    // privileges"), so keeping it kills the pane with a message only visible
+    // inside the container. Our base image runs a non-root user, which is why an
+    // owned container never hit this.
+    expect(defaultDockerCommandForMode('claude', true)).toBe('exec claude');
+    expect(defaultDockerCommandForMode('claude', false)).toContain('--dangerously-skip-permissions');
+    expect(defaultDockerCommandForMode('claude')).toContain('--dangerously-skip-permissions');
+  });
+
+  it('leaves every other mode unchanged as root', () => {
+    for (const mode of ['codex', 'shell', 'pi'] as const) {
+      expect(defaultDockerCommandForMode(mode, true)).toBe(defaultDockerCommandForMode(mode, false));
+    }
+  });
+});
+
+describe('adopted container: the host is not required to have the CLI', () => {
+  const src = readFileSync(new URL('../src/tmux-manager.ts', import.meta.url), 'utf8');
+
+  it('skips every host CLI requirement for a docker session', () => {
+    // A docker session runs its CLI inside the container. Demanding it on the
+    // host threw, the catch fell back to a direct PTY, and that PTY tried to
+    // exec the CLI on the HOST — surfacing as a bare `execvp(3) failed` with
+    // nothing naming the real cause.
+    const guarded = src.match(/!cliRunsInContainer && mode === '/g) || [];
+    const unguarded = src.match(/\n    if \(mode === '[a-z]+' && !cliDir\)/g) || [];
+    expect(guarded.length).toBeGreaterThanOrEqual(7);
+    expect(unguarded).toHaveLength(0);
+  });
+
+  it('derives the flag from the docker metadata the session already carries', () => {
+    expect(src).toContain('const cliRunsInContainer = !!docker;');
   });
 });
 
@@ -202,7 +252,7 @@ describe('adopted container: run modes come from the CONTAINER, not the host', (
   const refreshFn = (src) => {
     const start = src.indexOf('_refreshRunModeAvailability(menu) {');
     expect(start).toBeGreaterThan(-1);
-    return src.slice(start, start + 1600);
+    return src.slice(start, start + 2000);
   };
 
   it('gates a docker case on availableModes instead of host CLI probes', () => {

@@ -1290,7 +1290,8 @@ export function buildDockerLaunchCommand(opts: DockerLaunchOptions): string {
   const dkrName = dockerTmuxSessionName(sessionId);
   const sid = sessionId.slice(0, 8);
 
-  let modeCommand = docker.commands?.[mode as DockerCommandMode] || defaultDockerCommandForMode(mode);
+  let modeCommand =
+    docker.commands?.[mode as DockerCommandMode] || defaultDockerCommandForMode(mode, !!docker.runsAsRoot);
   if (mode === 'claude') {
     modeCommand = claudeDockerPaneCommand(modeCommand, sessionId, resumeSessionId);
   } else if (resumeSessionId) {
@@ -1327,10 +1328,10 @@ export function buildDockerLaunchCommand(opts: DockerLaunchOptions): string {
   const startFailMsg = shellescape(`Codeman: container ${docker.containerName} failed to start (docker daemon down?)`);
 
   const notFoundMsg = shellescape(
-    `Codeman: container ${docker.containerName} not found. Adopted containers are never created by Codeman — start it yourself, then reopen this session.`
+    `Codeman: container ${docker.containerName} not found. Adopted containers are never created by Codeman - start it yourself, then reopen this session.`
   );
   const notRunningMsg = shellescape(
-    `Codeman: container ${docker.containerName} is not running. Codeman never starts a container it does not own — start it yourself, then reopen this session.`
+    `Codeman: container ${docker.containerName} is not running. Codeman never starts a container it does not own - start it yourself, then reopen this session.`
   );
 
   const imageCheck = adopted
@@ -1340,8 +1341,13 @@ export function buildDockerLaunchCommand(opts: DockerLaunchOptions): string {
   const ensure = adopted
     ? `${base} inspect ${name} >/dev/null 2>&1 || { echo ${notFoundMsg}; exit 1; }`
     : `${base} inspect ${name} >/dev/null 2>&1 || ${base} ${createArgs}`;
+  // ⚠️ No double quotes and no `$(…)` here. This whole chain is embedded in an
+  // outer `bash -c "…"`, so an unescaped `"` closes that string early, the rest
+  // is re-tokenized, and tmux fails to exec with a bare `execvp(3) failed`. A
+  // `grep -qx` pipeline reads the same answer using only the single-quoted form
+  // every other line in this builder already uses.
   const start = adopted
-    ? `[ "$(${base} inspect -f '{{.State.Running}}' ${name} 2>/dev/null)" = true ] || { echo ${notRunningMsg}; exit 1; }`
+    ? `${base} inspect -f ${shellescape('{{.State.Running}}')} ${name} 2>/dev/null | grep -qx true || { echo ${notRunningMsg}; exit 1; }`
     : `${base} start ${name} >/dev/null 2>&1 || { echo ${startFailMsg}; exit 1; }`;
   // Seed writable credential config from read-only host mounts ONCE per container
   // (guarded by [ -e ] so reconnects never clobber in-container config; `cp -a` for
@@ -2115,29 +2121,37 @@ export class TmuxManager extends EventEmitter implements TerminalMultiplexer {
     // from the resolvers (formatCliNotFoundMessage) so the error names WHERE it
     // looked — server PATH, login shell, checked directories — instead of just
     // asserting the CLI is missing (the classic systemd/launchd PATH trap).
+    //
+    // ⚠️ A DOCKER session runs its CLI INSIDE the container, so the host does not
+    // need it at all. Demanding it here threw for a host without the binary, the
+    // catch fell back to a direct PTY, and that PTY tried to exec the CLI on the
+    // HOST — surfacing as a bare `execvp(3) failed: No such file or directory`
+    // with nothing pointing at the real cause. The container's own CLIs are
+    // verified by the adoption preflight / image gate before launch instead.
     const { pathExport, dir: cliDir } = this.buildPathExport(mode);
-    if (mode === 'claude' && !cliDir) {
+    const cliRunsInContainer = !!docker;
+    if (!cliRunsInContainer && mode === 'claude' && !cliDir) {
       throw new Error(getClaudeNotFoundMessage());
     }
-    if (mode === 'opencode' && !cliDir) {
+    if (!cliRunsInContainer && mode === 'opencode' && !cliDir) {
       throw new Error(getOpenCodeNotFoundMessage());
     }
-    if (mode === 'codex' && !cliDir) {
+    if (!cliRunsInContainer && mode === 'codex' && !cliDir) {
       throw new Error(getCodexNotFoundMessage());
     }
-    if (mode === 'gemini' && !cliDir) {
+    if (!cliRunsInContainer && mode === 'gemini' && !cliDir) {
       throw new Error(getGeminiNotFoundMessage());
     }
-    if (mode === 'antigravity' && !cliDir) {
+    if (!cliRunsInContainer && mode === 'antigravity' && !cliDir) {
       throw new Error(getAntigravityNotFoundMessage());
     }
-    if (mode === 'pi' && !cliDir) {
+    if (!cliRunsInContainer && mode === 'pi' && !cliDir) {
       throw new Error(getPiNotFoundMessage());
     }
-    if (mode === 'deepseek' && !cliDir) {
+    if (!cliRunsInContainer && mode === 'deepseek' && !cliDir) {
       throw new Error(getDeepSeekNotFoundMessage());
     }
-    if (mode === 'grok' && !cliDir) {
+    if (!cliRunsInContainer && mode === 'grok' && !cliDir) {
       throw new Error(getGrokNotFoundMessage());
     }
 
