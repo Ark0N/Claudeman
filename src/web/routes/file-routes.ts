@@ -38,7 +38,7 @@ import {
 import { generateFirstPageThumbnail } from '../../document-thumbnailer.js';
 import { getOfficePreviewPdfPath, getPreviewPdfDownloadName } from '../../document-preview-cache.js';
 import { sanitizeAttachmentHistoryItem } from '../../session-attachment-history.js';
-import { isBlockedAttachmentPath, loadAttachmentGuardConfig } from '../../config/attachment-guard.js';
+import { isBlockedAttachmentPath, isUnderTree, loadAttachmentGuardConfig } from '../../config/attachment-guard.js';
 import { isMultiUserMode, userSpacePath } from '../../config/multiuser.js';
 import {
   CASES_DIR,
@@ -425,6 +425,40 @@ function getFilesystemPreviewKind(fileName: string): FilesystemPreviewKind | und
   return undefined;
 }
 
+/**
+ * Blocked trees, minus any tree that would swallow a configured picker root
+ * whole.
+ *
+ * `/root` is a default blocked tree, and Codeman running as root (containers,
+ * plenty of servers) makes `homedir()` exactly `/root` — so the picker's own
+ * allowlisted Home root was blocked by the attachment guard, every other
+ * candidate lives under it or does not exist, and the endpoint answered 403
+ * "No filesystem browse roots are available" with no root the user could reach.
+ *
+ * Dropping the tree does NOT expose secrets: `isSensitivePath` independently
+ * matches `.ssh/`, `.env`, `credentials*` and friends at any depth, and it is
+ * what the directory probe below asks about. Trees with no configured root
+ * beneath them (`/etc`) are untouched.
+ */
+function pickerBlockedTrees(blockedTrees: readonly string[], roots: readonly string[]): readonly string[] {
+  if (roots.length === 0) return blockedTrees;
+  return blockedTrees.filter((tree) => !roots.some((root) => isUnderTree(root, tree)));
+}
+
+/** Resolve candidate roots to realpaths, dropping the ones that do not exist. */
+function resolveCandidateRootPaths(candidates: ReadonlyArray<{ path: string }>): string[] {
+  const out: string[] = [];
+  for (const candidate of candidates) {
+    if (!isAbsolute(candidate.path)) continue;
+    try {
+      out.push(realpathSync(candidate.path));
+    } catch {
+      // Optional roots (for example /mnt/d on non-WSL hosts) are omitted.
+    }
+  }
+  return out;
+}
+
 function isBlockedPickerPath(path: string, blockedTrees: readonly string[], directory = false): boolean {
   if (isBlockedAttachmentPath(path, blockedTrees)) return true;
   // The shared sensitive-path matcher describes file locations such as
@@ -491,13 +525,14 @@ async function resolveFilesystemPickerRoots(
   }
 
   const guard = await loadAttachmentGuardConfig();
+  const trees = pickerBlockedTrees(guard.blockedTrees, resolveCandidateRootPaths(candidates));
   const roots: FilesystemBrowseRoot[] = [];
   const seen = new Set<string>();
   for (const candidate of candidates) {
     if (!isAbsolute(candidate.path)) continue;
     try {
       const resolved = realpathSync(candidate.path);
-      if (seen.has(resolved) || isBlockedPickerPath(resolved, guard.blockedTrees, true)) continue;
+      if (seen.has(resolved) || isBlockedPickerPath(resolved, trees, true)) continue;
       const stat = await fs.stat(resolved);
       if (!stat.isDirectory()) continue;
       seen.add(resolved);
@@ -556,7 +591,19 @@ async function resolveFilesystemPickerPath(
   }
 
   const guard = await loadAttachmentGuardConfig();
-  return { candidatePath, resolvedPath, roots, matchingRoot, blockedTrees: guard.blockedTrees };
+  // Navigation must use the SAME narrowed list the roots were selected with.
+  // Handing the raw trees down here would admit a root and then refuse every
+  // path inside it, which reads as a picker that opens and then does nothing.
+  return {
+    candidatePath,
+    resolvedPath,
+    roots,
+    matchingRoot,
+    blockedTrees: pickerBlockedTrees(
+      guard.blockedTrees,
+      roots.map((root) => root.path)
+    ),
+  };
 }
 
 function appendDownloadFlag(url: string): string {
