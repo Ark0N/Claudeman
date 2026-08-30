@@ -483,7 +483,14 @@ Object.assign(CodemanApp.prototype, {
     // Same source every run* path reads the selected case from.
     const caseName = document.getElementById('quickStartCase')?.value;
     const activeCase = caseName ? (this.cases || []).find((c) => c.name === caseName) : null;
-    const containerModes = activeCase?.location === 'docker' ? activeCase.docker?.availableModes : null;
+    const isDocker = activeCase?.location === 'docker';
+    // Prefer a LIVE probe over the value stored at attach time: a container's
+    // CLIs can be installed or removed long after the case was linked, and a
+    // case linked before that field existed has none at all.
+    const containerModes = isDocker
+      ? this._dockerCaseModes?.[caseName] || activeCase.docker?.availableModes || null
+      : null;
+    if (isDocker && !this._dockerCaseModes?.[caseName]) void this._probeDockerCaseModes(activeCase, menu);
     for (const mode of ['claude', 'opencode', 'codex', 'gemini', 'antigravity', 'pi', 'grok', 'deepseek']) {
       const btn = menu.querySelector(`.run-mode-option[data-mode="${mode}"]`);
       if (!btn) continue;
@@ -630,6 +637,42 @@ Object.assign(CodemanApp.prototype, {
       if (menu) this._refreshRunModeAvailability(menu);
     } catch (err) {
       this._reportSessionLaunchError(ownsLaunchTerminal, err.message);
+    }
+  },
+
+  /**
+   * Ask the container which CLIs it actually has, and re-gate the menu once the
+   * answer lands. Cached per case for the page's lifetime: the menu re-opens
+   * often and the probe is a `docker exec` round trip.
+   *
+   * Best-effort by design — an unreachable daemon or a stopped container leaves
+   * the cache empty, which the caller reads as "unknown" and therefore does not
+   * gate. Hiding every mode because a probe failed would be worse than showing
+   * one that turns out to be missing, which the launch path already refuses with
+   * a specific message.
+   */
+  async _probeDockerCaseModes(activeCase, menu) {
+    const name = activeCase?.name;
+    const container = activeCase?.docker?.container;
+    const hostId = activeCase?.docker?.hostId;
+    if (!name || !container || !hostId) return;
+    this._dockerCaseModes = this._dockerCaseModes || {};
+    if (this._dockerModeProbeInFlight?.[name]) return;
+    this._dockerModeProbeInFlight = this._dockerModeProbeInFlight || {};
+    this._dockerModeProbeInFlight[name] = true;
+    try {
+      const probe = await this._apiJson('/api/docker-cases/adopt-preflight', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ hostId, container }),
+      });
+      if (probe?.ok && Array.isArray(probe.availableModes)) {
+        this._dockerCaseModes[name] = probe.availableModes;
+        // Only repaint while the menu the user opened is still on screen.
+        if (menu?.classList.contains('active')) this._refreshRunModeAvailability(menu);
+      }
+    } finally {
+      delete this._dockerModeProbeInFlight[name];
     }
   },
 
