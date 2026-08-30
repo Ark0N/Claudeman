@@ -167,6 +167,13 @@ export interface CaseInfo {
     image?: string;
     path: string;
     network?: string;
+    /**
+     * CLIs available INSIDE the container. A container case runs its agents in
+     * the container, so HOST CLI availability says nothing about what it can
+     * run. Absent = unknown (an owned container runs our base image, which ships
+     * every CLI), which the UI reads as "do not gate".
+     */
+    availableModes?: string[];
   };
 }
 

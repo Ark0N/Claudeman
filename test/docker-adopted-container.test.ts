@@ -194,6 +194,34 @@ describe('adopted container: the Add Case panel id contract', () => {
   });
 });
 
+describe('adopted container: run modes come from the CONTAINER, not the host', () => {
+  const ui = readFileSync(new URL('../src/web/public/session-ui.js', import.meta.url), 'utf8');
+  /** Slice the method BODY. Anchored on the definition, not a call site: the
+   *  menu opener calls _loadRunModeHistory() ABOVE this definition, so slicing
+   *  between call sites silently yields an empty string and passes nothing. */
+  const refreshFn = (src) => {
+    const start = src.indexOf('_refreshRunModeAvailability(menu) {');
+    expect(start).toBeGreaterThan(-1);
+    return src.slice(start, start + 1600);
+  };
+
+  it('gates a docker case on availableModes instead of host CLI probes', () => {
+    // The sandbox host had codex but no claude while the adopted container had
+    // claude and no codex; gating on the host hid the only mode that worked.
+    const fn = refreshFn(ui);
+    expect(fn).toContain("location === 'docker'");
+    expect(fn).toContain('availableModes');
+    // Non-docker cases must keep the original host probe (#201).
+    expect(fn).toContain('this.isCliAvailable(mode)');
+  });
+
+  it('leaves an owned container ungated when nothing was probed', () => {
+    // Our base image ships every CLI, so an absent list means "unknown", and
+    // treating unknown as "nothing available" would empty the menu.
+    expect(refreshFn(ui)).toMatch(/containerModes \?[^:]*:\s*true/);
+  });
+});
+
 describe('adopted container: drift is not evaluated', () => {
   it('reports no drift rather than demanding a recreate we may not perform', async () => {
     // An adopted container carries no codeman.confighash label, so a real

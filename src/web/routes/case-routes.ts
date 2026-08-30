@@ -297,6 +297,7 @@ export function registerCaseRoutes(app: FastifyInstance, ctx: EventPort & Config
           image: host.image,
           path: dockerCase.hostWorkspacePath,
           network: host.network ?? 'bridge',
+          ...(dockerCase.availableModes ? { availableModes: dockerCase.availableModes } : {}),
         },
       };
       const existingIndex = cases.findIndex((item) => item.name === dockerCase.name);
@@ -851,15 +852,19 @@ export function registerCaseRoutes(app: FastifyInstance, ctx: EventPort & Config
         return createErrorResponse(ApiErrorCode.OPERATION_FAILED, probe.error || 'container is not adoptable');
       }
 
-      await writeDockerCases(CODEMAN_CONFIG_DIR, [...dockerCases, dockerCase]);
+      // Persist what the container actually has: the run-mode picker gates on
+      // HOST CLIs, which is the wrong question for a case whose agents run inside
+      // a container the host knows nothing about.
+      const adoptedCase = { ...dockerCase, availableModes: probe.availableModes };
+      await writeDockerCases(CODEMAN_CONFIG_DIR, [...dockerCases, adoptedCase]);
       ctx.broadcast(SseEvent.CaseLinked, {
-        name: dockerCase.name,
-        path: dockerCase.hostWorkspacePath,
+        name: adoptedCase.name,
+        path: adoptedCase.hostWorkspacePath,
         type: 'docker',
       });
       return {
         success: true,
-        data: { case: dockerCase, image: probe.image, availableModes: probe.availableModes },
+        data: { case: adoptedCase, image: probe.image, availableModes: probe.availableModes },
       };
     }
   );

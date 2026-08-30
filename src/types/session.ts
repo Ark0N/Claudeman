@@ -262,6 +262,15 @@ export interface DockerCase {
    * all created by us).
    */
   owned?: boolean;
+  /**
+   * CLIs found INSIDE the container by the adoption preflight. A container case
+   * runs its agents in the container, so host CLI availability says nothing about
+   * what this case can run — the base image ships every CLI, and an adopted
+   * container ships whatever its owner installed. Absent = unknown (owned cases,
+   * or a case linked before this field existed), which callers read as "do not
+   * gate".
+   */
+  availableModes?: SessionMode[];
   /** Last captured Claude conversation id, replayed via --resume on a fresh launch. */
   lastClaudeSessionId?: string;
 }

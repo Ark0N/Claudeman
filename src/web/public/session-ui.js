@@ -477,9 +477,23 @@ Object.assign(CodemanApp.prototype, {
    * run modes like the rest, and neither `agy` nor `pi` is likely to be installed.
    */
   _refreshRunModeAvailability(menu) {
+    // A DOCKER case runs its agents INSIDE the container, so host CLI
+    // availability answers the wrong question: the host may have no claude at
+    // all while the container ships one, and gating on the host hides a mode
+    // that would have worked. Adoption records what the container really has
+    // (`availableModes`); an owned container runs our base image, which ships
+    // every CLI, so an absent list means "do not gate" rather than "nothing".
+    // Same source every run* path reads the selected case from.
+    const caseName = document.getElementById('quickStartCase')?.value;
+    const activeCase = caseName ? (this.cases || []).find((c) => c.name === caseName) : null;
+    const containerModes = activeCase?.location === 'docker' ? activeCase.docker?.availableModes : null;
     for (const mode of ['claude', 'opencode', 'codex', 'gemini', 'antigravity', 'pi', 'grok', 'deepseek', 'omp']) {
       const btn = menu.querySelector(`.run-mode-option[data-mode="${mode}"]`);
-      if (btn) btn.style.display = this.isCliAvailable(mode) ? 'flex' : 'none';
+      if (!btn) continue;
+      let available;
+      if (activeCase?.location === 'docker') available = containerModes ? containerModes.includes(mode) : true;
+      else available = this.isCliAvailable(mode);
+      btn.style.display = available ? 'flex' : 'none';
     }
     // DeepSeek is the one mode whose availability has two halves: `dsh` can be
     // perfectly installed while no pane-capable profile exists, because DeepSeek
