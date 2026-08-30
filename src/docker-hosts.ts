@@ -1084,6 +1084,8 @@ export interface AdoptedContainerProbe {
   tmuxPath?: string;
   /** Modes whose CLI resolved inside the container (`command -v <mode>`). */
   availableModes?: SessionMode[];
+  /** Whether the requested working directory exists INSIDE the container. */
+  workdirExists?: boolean;
   error?: string;
 }
 
@@ -1099,10 +1101,18 @@ export interface AdoptedContainerProbe {
  */
 export async function probeAdoptableContainer(
   docker: Pick<SessionDocker, 'engine' | 'context' | 'daemonHost' | 'containerName'>,
-  modes: SessionMode[] = []
+  modes: SessionMode[] = [],
+  containerWorkdir?: string
 ): Promise<AdoptedContainerProbe> {
   if (IS_TEST_MODE) {
-    return { ok: true, exists: true, running: true, tmuxPath: '/usr/bin/tmux', availableModes: modes };
+    return {
+      ok: true,
+      exists: true,
+      running: true,
+      tmuxPath: '/usr/bin/tmux',
+      availableModes: modes,
+      workdirExists: true,
+    };
   }
   const argv = dockerEngineArgv(docker);
   let running = false;
@@ -1136,7 +1146,19 @@ export async function probeAdoptableContainer(
   // One exec resolves tmux plus every requested CLI, so adoption costs a single
   // round trip. Binaries are fixed mode names, never user input.
   const probes = ['tmux', ...modes.filter((m) => m !== 'shell')];
-  const script = probes.map((bin) => `command -v ${bin} >/dev/null 2>&1 && echo ${bin}`).join('; ');
+  // `; exit 0` is load-bearing: the script's status is its LAST command's, so a
+  // missing final CLI made the whole `sh -lc` exit 1 and the probe reported
+  // "could not exec into the container" for a container that was perfectly fine.
+  // Absence of a CLI is data here, not failure — only a real exec error is.
+  const steps = probes.map((bin) => `command -v ${bin} >/dev/null 2>&1 && echo ${bin}`);
+  // The workdir is checked INSIDE the container, and that is a fact independent
+  // of hostWorkspacePath: an owned container gets the host dir bind-mounted at the
+  // same absolute path at create time, but adoption mounts nothing, so the two
+  // paths only coincide if the user mounted it there themselves. `docker exec
+  // --workdir <missing>` fails with an OCI chdir error the pane surfaces as a bare
+  // "execvp failed", so it is resolved here into an actionable message.
+  if (containerWorkdir) steps.push(`[ -d ${shellescape(containerWorkdir)} ] && echo __workdir__`);
+  const script = `${steps.join('; ')}; exit 0`;
   try {
     const { stdout } = await execFileAsync(
       argv[0],
@@ -1158,6 +1180,17 @@ export async function probeAdoptableContainer(
         error: `container "${docker.containerName}" has no tmux (required for durable sessions; install it inside the container)`,
       };
     }
+    const workdirExists = containerWorkdir ? found.has('__workdir__') : undefined;
+    if (containerWorkdir && !workdirExists) {
+      return {
+        ok: false,
+        exists: true,
+        running: true,
+        image,
+        workdirExists: false,
+        error: `"${containerWorkdir}" does not exist inside container "${docker.containerName}". Adoption mounts nothing, so the container workdir must already exist there — set it to a path inside the container (it need not match the host workspace path).`,
+      };
+    }
     return {
       ok: true,
       exists: true,
@@ -1165,6 +1198,7 @@ export async function probeAdoptableContainer(
       image,
       tmuxPath: 'tmux',
       availableModes: modes.filter((m) => m === 'shell' || found.has(m)),
+      workdirExists,
     };
   } catch (err) {
     const msg = err instanceof Error ? err.message : String(err);
