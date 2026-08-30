@@ -67,3 +67,4 @@ export {
 export type { DeepSeekProfile, DeepSeekProfileKind } from './deepseek-cli-resolver.js';
 export { compileFileQuery, matchFileQuery } from './file-query.js';
 export type { FileQueryMatcher } from './file-query.js';
+export { resolveOmpDir, isOmpAvailable, getOmpNotFoundMessage, getOmpCliVersion } from './omp-cli-resolver.js';

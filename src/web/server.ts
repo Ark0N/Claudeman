@@ -1446,6 +1446,7 @@ export class WebServer extends EventEmitter {
         { isPiAvailable },
         { isGrokAvailable },
         { isDeepSeekRunnable, isDeepSeekAvailable },
+        { isOmpAvailable },
         { isCloudflaredAvailable },
         { isGitAvailable },
       ] = await Promise.all([
@@ -1457,6 +1458,7 @@ export class WebServer extends EventEmitter {
         import('../utils/pi-cli-resolver.js'),
         import('../utils/grok-cli-resolver.js'),
         import('../utils/deepseek-cli-resolver.js'),
+        import('../utils/omp-cli-resolver.js'),
         import('../utils/cloudflared-resolver.js'),
         import('../git-clone.js'),
       ]);
@@ -1475,6 +1477,7 @@ export class WebServer extends EventEmitter {
         // profile is offered the fix rather than a greyed-out entry.
         deepseek: isDeepSeekRunnable(),
         deepseekBinary: isDeepSeekAvailable(),
+        omp: isOmpAvailable(),
         cloudflared: isCloudflaredAvailable(),
         // Not a run mode: the Add Case → Clone tab is an offer this box cannot
         // keep without git (issue #236), same reasoning as cloudflared above.
@@ -2783,6 +2786,7 @@ export class WebServer extends EventEmitter {
               piConfig: muxSession.mode === 'pi' ? savedState?.piConfig : undefined,
               grokConfig: muxSession.mode === 'grok' ? savedState?.grokConfig : undefined,
               deepSeekConfig: muxSession.mode === 'deepseek' ? savedState?.deepSeekConfig : undefined,
+              ompConfig: muxSession.mode === 'omp' ? savedState?.ompConfig : undefined,
               envOverrides: savedEnvOverrides,
               effort: savedState?.effort,
               attachmentHistory: savedAttachmentHistory,

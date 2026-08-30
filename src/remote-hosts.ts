@@ -119,6 +119,7 @@ export function defaultRemoteCommandForMode(mode: SessionMode): string {
     // profile inventory is unknown here. The per-host `commands.deepseek` override
     // is the escape hatch for naming one.
     deepseek: remoteLoginShellCommand('dsh'),
+    omp: remoteLoginShellCommand('omp'),
   };
   return commands[mode as RemoteCommandMode] || commands.shell;
 }
@@ -274,6 +275,7 @@ const REMOTE_CLI_BIN: Partial<Record<SessionMode, string>> = {
   gemini: 'gemini',
   antigravity: 'agy',
   pi: 'pi',
+  omp: 'omp',
 };
 
 /**

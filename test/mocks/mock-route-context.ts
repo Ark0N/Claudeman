@@ -86,6 +86,7 @@ export function createMockRouteContext(options?: {
       getSession: vi.fn(),
       setSession: vi.fn(),
       removeSession: vi.fn(),
+      demoteOrRemoveSession: vi.fn(() => 'removed' as const),
       getSettings: vi.fn(() => ({})),
       setSettings: vi.fn(),
       getRalphLoopState: vi.fn(() => ({})),

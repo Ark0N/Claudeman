@@ -1230,6 +1230,7 @@ Object.assign(CodemanApp.prototype, {
       ['welcomeClaudeBtn', 'claude'],
       ['welcomeOpencodeBtn', 'opencode'],
       ['welcomeAntigravityBtn', 'antigravity'],
+      ['welcomeOmpBtn', 'omp'],
       ['welcomeGeminiBtn', 'gemini'],
       ['welcomePiBtn', 'pi'],
       ['welcomeGrokBtn', 'grok'],

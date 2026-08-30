@@ -329,6 +329,32 @@ describe('resolveDockerCredentialArtifacts (isolated codex/gemini/gcloud/opencod
     expect(mounts).toEqual([]);
     expect(seedCopies).toEqual([]);
   });
+
+  it('omp: shares sessions/ RW (host-side history/resume reads), seeds config files only', () => {
+    mkdirSync(join(home, '.omp', 'agent', 'sessions'), { recursive: true });
+    writeFileSync(join(home, '.omp', 'agent', 'config.yml'), '');
+    writeFileSync(join(home, '.omp', 'agent', 'mcp.json'), '{}');
+    writeFileSync(join(home, '.omp', 'agent', 'models.yml'), '');
+    writeFileSync(join(home, '.omp', 'agent', 'settings.yml'), '');
+    // Regenerable local state that must NOT be seeded (mirrors the pi/grok exclusions).
+    writeFileSync(join(home, '.omp', 'agent', 'agent.db'), '');
+    mkdirSync(join(home, '.omp', 'agent', 'terminal-sessions'), { recursive: true });
+
+    const { mounts, seedCopies } = resolveDockerCredentialArtifacts(home);
+    expect(mounts).toContainEqual({
+      src: join(home, '.omp', 'agent', 'sessions'),
+      dst: '/home/agent/.omp/agent/sessions',
+    });
+    const dests = seedCopies.map((s) => s.to);
+    expect(dests).toContain('/home/agent/.omp/agent/config.yml');
+    expect(dests).toContain('/home/agent/.omp/agent/mcp.json');
+    expect(dests).toContain('/home/agent/.omp/agent/models.yml');
+    expect(dests).toContain('/home/agent/.omp/agent/settings.yml');
+    expect(dests).not.toContain('/home/agent/.omp/agent/agent.db');
+    expect(mounts.some((m) => m.dst === '/home/agent/.omp/agent/terminal-sessions')).toBe(false);
+    // seed copies of individual files are NOT recursive
+    expect(seedCopies.filter((s) => s.to.startsWith('/home/agent/.omp')).every((s) => !s.recursive)).toBe(true);
+  });
 });
 
 describe('resolveDockerClaudeArtifacts (isolated claude state)', () => {

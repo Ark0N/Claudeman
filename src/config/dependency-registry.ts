@@ -10,6 +10,7 @@
 import { PI_VERSION_REGEX } from '../utils/pi-cli-resolver.js';
 import { GROK_VERSION_REGEX } from '../utils/grok-cli-resolver.js';
 import { DEEPSEEK_VERSION_REGEX } from '../utils/deepseek-cli-resolver.js';
+import { OMP_VERSION_REGEX } from '../utils/omp-cli-resolver.js';
 
 export type ProbeEnvironment = 'linux' | 'darwin' | 'win32' | 'wsl';
 
@@ -189,6 +190,30 @@ export const DEPENDENCY_REGISTRY: ToolDependency[] = [
         },
       },
     ],
+  },
+  {
+    id: 'omp',
+    label: 'OMP CLI',
+    category: 'core',
+    required: false,
+    usedBy: ['OMP sessions'],
+    // Same version-match discipline as pi: `omp` is a short generic name, so a
+    // `which omp` hit alone is not the coding agent. Both sides share
+    // OMP_VERSION_REGEX, so the doctor and the run mode cannot drift into telling
+    // the user opposite things about the same binary.
+    resolvers: [
+      {
+        match: ALL,
+        resolver: {
+          kind: 'path',
+          bins: ['omp'],
+          versionArg: '--version',
+          versionRegex: OMP_VERSION_REGEX,
+          requireVersionMatch: true,
+        },
+      },
+    ],
+    installHint: { linux: 'curl -fsSL https://omp.sh/install | sh', darwin: 'brew install can1357/tap/omp' },
   },
   {
     id: 'libreoffice',

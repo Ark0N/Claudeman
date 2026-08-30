@@ -20,12 +20,14 @@ import {
   type ApiResponse,
   type SessionColor,
   type SessionStatus,
+  type SessionMode,
   type CodexConfig,
   type GeminiConfig,
   type AntigravityConfig,
   type PiConfig,
   type GrokConfig,
   type DeepSeekConfig,
+  type OmpConfig,
 } from '../../types.js';
 import { Session, isAltScreenStripMode, isMuxAltScreenOnlyStripMode } from '../../session.js';
 import { SseEvent } from '../sse-events.js';
@@ -65,6 +67,7 @@ import {
   autoConfigureRalph,
   canAccessOwned,
   CASES_DIR,
+  findPersistedSessionOrFail,
   findSessionOrFail,
   getAuthUser,
   isAdmin,
@@ -136,6 +139,8 @@ import {
   toSessionDocker,
 } from '../../docker-hosts.js';
 import { LRUMap } from '../../utils/lru-map.js';
+import { findLatestOmpSessionId } from '../../utils/omp-session-resolver.js';
+import { scanOmpSessionsHistory } from '../../omp-transcript.js';
 import {
   getLastTranscriptResponse,
   isExternalCliTranscriptMode,
@@ -395,10 +400,10 @@ export const _clampExternalCliBypassForOwner = clampExternalCliBypassForOwner;
 
 /**
  * Env-var keys a non-granted owner must not be able to set, because each one
- * hands back privilege the config clamp above just removed — or, for the last,
- * redirects a credential the server injects.
+ * hands back privilege the config clamp above just removed, or redirects a
+ * credential-resolution endpoint.
  *
- * All are DeepSeek's, and all are reachable because `DSH_*` and `DEEPSEEK_*` are
+ * The DeepSeek three are reachable because `DSH_*` and `DEEPSEEK_*` are
  * allowlisted `envOverrides` prefixes (schemas.ts) — which they have to be, since
  * that is also how a user configures the harness's non-privileged knobs.
  *
@@ -415,8 +420,24 @@ export const _clampExternalCliBypassForOwner = clampExternalCliBypassForOwner;
  *   URL would have the operator's API key sent as a bearer credential to a host
  *   of their choosing. (`DEEPSEEK_API_KEY` itself stays overridable: supplying
  *   your OWN key removes privilege rather than granting it.)
+ * - `OMP_AUTH_BROKER_URL`/`OMP_AUTH_BROKER_TOKEN` are where omp resolves
+ *   credentials from — the same shape as `DEEPSEEK_BASE_URL` above, reachable
+ *   because `OMP_*` is an allowlisted prefix. Unlike DeepSeek, Codeman does not
+ *   forward any operator-held key into an omp pane today (omp's provider
+ *   credentials live in `~/.omp` config files, not env vars), so there is no
+ *   known concrete exfiltration path yet — clamped defensively anyway, since a
+ *   non-granted owner redirecting where a shared multi-tenant deployment
+ *   resolves auth from is not something to allow silently (found in
+ *   Ark0N/Codeman#353 review; omp's own knobs are otherwise mostly `PI_*`,
+ *   already allowlisted for pi and not addressed here — see resolveOmpHome()).
  */
-const OWNER_CLAMPED_ENV_KEYS = ['DSH_PERMISSION_MODE', 'DSH_HOME', 'DEEPSEEK_BASE_URL'] as const;
+const OWNER_CLAMPED_ENV_KEYS = [
+  'DSH_PERMISSION_MODE',
+  'DSH_HOME',
+  'DEEPSEEK_BASE_URL',
+  'OMP_AUTH_BROKER_URL',
+  'OMP_AUTH_BROKER_TOKEN',
+] as const;
 
 /**
  * Env-var half of the multi-user bypass clamp.
@@ -744,6 +765,36 @@ async function injectAgentSkill(casePath: string): Promise<void> {
 // bypassing the `workspaceHooksEnabled` setting. Route handlers here resolve the
 // setting through the ConfigPort (tests stub it) and pass it as the second arg.
 
+/**
+ * A "Resume"/"continue" request for a NEW omp-mode session (the frontend's
+ * resumeHistorySession(), or anyone hitting the API directly) carries
+ * `continueSession: true` but no id — omp has none to give it, since Codeman
+ * has never tracked its own conversation UUID. Left as `--continue`, that
+ * picks whichever session file in the directory is newest, which silently
+ * drifts to the WRONG conversation the moment a second omp session (this
+ * one, a sibling worker, a stray manual run) has touched the same directory
+ * more recently. Resolve the real id up front instead, same as the
+ * dead-pane-respawn path in session.ts does, so even the FIRST relaunch of a
+ * resumed conversation is pinned rather than guessed.
+ */
+export function resolveOmpConfigForCreate(
+  mode: SessionMode,
+  workingDir: string,
+  ompConfig: OmpConfig | undefined
+): OmpConfig | undefined {
+  if (mode !== 'omp') return undefined;
+  if (!ompConfig || ompConfig.resumeSessionId || !ompConfig.continueSession) {
+    return ompConfig;
+  }
+  const resolvedId = findLatestOmpSessionId(workingDir);
+  if (!resolvedId) {
+    console.warn(
+      `[Session] OMP: no session file found under ${workingDir} to pin --resume; falling back to ambiguous --continue`
+    );
+  }
+  return resolvedId ? { ...ompConfig, resumeSessionId: resolvedId } : ompConfig;
+}
+
 export function registerSessionRoutes(
   app: FastifyInstance,
   ctx: SessionPort & EventPort & ConfigPort & InfraPort & AuthPort & TabLayoutPort
@@ -866,6 +917,7 @@ export function registerSessionRoutes(
       body.mode !== 'pi' &&
       body.mode !== 'grok' &&
       body.mode !== 'deepseek' &&
+      body.mode !== 'omp' &&
       body.envOverrides &&
       Object.keys(body.envOverrides).length > 0 &&
       (workingDir.startsWith(CASES_DIR + '/') || workingDir.startsWith(managedCasesBase + '/'));
@@ -965,6 +1017,12 @@ export function registerSessionRoutes(
         return createErrorResponse(ApiErrorCode.OPERATION_FAILED, getGrokNotFoundMessage());
       }
     }
+    if (body.mode === 'omp') {
+      const { isOmpAvailable, getOmpNotFoundMessage } = await import('../../utils/omp-cli-resolver.js');
+      if (!isOmpAvailable()) {
+        return createErrorResponse(ApiErrorCode.OPERATION_FAILED, getOmpNotFoundMessage());
+      }
+    }
 
     // Pre-validate resumeSessionId: check that the conversation file actually exists
     // in Claude's projects directory. If not, skip resume to avoid confusing
@@ -1012,12 +1070,14 @@ export function registerSessionRoutes(
                 ? body.piConfig?.model
                 : mode === 'grok'
                   ? body.grokConfig?.model
-                  : // DeepSeek's model is a composition entry in the profile's config
-                    // tree, not a session flag, so there is deliberately nothing to
-                    // read here (see docs/deepseek-integration.md).
-                    mode !== 'shell' && mode !== 'deepseek'
-                    ? modelConfig?.defaultModel || undefined
-                    : undefined;
+                  : mode === 'omp'
+                    ? body.ompConfig?.model
+                    : // DeepSeek's model is a composition entry in the profile's config
+                      // tree, not a session flag, so there is deliberately nothing to
+                      // read here (see docs/deepseek-integration.md).
+                      mode !== 'shell' && mode !== 'deepseek'
+                      ? modelConfig?.defaultModel || undefined
+                      : undefined;
     const claudeModeConfig = await ctx.getClaudeModeConfig();
     // Section 6.3: force non-granted users to a classifier-guarded mode.
     const effectiveClaudeMode = await resolveClaudeModeForUsername(claudeModeConfig.claudeMode, owner);
@@ -1056,6 +1116,7 @@ export function registerSessionRoutes(
       piConfig: mode === 'pi' ? gatedPiConfig : undefined,
       grokConfig: mode === 'grok' ? gatedGrokConfig : undefined,
       deepSeekConfig: mode === 'deepseek' ? gatedDeepSeekConfig : undefined,
+      ompConfig: resolveOmpConfigForCreate(mode, workingDir, body.ompConfig),
       resumeSessionId: validatedResumeId,
       envOverrides: await clampEnvOverridesForOwner(owner, body.envOverrides),
       effort: body.effort,
@@ -1124,9 +1185,26 @@ export function registerSessionRoutes(
     const query = req.query as { killMux?: string };
     const killMux = query.killMux !== 'false'; // Default to true
 
-    // Security: owner-scoped lookup 404s foreign/missing sessions uniformly (no existence leak, no cross-user kill).
-    const session = findSessionOrFail(ctx, id, req);
+    // A resumed/detached-but-never-live row (e.g. a non-claude "Resume" that
+    // relaunched into a NEW session and wants to retire the old one it can no
+    // longer reattach to) has no entry in ctx.sessions at all — only in
+    // persisted state. Fall back to removing that persisted record directly
+    // rather than 404ing: the caller means "make this row go away", and a
+    // stale duplicate row is exactly what's left behind otherwise. Pinned
+    // sessions keep their existing demote-not-delete protection.
+    if (!ctx.sessions.has(id)) {
+      // Called for its existence/ownership 404 side effect only — demoteOrRemoveSession
+      // below re-looks-up the record by id, so the returned SessionState is unused here.
+      findPersistedSessionOrFail(ctx.store, id, req);
+      ctx.store.demoteOrRemoveSession(id);
+      // Mirrors the broadcast at the tail of the live-session cleanup path
+      // (_doCleanupSession in server.ts) — without it, other open tabs keep
+      // showing the retired row until their next unrelated fetch.
+      ctx.broadcast(SseEvent.SessionDeleted, { id });
+      return {};
+    }
 
+    const session = findSessionOrFail(ctx, id, req);
     await ctx.cleanupSession(session.id, killMux, 'user_delete');
     return {};
   });
@@ -1289,6 +1367,7 @@ export function registerSessionRoutes(
         session.mode !== 'pi' &&
         session.mode !== 'grok' &&
         session.mode !== 'deepseek' &&
+        session.mode !== 'omp' &&
         ctx.store.getConfig().ralphEnabled &&
         !session.ralphTracker.autoEnableDisabled
       ) {
@@ -2857,6 +2936,7 @@ export function registerSessionRoutes(
       piConfig,
       grokConfig,
       deepSeekConfig,
+      ompConfig,
       envOverrides,
       effort,
       parentSessionId,
@@ -2907,6 +2987,7 @@ export function registerSessionRoutes(
         piConfig ||
         grokConfig ||
         deepSeekConfig ||
+        ompConfig ||
         openCodeConfig
       ) {
         return createErrorResponse(
@@ -2941,6 +3022,7 @@ export function registerSessionRoutes(
         piConfig ||
         grokConfig ||
         deepSeekConfig ||
+        ompConfig ||
         openCodeConfig
       ) {
         return createErrorResponse(
@@ -3042,6 +3124,16 @@ export function registerSessionRoutes(
           return createErrorResponse(ApiErrorCode.OPERATION_FAILED, getPiNotFoundMessage());
         }
       }
+      // Check OMP availability if requested
+      if (mode === 'omp') {
+        const { isOmpAvailable } = await import('../../utils/omp-cli-resolver.js');
+        if (!isOmpAvailable()) {
+          return createErrorResponse(
+            ApiErrorCode.OPERATION_FAILED,
+            'OMP CLI not found. Install with: curl -fsSL https://omp.sh/install | sh'
+          );
+        }
+      }
 
       // Check Grok availability if requested
       if (mode === 'grok') {
@@ -3103,14 +3195,15 @@ export function registerSessionRoutes(
         writeFileSync(join(resolvedCasePath, 'CLAUDE.md'), claudeMd);
 
         // Write .claude/settings.local.json with hooks for desktop notifications
-        // (Claude-specific — OpenCode, Codex, Gemini, Antigravity, Pi and Grok use their own systems)
+        // (Claude-specific — OpenCode, Codex, Gemini, Antigravity, Pi, Grok, DeepSeek and OMP use their own systems)
         if (
           mode !== 'opencode' &&
           mode !== 'codex' &&
           mode !== 'gemini' &&
           mode !== 'antigravity' &&
           mode !== 'pi' &&
-          mode !== 'grok'
+          mode !== 'grok' &&
+          mode !== 'omp'
         ) {
           await writeHooksConfig(resolvedCasePath);
         }
@@ -3185,6 +3278,7 @@ export function registerSessionRoutes(
       mode !== 'pi' &&
       mode !== 'grok' &&
       mode !== 'deepseek' &&
+      mode !== 'omp' &&
       !remote &&
       envOverrides &&
       Object.keys(envOverrides).length > 0
@@ -3209,10 +3303,12 @@ export function registerSessionRoutes(
                 ? piConfig?.model
                 : mode === 'grok'
                   ? grokConfig?.model
-                  : // DeepSeek's model lives in the profile's config tree, not here.
-                    mode !== 'shell' && mode !== 'deepseek'
-                    ? qsModelConfig?.defaultModel || undefined
-                    : undefined;
+                  : mode === 'omp'
+                    ? ompConfig?.model
+                    : // DeepSeek's model lives in the profile's config tree, not here.
+                      mode !== 'shell' && mode !== 'deepseek'
+                      ? qsModelConfig?.defaultModel || undefined
+                      : undefined;
     const qsClaudeModeConfig = await ctx.getClaudeModeConfig();
     const qsEffectiveClaudeMode = await resolveClaudeModeForUsername(qsClaudeModeConfig.claudeMode, owner);
     // Section 6.3: clamp Codex/Gemini/Antigravity bypass switches for a non-granted owner (no-op single-user/granted).
@@ -3252,6 +3348,7 @@ export function registerSessionRoutes(
       piConfig: mode === 'pi' ? qsGatedPiConfig : undefined,
       grokConfig: mode === 'grok' ? qsGatedGrokConfig : undefined,
       deepSeekConfig: mode === 'deepseek' ? qsGatedDeepSeekConfig : undefined,
+      ompConfig: resolveOmpConfigForCreate(mode, resolvedCasePath, ompConfig),
       envOverrides: qsGatedEnvOverrides,
       effort,
       remote,
@@ -4098,6 +4195,24 @@ export function registerSessionRoutes(
       }
     } catch {
       // Projects dir may not exist.
+    }
+
+    // OMP's own session files (~/.omp/agent/sessions) — the non-claude twin
+    // of the scan above; see omp-transcript.ts for why this exists at all.
+    try {
+      for (const h of scanOmpSessionsHistory()) {
+        history.push({
+          sessionId: h.sessionId,
+          workingDir: h.workingDir,
+          sizeBytes: h.sizeBytes,
+          lastModified: h.lastModified,
+          firstPrompt: h.firstPrompt,
+          lastPrompt: h.lastPrompt,
+          mode: 'omp',
+        });
+      }
+    } catch {
+      // Best-effort, same as the claude scan above.
     }
 
     // Mux process stats (best-effort; guard against mocks lacking the method).

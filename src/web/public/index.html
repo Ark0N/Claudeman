@@ -452,6 +452,10 @@
               <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><polygon points="5 3 19 12 5 21 5 3"/></svg>
               Run DeepSeek
             </button>
+            <button class="welcome-btn welcome-btn-omp" id="welcomeOmpBtn" style="display: none;" onclick="app.setRunMode('omp'); app.runOmp()">
+              <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><polygon points="5 3 19 12 5 21 5 3"/></svg>
+              Run OMP
+            </button>
           </div>
           <div class="welcome-qr" id="welcomeQr" onclick="app.toggleWelcomeQrSize()">
             <div class="welcome-qr-inner" id="welcomeQrInner"></div>
@@ -642,6 +646,9 @@
                    not a greyed-out entry the user cannot act on. -->
               <button class="run-mode-option run-mode-option-install" data-action="deepseek-install" id="runModeDeepSeekInstall" style="display: none;" onclick="app.installDeepSeekProfile()">
                 <span class="run-mode-dot deepseek"></span>DeepSeek — add a terminal profile…
+              </button>
+              <button class="run-mode-option" data-mode="omp" onclick="app.setRunMode('omp')">
+                <span class="run-mode-dot omp"></span>OMP
               </button>
               <div class="run-mode-sep"></div>
               <button class="run-mode-option" data-mode="shell" onclick="app.setRunMode('shell')">
@@ -930,6 +937,7 @@
                 <option value="pi">Pi</option>
                 <option value="grok">Grok</option>
                 <option value="deepseek">DeepSeek</option>
+                <option value="omp">OMP</option>
               </select>
             </div>
             <div class="form-row"><label>Working Directory</label><input type="text" id="schWorkingDir" placeholder="/absolute/path"></div>
@@ -2709,6 +2717,7 @@
                 <option value="pi" data-cli="pi">Pi</option>
                 <option value="grok" data-cli="grok">Grok</option>
                 <option value="deepseek" data-cli="deepseek">DeepSeek</option>
+                <option value="omp" data-cli="omp">OMP</option>
                 <option value="shell">Shell (no agent)</option>
               </select>
               <span class="form-hint">Which CLI to point the Run button at once the clone finishes. Changeable any time from the Run dropdown.</span>

@@ -141,6 +141,7 @@ const ALLOWED_ENV_PREFIXES = [
   // 34-provider-key problem in a new shape, and the answer is the same one.
   'DSH_',
   'DEEPSEEK_',
+  'OMP_',
 ];
 
 /**
@@ -180,7 +181,7 @@ const safeEnvOverridesSchema = z
     },
     {
       message:
-        'envOverrides contains blocked or disallowed env var keys. Only CLAUDE_CODE_*, OPENCODE_*, CODEX_*, GEMINI_*, GOOGLE_*, ANTIGRAVITY_*, PI_*, GROK_*, XAI_*, DSH_*, DEEPSEEK_* keys and CLAUDE_CONFIG_DIR are allowed.',
+        'envOverrides contains blocked or disallowed env var keys. Only CLAUDE_CODE_*, OPENCODE_*, CODEX_*, GEMINI_*, GOOGLE_*, ANTIGRAVITY_*, PI_*, GROK_*, XAI_*, DSH_*, DEEPSEEK_*, OMP_* keys and CLAUDE_CONFIG_DIR are allowed.',
     }
   );
 
@@ -346,6 +347,25 @@ const GrokConfigSchema = z
   .optional();
 
 /**
+ * Schema for OMP CLI-specific configuration.
+ */
+const OmpConfigSchema = z
+  .object({
+    model: z
+      .string()
+      .max(100)
+      .regex(/^[a-zA-Z0-9._\-/]+$/)
+      .optional(),
+    resumeSessionId: z
+      .string()
+      .max(100)
+      .regex(/^[a-zA-Z0-9._-]+$/)
+      .optional(),
+    continueSession: z.boolean().optional(),
+  })
+  .optional();
+
+/**
  * Schema for DeepSeek Harness (`dsh`)-specific configuration.
  *
  * `permissionMode` maps to the `DSH_PERMISSION_MODE` env export, NOT to a flag —
@@ -440,7 +460,9 @@ const parentSessionIdSchema = z.string().max(100).optional();
 
 export const CreateSessionSchema = z.object({
   workingDir: safePathSchema.optional(),
-  mode: z.enum(['claude', 'shell', 'opencode', 'codex', 'gemini', 'antigravity', 'pi', 'grok', 'deepseek']).optional(),
+  mode: z
+    .enum(['claude', 'shell', 'opencode', 'codex', 'gemini', 'antigravity', 'pi', 'grok', 'deepseek', 'omp'])
+    .optional(),
   name: z.string().max(100).optional(),
   /** Session that spawned this one — see parentSessionIdSchema. */
   parentSessionId: parentSessionIdSchema,
@@ -458,6 +480,7 @@ export const CreateSessionSchema = z.object({
   piConfig: PiConfigSchema,
   grokConfig: GrokConfigSchema,
   deepSeekConfig: DeepSeekConfigSchema,
+  ompConfig: OmpConfigSchema,
   /** Resume a previous Claude conversation by its session ID (used for reboot recovery) */
   resumeSessionId: z
     .string()
@@ -869,7 +892,9 @@ export const QuickStartSchema = z.object({
    *  a real host dir, so the settings file crosses the bind mount); rejected for
    *  remote cases (the file would be written on the WRONG machine). */
   modelOverride: z.string().max(50).optional(),
-  mode: z.enum(['claude', 'shell', 'opencode', 'codex', 'gemini', 'antigravity', 'pi', 'grok', 'deepseek']).optional(),
+  mode: z
+    .enum(['claude', 'shell', 'opencode', 'codex', 'gemini', 'antigravity', 'pi', 'grok', 'deepseek', 'omp'])
+    .optional(),
   openCodeConfig: OpenCodeConfigSchema,
   codexConfig: CodexConfigSchema,
   geminiConfig: GeminiConfigSchema,
@@ -877,6 +902,7 @@ export const QuickStartSchema = z.object({
   piConfig: PiConfigSchema,
   grokConfig: GrokConfigSchema,
   deepSeekConfig: DeepSeekConfigSchema,
+  ompConfig: OmpConfigSchema,
   envOverrides: safeEnvOverridesSchema,
   /** Claude CLI effort level (soft default via --settings, switchable in-session via /effort) */
   effort: effortLevelSchema,
@@ -1410,7 +1436,7 @@ const noNewlines = (v: string) => !/[\r\n]/.test(v);
 /** Shared field shape for creating/updating a scheduled job. */
 const CronJobBaseSchema = z.object({
   name: z.string().min(1).max(200),
-  agentType: z.enum(['claude', 'shell', 'opencode', 'codex', 'gemini', 'antigravity', 'pi', 'grok', 'deepseek']),
+  agentType: z.enum(['claude', 'shell', 'opencode', 'codex', 'gemini', 'antigravity', 'pi', 'grok', 'deepseek', 'omp']),
   workingDir: safePathSchema,
   launchCommand: z.string().max(2000).refine(noNewlines, 'launchCommand must be a single line').optional(),
   promptMode: z.enum(['inline_text', 'prompt_file_path']),

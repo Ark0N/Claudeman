@@ -147,6 +147,7 @@ export function defaultDockerCommandForMode(mode: SessionMode): string {
     pi: 'exec pi',
     grok: 'exec grok',
     deepseek: 'exec dsh',
+    omp: 'exec omp',
   };
   return commands[mode as DockerCommandMode] || commands.shell;
 }
@@ -639,6 +640,22 @@ const CRED_STORES: CredStorePolicy[] = [
   },
   { rel: '.config/gcloud', seedWhole: true },
   { rel: '.config/opencode', seedWhole: true },
+  // OMP keeps its config in `~/.omp/agent` (config.yml/mcp.json/models.yml/
+  // settings.yml — small, no bigger than grok's config.toml/pager.toml), but
+  // that dir ALSO holds agent.db/history.db/models.db (SQLite caches) and
+  // terminal-sessions/blobs/cache (large, regenerable), so seed only the
+  // config files. UNLIKE pi/grok, `sessions/` is SHARED (RW), not
+  // host-invisible: Codeman reads `~/.omp/agent/sessions/**/*.jsonl`
+  // HOST-SIDE for history recovery and --resume pinning
+  // (omp-transcript.ts, omp-session-resolver.ts) — the same reason codex's
+  // `sessions/` is shared rather than seeded. Without this, an in-container
+  // OMP conversation would be invisible to Codeman's own history-scan/resume
+  // logic, silently breaking the kill-survival feature for Docker cases.
+  {
+    rel: '.omp/agent',
+    shareDirs: ['sessions'],
+    seedFiles: ['config.yml', 'mcp.json', 'models.yml', 'settings.yml'],
+  },
 ];
 
 /**
