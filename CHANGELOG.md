@@ -1,5 +1,20 @@
 # aicodeman
 
+## 1.24.0
+
+### Minor Changes
+
+- OMP (Oh My Pi) as a tenth run mode, mode-faithful Resume for external CLIs, and a cleaner plan-usage chip.
+
+  **OMP (`omp`) run mode** (#353): Oh My Pi joins Claude Code, shell, OpenCode, Codex, Gemini, Antigravity, Pi, Grok Build and DeepSeek Harness as a run mode, in local, Docker and remote-SSH sessions: toolbar dropdown, welcome button, phone overview, command palette, clone-repo brain picker, cron agent types, tab badges and per-mode colours, plus `GET /api/omp/status`, a `codeman doctor` entry, install.sh detection and the docker agent image. The resolver leads with `~/.local/bin` (the upstream installer's real target) and demands `omp/<semver>` from `--version`, so an unrelated binary with the same three-letter name is never spawned. Past omp conversations appear in Past Sessions, read from omp's own session files (the header line carries the real working directory, so nothing has to reverse-engineer omp's directory mangling), and a respawned or resumed omp session is pinned to an exact conversation with `--resume <id>` instead of omp's newest-file `--continue`. Review hardening before merge: the pin is resolved only at the moment a respawn is actually confirmed (an eager resolve on boot recovery used to alias two omp tabs in one case directory onto one conversation), candidates are verified against their own header `cwd` and claimed process-wide so siblings cannot double-pin; `OMP_*` joins the env-override allowlist and `OMP_AUTH_BROKER_URL`/`OMP_AUTH_BROKER_TOKEN` are clamped for non-granted owners in multi-user mode, the same shape as `DEEPSEEK_BASE_URL`. Known and documented: omp's own knobs are mostly `PI_*` (it is a pi fork), its default `tools.approvalMode` is `yolo`, and in-container `--resume` pinning does not reach a Docker omp pane.
+
+  **Resume keeps the row's own CLI** (#353): clicking Resume on an OpenCode, Pi, Grok, DeepSeek or OMP row used to create a plain Claude session, since the create request never carried the row's mode. Resume now relaunches in the row's own mode with that CLI's continue flag, and retires the stale row it came from so three clicks no longer leave three copies of the same name. Codex, Gemini and Antigravity rows have no continuation wired yet, so their rows are deliberately left in place. `DELETE /api/sessions/:id` accepts a persisted-only session (ownership enforced through the same helper as live lookups, 404 rather than 403 so nothing leaks) and broadcasts `session_deleted` so other tabs drop the row too.
+
+  **Plan-usage chip drops the provider label when there is only one**: a machine with only Claude limits rendered `CLAUDE 5H 60% 7D 23%`, a 46px label naming the only thing it could be. The name exists to tell two rows apart, so it now appears only when both Claude and Codex have windows; the tooltip still names the provider either way.
+
+  ### Thanks
+  - @timkjr for #353, and for turning every review finding around within a day
+
 ## 1.23.2
 
 ### Patch Changes
