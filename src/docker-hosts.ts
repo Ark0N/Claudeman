@@ -1239,6 +1239,60 @@ export async function probeAdoptableContainer(
   }
 }
 
+/** One directory listing from INSIDE a container, shaped like the host picker's. */
+export interface DockerBrowseResult {
+  path: string;
+  parent: string | null;
+  entries: Array<{ name: string; path: string; type: 'directory' | 'file' }>;
+  error?: string;
+}
+
+/**
+ * List a directory INSIDE a container, for the adoption form's container-workdir
+ * picker. The host filesystem picker cannot serve this: the path lives in the
+ * container, and for an adopted container nothing is mounted at a matching host
+ * location, so the user would otherwise be typing a path blind.
+ *
+ * Read-only: one `ls` through `docker exec`, no writes, no lifecycle. The path
+ * is shell-escaped like every other value this module interpolates, and output
+ * is parsed as NUL-free lines with a leading type marker so a filename with
+ * spaces survives.
+ */
+export async function browseInContainer(
+  docker: Pick<SessionDocker, 'engine' | 'context' | 'daemonHost' | 'containerName'>,
+  path: string
+): Promise<DockerBrowseResult> {
+  const target = path && path.startsWith('/') ? path : '/';
+  const parent = target === '/' ? null : target.replace(/\/+$/, '').split('/').slice(0, -1).join('/') || '/';
+  if (IS_TEST_MODE) return { path: target, parent, entries: [] };
+  const argv = dockerEngineArgv(docker);
+  // `-p` marks directories with a trailing slash; `-A` shows dotfiles but not
+  // the . and .. entries the picker navigates with its own Up control.
+  const script = `cd ${shellescape(target)} 2>/dev/null && ls -Ap 2>/dev/null || echo __ERR__`;
+  try {
+    const { stdout } = await execFileAsync(
+      argv[0],
+      [...argv.slice(1), 'exec', docker.containerName, 'sh', '-lc', script],
+      { timeout: DOCKER_PROBE_TIMEOUT_MS, maxBuffer: 4 * 1024 * 1024 }
+    );
+    if (stdout.includes('__ERR__')) return { path: target, parent, entries: [], error: 'Not a readable directory' };
+    const base = target.endsWith('/') ? target : `${target}/`;
+    const entries = stdout
+      .split('\n')
+      .map((line) => line.trim())
+      .filter(Boolean)
+      .map((name) => {
+        const isDir = name.endsWith('/');
+        const clean = isDir ? name.slice(0, -1) : name;
+        return { name: clean, path: `${base}${clean}`, type: (isDir ? 'directory' : 'file') as 'directory' | 'file' };
+      })
+      .sort((a, b) => Number(b.type === 'directory') - Number(a.type === 'directory') || a.name.localeCompare(b.name));
+    return { path: target, parent, entries };
+  } catch (err) {
+    return { path: target, parent, entries: [], error: err instanceof Error ? err.message : String(err) };
+  }
+}
+
 /**
  * Resolve the host's IP on the default docker bridge (the address a container
  * reaches as `host.docker.internal`), so the server can bind a hooks-only listener

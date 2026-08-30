@@ -26,6 +26,7 @@ import {
   DockerCaseLinkSchema,
   DockerCaseAdoptSchema,
   DockerAdoptPreflightSchema,
+  DockerBrowseSchema,
   DockerHostSchema,
   DockerExportSchema,
   DockerImportSchema,
@@ -70,6 +71,7 @@ import {
   dockerDisplayPath,
   probeAdoptableContainer,
   listDockerContainers,
+  browseInContainer,
   DOCKER_ADOPT_PROBE_MODES,
   readDockerCases,
   readDockerHosts,
@@ -78,7 +80,7 @@ import {
   writeDockerCases,
   writeDockerHosts,
 } from '../../docker-hosts.js';
-import type { AdoptedContainerProbe, DockerContainerInfo } from '../../docker-hosts.js';
+import type { AdoptedContainerProbe, DockerBrowseResult, DockerContainerInfo } from '../../docker-hosts.js';
 import { buildDockerRemoveCommand } from '../../tmux-manager.js';
 import {
   checkRemoteTmuxAvailable,
@@ -894,6 +896,28 @@ export function registerCaseRoutes(app: FastifyInstance, ctx: EventPort & Config
       return { success: true, data: { containers } };
     }
   );
+
+  /**
+   * Browse a directory INSIDE a container, for the adoption form's
+   * container-workdir picker. The host picker cannot answer this: for an adopted
+   * container nothing is mounted at a matching host path, so the field would
+   * otherwise be typed blind. Read-only — one `ls` through `docker exec`.
+   */
+  app.post('/api/docker-cases/browse', async (req): Promise<ApiResponse<DockerBrowseResult>> => {
+    const body = parseBody(DockerBrowseSchema, req.body);
+    const host = (await readDockerHosts(CODEMAN_CONFIG_DIR)).find((item) => item.id === body.hostId);
+    if (!host) return createErrorResponse(ApiErrorCode.NOT_FOUND, 'Docker host not found');
+    const result = await browseInContainer(
+      {
+        engine: host.engine ?? 'docker',
+        context: host.context,
+        daemonHost: host.daemonHost,
+        containerName: body.container,
+      },
+      body.path || '/'
+    );
+    return { success: true, data: result };
+  });
 
   app.post('/api/docker-cases/adopt-preflight', async (req): Promise<ApiResponse<AdoptedContainerProbe>> => {
     const body = parseBody(DockerAdoptPreflightSchema, req.body);
