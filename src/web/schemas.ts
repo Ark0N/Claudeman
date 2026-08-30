@@ -815,6 +815,50 @@ export const DockerCaseLinkSchema = z.object({
     .optional(),
 });
 
+/**
+ * ADOPT an already-running container the user built and runs themselves. The
+ * container name is REQUIRED (there is nothing to derive it from — we are not
+ * creating it), and `hostWorkspacePath` still points at real host bytes so the
+ * file routes, watchers and transcript correlation keep working exactly as they
+ * do for an owned case. Everything that only makes sense at container-create
+ * time (image, network, resources, gpus, credential mounts) is deliberately
+ * absent: adoption never runs `docker create`.
+ */
+export const DockerCaseAdoptSchema = z.object({
+  name: z.string().regex(/^[a-zA-Z0-9_-]+$/, 'Invalid case name format'),
+  hostId: z.string().regex(/^[a-zA-Z0-9_-]+$/, 'Invalid docker host id'),
+  container: z
+    .string()
+    .min(2)
+    .max(128)
+    .regex(/^[a-zA-Z0-9][a-zA-Z0-9_.-]+$/, 'Invalid container name'),
+  hostWorkspacePath: z
+    .string()
+    .min(1)
+    .max(2000)
+    .regex(/^\//, 'Workspace path must be absolute')
+    .regex(/^[^,]*$/, 'Workspace path must not contain commas (docker --mount is comma-delimited)')
+    .regex(NO_SHELL_META, 'Invalid characters in workspace path'),
+  containerWorkdir: z
+    .string()
+    .min(1)
+    .max(2000)
+    .regex(/^\//, 'Container workdir must be absolute')
+    .regex(/^[^,]*$/, 'Container workdir must not contain commas (docker --mount is comma-delimited)')
+    .regex(NO_SHELL_META, 'Invalid characters in container workdir')
+    .optional(),
+});
+
+/** Read-only adoption preflight: report on an existing container, link nothing. */
+export const DockerAdoptPreflightSchema = z.object({
+  hostId: z.string().regex(/^[a-zA-Z0-9_-]+$/, 'Invalid docker host id'),
+  container: z
+    .string()
+    .min(2)
+    .max(128)
+    .regex(/^[a-zA-Z0-9][a-zA-Z0-9_.-]+$/, 'Invalid container name'),
+});
+
 export const DockerExportSchema = z.object({
   mode: z.enum(['full', 'workspace']).optional(),
 });

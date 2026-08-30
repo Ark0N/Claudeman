@@ -1,0 +1,168 @@
+/**
+ * @fileoverview Adopting an ALREADY-RUNNING container (`DockerCase.owned === false`).
+ *
+ * The whole point of adoption is a negative guarantee: Codeman execs into a
+ * container the user built and runs, and never creates, starts, stops, restarts
+ * or removes it. A negative guarantee cannot be observed by using the feature —
+ * only by asserting that the mutating verbs are absent — so these tests read the
+ * generated command strings and assert on what is NOT in them.
+ *
+ * Mirror of the `owned:false` remote-SSH contract (COD-105).
+ */
+import { describe, it, expect } from 'vitest';
+import {
+  toSessionDocker,
+  isAdoptedContainer,
+  removeDockerContainer,
+  checkDockerConfigDrift,
+  dockerConfigHash,
+} from '../src/docker-hosts.js';
+import {
+  buildDockerLaunchCommand,
+  buildDockerStopCommand,
+  buildDockerRemoveCommand,
+  buildDockerKillCommand,
+} from '../src/tmux-manager.js';
+import type { DockerCase, DockerHost, SessionDocker } from '../src/types.js';
+
+const HOST: DockerHost = { id: 'h1', label: 'local', engine: 'docker', image: 'codeman/agent:base' };
+
+function caseFor(owned: boolean | undefined): DockerCase {
+  return {
+    name: 'adopted',
+    type: 'docker',
+    hostId: 'h1',
+    hostWorkspacePath: '/srv/work',
+    container: 'my-own-container',
+    ...(owned === undefined ? {} : { owned }),
+  };
+}
+
+function launchFor(docker: SessionDocker): string {
+  return buildDockerLaunchCommand({
+    mode: 'codex',
+    docker,
+    sessionId: '11111111-2222-3333-4444-555555555555',
+    createContext: {
+      docker,
+      sessionId: '11111111-2222-3333-4444-555555555555',
+      instance: 'default',
+      userArgs: ['--user', '1000:0'],
+      credentialMounts: [],
+      extraMounts: [],
+      envCreate: { HOME: '/home/agent' },
+      addHostGateway: true,
+      gatewayAlias: 'host.docker.internal',
+    },
+    execEnv: { TERM: 'xterm-256color' },
+    execEnvNames: [],
+    seedCopies: [{ from: '/seed/creds.json', to: '/home/agent/.claude/.credentials.json' }],
+  });
+}
+
+describe('adopted container: ownership plumbing', () => {
+  it('carries owned:false from the case onto the live session metadata', () => {
+    expect(toSessionDocker(HOST, caseFor(false)).owned).toBe(false);
+    expect(isAdoptedContainer(toSessionDocker(HOST, caseFor(false)))).toBe(true);
+  });
+
+  it('treats an absent flag as owned, so existing cases are unchanged', () => {
+    const docker = toSessionDocker(HOST, caseFor(undefined));
+    expect(docker.owned).toBeUndefined();
+    expect(isAdoptedContainer(docker)).toBe(false);
+  });
+
+  it('keeps ownership OUT of the config hash so adoption cannot mass-trip drift', () => {
+    // A drift-hash that moved with `owned` would flag every pre-existing case the
+    // moment this field shipped, and the remedy the UI offers is "recreate".
+    const owned = toSessionDocker(HOST, caseFor(undefined));
+    const adopted = toSessionDocker(HOST, caseFor(false));
+    expect(adopted.configHash).toBe(owned.configHash);
+    expect(dockerConfigHash({ ...owned, owned: false } as never)).toBe(owned.configHash);
+  });
+});
+
+describe('adopted container: the launch chain never mutates lifecycle', () => {
+  const adopted = launchFor(toSessionDocker(HOST, caseFor(false)));
+  const owned = launchFor(toSessionDocker(HOST, caseFor(undefined)));
+
+  it('never creates the container', () => {
+    expect(owned).toContain('docker create');
+    expect(adopted).not.toContain('docker create');
+  });
+
+  it('never starts the container', () => {
+    expect(owned).toContain('docker start');
+    expect(adopted).not.toContain('docker start');
+  });
+
+  it('never stops or removes the container', () => {
+    for (const verb of ['docker stop', 'docker rm', 'docker restart', 'docker kill']) {
+      expect(adopted).not.toContain(verb);
+    }
+  });
+
+  it('fails closed when the container is missing instead of creating it', () => {
+    expect(adopted).toContain('docker inspect');
+    expect(adopted).toMatch(/not found.*start it yourself/i);
+  });
+
+  it('fails closed when the container is stopped instead of starting it', () => {
+    expect(adopted).toMatch(/\{\{\.State\.Running\}\}/);
+    expect(adopted).toMatch(/not running.*never starts a container it does not own/i);
+  });
+
+  it('skips the base-image gate, which describes an image adoption never uses', () => {
+    expect(owned).toContain('image inspect');
+    expect(adopted).not.toContain('image inspect');
+  });
+
+  it('never seeds host credentials into a container it does not own', () => {
+    expect(owned).toContain('.credentials.json');
+    expect(adopted).not.toContain('.credentials.json');
+  });
+
+  it('still execs into the in-container tmux, which is the whole point', () => {
+    expect(adopted).toContain('docker exec -it');
+    expect(adopted).toContain('new-session -A');
+  });
+});
+
+describe('adopted container: mutating verbs fail closed at the builder', () => {
+  const docker = toSessionDocker(HOST, caseFor(false));
+
+  it('refuses to build a stop command', () => {
+    expect(() => buildDockerStopCommand(docker)).toThrow(/does not own its lifecycle/);
+  });
+
+  it('refuses to build a remove command', () => {
+    expect(() => buildDockerRemoveCommand(docker)).toThrow(/does not own its lifecycle/);
+  });
+
+  it('refuses to remove the container', async () => {
+    await expect(removeDockerContainer(docker)).rejects.toThrow(/does not own its lifecycle/);
+  });
+
+  it('still allows killing THIS session in-container tmux, never the container', () => {
+    const kill = buildDockerKillCommand({ docker, sessionId: 'abcdef12-0000-0000-0000-000000000000' });
+    expect(kill).toContain('tmux');
+    expect(kill).toContain('kill-session');
+    expect(kill).not.toContain('docker stop');
+    expect(kill).not.toContain('docker rm');
+  });
+
+  it('still permits every verb for an owned container', () => {
+    const ownedDocker = toSessionDocker(HOST, caseFor(undefined));
+    expect(buildDockerStopCommand(ownedDocker)).toContain('stop -t 10');
+    expect(buildDockerRemoveCommand(ownedDocker)).toContain('rm -f');
+  });
+});
+
+describe('adopted container: drift is not evaluated', () => {
+  it('reports no drift rather than demanding a recreate we may not perform', async () => {
+    // An adopted container carries no codeman.confighash label, so a real
+    // comparison would always report drift and the launch gate would 409 forever.
+    const status = await checkDockerConfigDrift(toSessionDocker(HOST, caseFor(false)));
+    expect(status.drifted).toBe(false);
+  });
+});
