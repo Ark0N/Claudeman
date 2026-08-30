@@ -2854,8 +2854,9 @@
             </div>
             <div class="form-row docker-adopt-only">
               <label>Container Name</label>
-              <input type="text" id="dockerContainerName" placeholder="my-dev-box" pattern="[a-zA-Z0-9][a-zA-Z0-9_.-]+" autocomplete="off" autocapitalize="off" spellcheck="false">
-              <span class="form-hint">Must be running already. <button type="button" class="btn-inline-check" id="dockerAdoptCheckBtn">Check container</button></span>
+              <input type="text" id="dockerContainerName" list="dockerContainerList" placeholder="my-dev-box" pattern="[a-zA-Z0-9][a-zA-Z0-9_.-]+" autocomplete="off" autocapitalize="off" spellcheck="false">
+              <datalist id="dockerContainerList"></datalist>
+              <span class="form-hint">Pick from the running containers or type a name. <button type="button" class="btn-inline-check" id="dockerAdoptCheckBtn">Check container</button></span>
             </div>
             <div class="form-row docker-adopt-only">
               <label>Container Workdir</label>

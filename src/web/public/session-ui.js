@@ -2396,6 +2396,18 @@ Object.assign(CodemanApp.prototype, {
     if (adoptCheck) adoptCheck.onclick = () => this._dockerAdoptPreflight();
     const adoptJump = document.getElementById('dockerAdoptJumpBtn');
     if (adoptJump) adoptJump.onclick = () => this.jumpToDockerAdopt();
+    // Containers come from the host profile, so switching Host ID invalidates the
+    // suggestions. Dropping the marker (rather than refetching here) keeps the
+    // fetch lazy — it happens when adopt mode is actually on.
+    const hostIdInput = document.getElementById('dockerHostId');
+    if (hostIdInput) {
+      hostIdInput.onchange = () => {
+        delete document.getElementById('dockerContainerList')?.dataset.loadedFor;
+        if (document.getElementById('dockerAdoptExisting')?.checked) void this._loadDockerContainerOptions();
+      };
+    }
+    // A fresh open re-reads the engine: containers start and stop between visits.
+    delete document.getElementById('dockerContainerList')?.dataset.loadedFor;
     this._syncDockerAdoptMode();
     // Scroll-into-view on focus for mobile keyboard visibility
     modal.querySelectorAll('input[type="text"]').forEach(input => {
@@ -2966,6 +2978,34 @@ Object.assign(CodemanApp.prototype, {
     const adopting = document.getElementById('dockerAdoptExisting')?.checked;
     if (adopting) modal.setAttribute('data-docker-adopt', '1');
     else modal.removeAttribute('data-docker-adopt');
+    if (adopting) void this._loadDockerContainerOptions();
+  },
+
+  /**
+   * Fill the container-name `<datalist>`. A native datalist is deliberate: the
+   * field must accept a free-typed name (the engine may be remote, or the
+   * container may not exist yet when the form is filled), and datalist gives
+   * type-to-filter over the suggestions without a custom dropdown.
+   *
+   * Best-effort by design — the endpoint returns [] for an unreachable daemon,
+   * and an empty list simply leaves the field as plain text input.
+   */
+  async _loadDockerContainerOptions() {
+    const list = document.getElementById('dockerContainerList');
+    if (!list) return;
+    const hostId = document.getElementById('dockerHostId')?.value.trim() || 'local';
+    if (list.dataset.loadedFor === hostId) return; // one fetch per host per open
+    const data = await this._apiJson(`/api/docker-hosts/${encodeURIComponent(hostId)}/containers`);
+    const containers = data?.containers || [];
+    list.textContent = '';
+    for (const c of containers) {
+      const option = document.createElement('option');
+      option.value = c.name;
+      // Engine-supplied strings: set as text, never as markup.
+      option.textContent = c.running ? `${c.image} · ${c.status}` : `${c.image} · ${c.status} (not running)`;
+      list.appendChild(option);
+    }
+    list.dataset.loadedFor = hostId;
   },
 
   /**

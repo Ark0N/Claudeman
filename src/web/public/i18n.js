@@ -717,7 +717,7 @@
     'On: Codeman only runs docker exec into a container you already built and run — it never creates, starts, stops or removes it. The CLIs must already be installed and logged in inside it.':
       '开启后，{name}只会 docker exec 进入你自己构建并运行的容器，绝不创建、启动、停止或删除它；容器内必须已安装并登录好相应 CLI。',
     'Container Name': '容器名称',
-    'Must be running already.': '该容器必须已在运行。',
+    'Pick from the running containers or type a name.': '从正在运行的容器中选择，或直接输入名称。',
     'Check container': '检查容器',
     'Container Workdir': '容器内工作目录',
     'A path that already exists inside the container. Adoption mounts nothing, so this need not match the host workspace path.':
