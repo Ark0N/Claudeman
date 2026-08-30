@@ -127,6 +127,7 @@ import {
 import {
   checkDockerAvailable,
   checkDockerConfigDrift,
+  probeAdoptableContainer,
   checkDockerTmuxAvailable,
   ensureAgentBaseImage,
   DEFAULT_AGENT_IMAGE,
@@ -2957,25 +2958,43 @@ export function registerSessionRoutes(
         );
       }
       const sessionDocker = toSessionDocker(host, dockerCase);
-      // Ensure the base image exists, auto-building the default image on first use so
-      // it is never a blocker. Dedup'd with any build kicked off at case-create, so
-      // this awaits the SAME in-flight build rather than starting a second one.
-      const ensured = await ensureAgentBaseImage(sessionDocker, sessionDocker.image, {
-        onProgress: (line) => ctx.broadcast(SseEvent.DockerImageBuildProgress, { name: dockerCase.name, line }),
-      });
-      if (!ensured.ok) {
-        return createErrorResponse(ApiErrorCode.OPERATION_FAILED, ensured.error || 'base image not available');
-      }
-      if (ensured.built) {
-        ctx.broadcast(SseEvent.DockerImageBuildComplete, { name: dockerCase.name, image: sessionDocker.image });
-      }
-      // tmux is a hard prerequisite (the in-container tmux makes reconnect durable).
-      // Skip the extra container-run probe for our OWN default image (the baked
-      // Dockerfile always contains tmux); still verify a custom image.
-      if (sessionDocker.image !== DEFAULT_AGENT_IMAGE) {
-        const tmuxCheck = await checkDockerTmuxAvailable(sessionDocker);
-        if (!tmuxCheck.ok) {
-          return createErrorResponse(ApiErrorCode.OPERATION_FAILED, tmuxCheck.error || 'base image is missing tmux');
+      // An ADOPTED container skips every image-side gate: we never run `docker
+      // create`, so the image is the user's business, and `ensureAgentBaseImage`
+      // would build/require an image that has nothing to do with their container.
+      // The prerequisite that DOES still hold is tmux inside it, so probe the live
+      // container (not the image) and refuse before launch rather than dead-paning.
+      if (sessionDocker.owned === false) {
+        const probe = await probeAdoptableContainer(sessionDocker, [mode]);
+        if (!probe.ok) {
+          return createErrorResponse(ApiErrorCode.OPERATION_FAILED, probe.error || 'container is not usable');
+        }
+        if (mode !== 'shell' && !probe.availableModes?.includes(mode)) {
+          return createErrorResponse(
+            ApiErrorCode.OPERATION_FAILED,
+            `"${mode}" is not installed in container "${sessionDocker.containerName}". Adoption never modifies the container — install it inside, or pick another mode.`
+          );
+        }
+      } else {
+        // Ensure the base image exists, auto-building the default image on first use so
+        // it is never a blocker. Dedup'd with any build kicked off at case-create, so
+        // this awaits the SAME in-flight build rather than starting a second one.
+        const ensured = await ensureAgentBaseImage(sessionDocker, sessionDocker.image, {
+          onProgress: (line) => ctx.broadcast(SseEvent.DockerImageBuildProgress, { name: dockerCase.name, line }),
+        });
+        if (!ensured.ok) {
+          return createErrorResponse(ApiErrorCode.OPERATION_FAILED, ensured.error || 'base image not available');
+        }
+        if (ensured.built) {
+          ctx.broadcast(SseEvent.DockerImageBuildComplete, { name: dockerCase.name, image: sessionDocker.image });
+        }
+        // tmux is a hard prerequisite (the in-container tmux makes reconnect durable).
+        // Skip the extra container-run probe for our OWN default image (the baked
+        // Dockerfile always contains tmux); still verify a custom image.
+        if (sessionDocker.image !== DEFAULT_AGENT_IMAGE) {
+          const tmuxCheck = await checkDockerTmuxAvailable(sessionDocker);
+          if (!tmuxCheck.ok) {
+            return createErrorResponse(ApiErrorCode.OPERATION_FAILED, tmuxCheck.error || 'base image is missing tmux');
+          }
         }
       }
 

@@ -243,6 +243,24 @@ export interface DockerCase {
   containerWorkdir?: string;
   /** Container name (default codeman-case-<slug>). */
   container?: string;
+  /**
+   * Whether THIS Codeman created the container (mirror of `SessionRemote.owned`).
+   *
+   * - `true` (default for cases Codeman linked/quick-created): we own the
+   *   container; drift may recreate it, case-delete may `docker rm -f` it, and
+   *   the launch chain may create + start it.
+   * - `false` (ADOPTED: an already-running container the user built and runs
+   *   themselves): Codeman must never create, start, stop, restart or remove it.
+   *   The launch chain fails closed when the container is missing or not running
+   *   instead of touching its lifecycle, drift is not evaluated (there is no
+   *   `codeman.confighash` label to compare), and no credential seed is copied
+   *   into its HOME. Only the in-container tmux session is ever created or
+   *   killed — exactly the `owned:false` remote-SSH contract.
+   *
+   * Absent is treated as owned (cases persisted before this field existed were
+   * all created by us).
+   */
+  owned?: boolean;
   /** Last captured Claude conversation id, replayed via --resume on a fresh launch. */
   lastClaudeSessionId?: string;
 }
@@ -275,6 +293,12 @@ export interface SessionDocker {
   extraExecArgs?: string[];
   /** Stable hash of the drift-relevant create args (recreate-on-drift detection). */
   configHash?: string;
+  /**
+   * Mirror of `DockerCase.owned`, flattened onto the live session so every
+   * lifecycle decision (launch chain, drift, stop, remove) can see it without
+   * re-reading docker-cases.json. Absent = owned. See `DockerCase.owned`.
+   */
+  owned?: boolean;
 }
 
 /**
