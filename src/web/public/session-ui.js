@@ -2341,6 +2341,8 @@ Object.assign(CodemanApp.prototype, {
     if (adoptToggle) adoptToggle.onchange = () => this._syncDockerAdoptMode();
     const adoptCheck = document.getElementById('dockerAdoptCheckBtn');
     if (adoptCheck) adoptCheck.onclick = () => this._dockerAdoptPreflight();
+    const adoptJump = document.getElementById('dockerAdoptJumpBtn');
+    if (adoptJump) adoptJump.onclick = () => this.jumpToDockerAdopt();
     this._syncDockerAdoptMode();
     // Scroll-into-view on focus for mobile keyboard visibility
     modal.querySelectorAll('input[type="text"]').forEach(input => {
@@ -2911,6 +2913,20 @@ Object.assign(CodemanApp.prototype, {
     const adopting = document.getElementById('dockerAdoptExisting')?.checked;
     if (adopting) modal.setAttribute('data-docker-adopt', '1');
     else modal.removeAttribute('data-docker-adopt');
+  },
+
+  /**
+   * Cross-link from the Create New tab's "Run in an isolated Docker container"
+   * row. Adoption lives on the Docker tab, but the place users actually look for
+   * anything container-shaped is that checkbox, so this jumps them there with the
+   * toggle already on rather than leaving the feature undiscoverable.
+   */
+  jumpToDockerAdopt() {
+    this.switchCaseModalTab('case-docker');
+    const toggle = document.getElementById('dockerAdoptExisting');
+    if (toggle) toggle.checked = true;
+    this._syncDockerAdoptMode();
+    document.getElementById('dockerContainerName')?.focus();
   },
 
   /**
