@@ -2,7 +2,7 @@
 
 Run a case inside an **isolated Docker container** instead of directly on the host. Any number of Codeman sessions can share one container (it is scoped to the case, not the session), so a whole project lives in a sandbox with its own network, resource caps, and filesystem, and you can **export the container to move it to another machine**.
 
-Docker mode is a **location overlay on cases**, the direct analog of [remote SSH cases](./remote-hosts.md): where a remote case runs a local tmux pane doing `ssh host` into a durable remote tmux server, a docker case runs a local tmux pane doing `docker exec -it` into a durable **in-container** tmux server. It is not a separate `SessionMode`, so `claude` / `shell` / `opencode` / `codex` / `gemini` / `antigravity` / `pi` / `grok` all work inside the container.
+Docker mode is a **location overlay on cases**, the direct analog of [remote SSH cases](./remote-hosts.md): where a remote case runs a local tmux pane doing `ssh host` into a durable remote tmux server, a docker case runs a local tmux pane doing `docker exec -it` into a durable **in-container** tmux server. It is not a separate `SessionMode`, so `claude` / `shell` / `opencode` / `codex` / `gemini` / `antigravity` / `pi` / `grok` / `deepseek` / `omp` all work inside the container.
 
 ## One-time setup: build the base image
 
@@ -25,8 +25,20 @@ A zero exit code only proves the layers ran, not that the toolchain works. Verif
 
 ```bash
 docker run --rm codeman/agent:base bash -lc \
-  'for c in claude codex gemini opencode agy pi grok; do printf "%-9s " $c; $c --version 2>&1 | head -1; done'
+  'for c in claude codex gemini opencode agy pi grok dsh omp; do printf "%-9s " $c; $c --version 2>&1 | head -1; done'
 ```
+
+⚠️ `dsh --version` is the one line above that answers a different question than the
+others: `dsh` is a profile launcher, so a working binary says nothing about whether
+the image can actually run a DeepSeek session. Check the profile the Dockerfile
+installs into the agent's HOME as well, or a `mode: 'deepseek'` case starts a pane
+that dies on arrival:
+
+```bash
+docker run --rm codeman/agent:base ls ~/.dsh/profiles/dsh-tui/package.json
+```
+
+Building that profile is also why `pnpm` is in the image: `dsh plugin` forwards straight to a literal `pnpm` and exits 127 without it (issue #352), and pnpm — unlike npm — blocks dependency lifecycle scripts by default and fails the install over it, so the profile step passes `--config.dangerouslyAllowAllBuilds=true`.
 
 Antigravity (`agy`) and Grok (`grok`) are the two CLIs not installed from npm (Google and xAI ship standalone binaries), so each has its own Dockerfile step, adding roughly 190MB and 160MB respectively. Pi also gets its own step, because upstream documents installing it with `--ignore-scripts` and that flag must not silently change how the other npm CLIs install.
 

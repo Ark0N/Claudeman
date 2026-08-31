@@ -614,8 +614,13 @@ export function registerSystemRoutes(
           // same negative-pid signal as runGit() in git-clone.ts, which is the
           // synchronous-spawn precedent this endpoint is modelled on.
           detached: true,
-          // dsh bundles its own package manager, so no system pnpm is required —
-          // but it still needs a HOME to resolve $DSH_HOME against.
+          // Inherit the environment: this needs a HOME to resolve $DSH_HOME
+          // against, and a PATH carrying `pnpm`. ⚠️ `dsh plugin` does NOT bundle a
+          // package manager — it `spawnSync`s a literal `pnpm` with no npm
+          // fallback, so on a host without one this exits 127 and dsh's own
+          // stderr ("pnpm not found on PATH") is what reaches the caller through
+          // the OPERATION_FAILED detail below. That is the same missing
+          // dependency that broke the docker agent image in issue #352.
           env: process.env,
         });
       } catch (err) {
