@@ -2416,15 +2416,18 @@ Object.assign(CodemanApp.prototype, {
     // A switched-to panel starts at its own top.
     const doc = document.getElementById('createCaseDoc');
     if (doc) doc.scrollTop = 0;
-    // Update submit button (hide for manage tab)
-    const submitBtn = document.getElementById('caseModalSubmit');
+    // Keep the desktop footer action and the compact header action in sync.
+    // The shared mobile settings surface hides `.set-foot` at <= 860px, so the
+    // header action is the only way to complete Add Case on a phone/tablet.
+    const submitButtons = ['caseModalSubmit', 'caseModalSubmitMobile'].map(id => document.getElementById(id));
     if (tabName === 'case-manage') {
-      submitBtn.style.display = 'none';
+      submitButtons.forEach(btn => {
+        btn.style.display = 'none';
+      });
       this.renderCaseManageList();
       this.refreshDockerExports();
     } else {
-      submitBtn.style.display = '';
-      submitBtn.textContent =
+      const submitLabel =
         tabName === 'case-create'
           ? 'Create'
           : tabName === 'case-clone'
@@ -2434,6 +2437,10 @@ Object.assign(CodemanApp.prototype, {
               : tabName === 'case-docker'
                 ? 'Link Docker'
                 : 'Link';
+      submitButtons.forEach(btn => {
+        btn.style.display = '';
+        btn.textContent = submitLabel;
+      });
     }
     // Focus appropriate input
     if (tabName === 'case-create') {
@@ -2454,14 +2461,17 @@ Object.assign(CodemanApp.prototype, {
   },
 
   async submitCaseModal() {
-    const btn = document.getElementById('caseModalSubmit');
-    const originalText = btn.textContent;
-    btn.classList.add('loading');
-    btn.textContent =
+    const buttons = ['caseModalSubmit', 'caseModalSubmitMobile'].map(id => document.getElementById(id));
+    const originalLabels = buttons.map(btn => btn.textContent);
+    const loadingLabel =
       this.caseModalTab === 'case-create' ? 'Creating...' : this.caseModalTab === 'case-clone' ? 'Cloning...' : 'Linking...';
     // A clone holds this request open for minutes; without disabling the button a
     // second click fires a second clone (the loser then fails on ALREADY_EXISTS).
-    btn.disabled = true;
+    buttons.forEach(btn => {
+      btn.classList.add('loading');
+      btn.textContent = loadingLabel;
+      btn.disabled = true;
+    });
     try {
       if (this.caseModalTab === 'case-create') {
         await this.createCase();
@@ -2475,9 +2485,11 @@ Object.assign(CodemanApp.prototype, {
         await this.linkCase();
       }
     } finally {
-      btn.classList.remove('loading');
-      btn.disabled = false;
-      btn.textContent = originalText;
+      buttons.forEach((btn, index) => {
+        btn.classList.remove('loading');
+        btn.disabled = false;
+        btn.textContent = originalLabels[index];
+      });
     }
   },
 

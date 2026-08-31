@@ -13,6 +13,7 @@ const keyboardSource = readFileSync(resolve('src/web/public/keyboard-accessory.j
 const terminalSource = readFileSync(resolve('src/web/public/terminal-ui.js'), 'utf8');
 const sessionSource = readFileSync(resolve('src/web/public/session-ui.js'), 'utf8');
 const indexSource = readFileSync(resolve('src/web/public/index.html'), 'utf8');
+const mobileCssSource = readFileSync(resolve('src/web/public/mobile.css'), 'utf8');
 
 function loadTerminalMixin() {
   const FakeCodemanApp = function () {} as unknown as { prototype: Record<string, (...args: unknown[]) => unknown> };
@@ -158,6 +159,17 @@ describe('mobile filesystem picker actions', () => {
     expect(indexSource).toContain('id="linkCasePath"');
     expect(sessionSource).toContain('openLinkCasePathPicker()');
     expect(sessionSource).toContain('directoriesOnly: true');
+  });
+
+  it('keeps the Add Case submit action reachable when the compact layout hides its footer', () => {
+    expect(mobileCssSource).toMatch(/\.set-foot\s*\{\s*display:\s*none;/);
+
+    const compactSubmit = indexSource.match(/<button[^>]*id="caseModalSubmitMobile"[^>]*>Create<\/button>/)?.[0];
+    expect(compactSubmit).toBeDefined();
+    expect(compactSubmit).toContain('class="set-head-save"');
+    expect(compactSubmit).toContain('onclick="app.submitCaseModal()"');
+
+    expect(sessionSource).toContain("['caseModalSubmit', 'caseModalSubmitMobile']");
   });
 
   it('keeps Choose separate from safe inline file preview', () => {
