@@ -12,7 +12,9 @@
  */
 import { describe, it, expect, beforeAll, afterAll, beforeEach } from 'vitest';
 import { WebServer } from '../src/web/server.js';
-
+import { safeRmHomeTree } from './mocks/index.js';
+import { homedir } from 'node:os';
+import { join } from 'node:path';
 const TEST_PORT = 3215;
 
 // Helper to parse SSE events from raw text
@@ -1043,15 +1045,8 @@ describe('Operation Lightspeed', () => {
       const caseEvent = events.find((e) => e.event === 'case:created');
       expect(caseEvent).toBeDefined();
 
-      // Cleanup
-      const { rmSync } = await import('node:fs');
-      const { join } = await import('node:path');
-      const { homedir } = await import('node:os');
-      try {
-        rmSync(join(homedir(), 'codeman-cases', caseName), { recursive: true });
-      } catch {
-        /* may not exist */
-      }
+      // Cleanup (containment-gated: never touch prod ~/codeman-cases)
+      safeRmHomeTree(join(homedir(), 'codeman-cases', caseName));
     });
 
     it('should deliver session:created to every client, even those with a mismatched filter', async () => {
