@@ -1,5 +1,21 @@
 # aicodeman
 
+## 1.24.1
+
+### Patch Changes
+
+- The Docker agent base image builds again.
+
+  **`docker/agent.Dockerfile` could not be built from a fresh checkout** (#352, fix in #350): the DeepSeek Harness step died with `dsh: pnpm not found on PATH` and exit 127, which took the whole image with it and, because Codeman auto-builds this image on the first Docker case, left Docker mode unusable on a clean host. `dsh plugin` does not bundle a package manager; it spawns a literal `pnpm` with no npm fallback, so pnpm is now installed alongside `dsh` and the layer proves it with `pnpm --version`.
+
+  The profile install also passes `--config.dangerouslyAllowAllBuilds=true`, because pnpm, unlike npm, refuses dependency lifecycle scripts by default and fails the install over it (`ERR_PNPM_IGNORED_BUILDS`, exit 1). Which packages that hits moves between rebuilds, since the terminal profile is resolved by dist-tag rather than pinned: the tree that broke the build in August pulled `@google/genai`, today's does not. An allowlist of those names would have gone stale rather than prevented the next break, and running those scripts is the same exposure the image already accepts three layers up, where `npm install -g` runs the install scripts of every transitive dependency of the five CLIs above it with no gate at all.
+
+  Documentation caught up with two things it had wrong: the image smoke test in `docs/docker-cases.md` now covers `dsh` and `omp`, and checks the dsh **profile** rather than only the binary (`dsh` is a launcher, so `dsh --version` says nothing about whether a session can start), and `docs/deepseek-integration.md` names pnpm as a prerequisite for installing a terminal profile at all, by hand or through the UI button. A comment in the `/api/deepseek/install-profile` route claimed the opposite of what this bug proved, and is corrected; the route's behaviour was already right, surfacing dsh's own "pnpm not found on PATH" line as the install error.
+
+  ### Thanks
+  - @opticon454 for #350, with a reproduction that made this a confirmation rather than a hunt
+  - @timkjr for reporting #352, and for finding it while verifying Docker support for someone else's PR
+
 ## 1.24.0
 
 ### Minor Changes
