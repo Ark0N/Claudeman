@@ -19,7 +19,7 @@
  * including the sweep's deleted-workspace guard.
  */
 
-import { describe, it, expect, beforeEach, afterEach, vi } from 'vitest';
+import { describe, it, expect, beforeEach, afterEach } from 'vitest';
 import Fastify, { type FastifyInstance } from 'fastify';
 import fastifyCookie from '@fastify/cookie';
 import { mkdtemp, rm, readFile, mkdir, writeFile } from 'node:fs/promises';
@@ -168,22 +168,21 @@ describe('POST /api/sessions workspace hooks', () => {
     // `user@host:session` — locally a RELATIVE path, so a mkdir would create it
     // as a junk directory under the server cwd. statusLineTelemetry rides along:
     // applyStatusLineConfig mkdirs the same way and used to run for remote attaches.
-    // SAFETY (2026-08-29): `getDataDir()` is call-time so stub the env to a
-    // throwaway dir for this write — otherwise this test overwrites the PROD
-    // `~/.codeman/remote-hosts.json` with the fixture below, wiping every
-    // user-defined remote host (caught live: a full-suite run emptied the
-    // launch-case dropdown and broke remote session creation).
-    const fixtureDataDir = join(tmpdir(), `codeman-hook-fixture-${process.pid}`);
-    vi.stubEnv('CODEMAN_DATA_DIR', fixtureDataDir);
-    try {
-      await mkdir(getDataDir(), { recursive: true });
-      await writeFile(
-        join(getDataDir(), 'remote-hosts.json'),
-        JSON.stringify([{ id: 'h1', label: 'box', host: '10.0.0.5', username: 'dev' }])
-      );
-    } finally {
-      vi.unstubAllEnvs();
-    }
+    // SAFETY (2026-08-29): write straight to `getDataDir()` — `test/setup.ts`
+    // already sandboxes CODEMAN_DATA_DIR for the whole file (same convention as
+    // the docker-hosts fixtures below). A prior version of this test stubbed
+    // CODEMAN_DATA_DIR to a SEPARATE throwaway dir for just this write, but
+    // `session-routes.ts`'s `CODEMAN_CONFIG_DIR` is a module-load-time constant
+    // (frozen at the sandboxed dir before this test ever runs), so that fixture
+    // landed somewhere the route handler could never read it — the remote host
+    // lookup silently failed and the test passed for the wrong reason (Fastify
+    // defaults an unset reply code to 200, so the NOT_FOUND branch and the
+    // intended success branch were indistinguishable by status code alone).
+    await mkdir(getDataDir(), { recursive: true });
+    await writeFile(
+      join(getDataDir(), 'remote-hosts.json'),
+      JSON.stringify([{ id: 'h1', label: 'box', host: '10.0.0.5', username: 'dev' }])
+    );
 
     const res = await createSession({
       name: 'hooks-remote',
