@@ -189,6 +189,18 @@ export interface HookCapabilityOptions {
    * timeout on every turn.
    */
   deepSeekBridgeUnreachable?: boolean;
+  /**
+   * True when the session is a WRAPPER around a tmux session a human started
+   * outside Codeman.
+   *
+   * This one overrides the mode entirely, and it has to: an adopted session can
+   * be `mode: 'claude'` and still have no hooks, because hooks are installed into
+   * a WORKSPACE at session-create time (`applyWorkspaceHooks`) and we never
+   * created this one. Answering from the mode there would promise `stop` and
+   * `blocked` for a process that can never post either — the exact
+   * infinite-wait-dressed-as-a-timeout this predicate exists to prevent.
+   */
+  adopted?: boolean;
 }
 
 /**
@@ -223,6 +235,9 @@ export interface HookCapabilityOptions {
  * function only about hook SIGNALS.
  */
 export function hooksAvailableForMode(mode: SessionMode, options: HookCapabilityOptions = {}): boolean {
+  // Checked BEFORE the mode: adoption is about who launched the process, and no
+  // mode can vouch for a workspace Codeman never touched. See `adopted` above.
+  if (options.adopted) return false;
   if (mode === 'claude') return true;
   // `deepseek` earns this the same way `claude` does — by emitting DEFINITIVE
   // signals rather than having them inferred. The DeepSeek Harness terminal
@@ -250,10 +265,12 @@ export function sessionHookOptions(session: {
   deepSeekStatusReporting?: boolean;
   docker?: unknown;
   remote?: unknown;
+  adopt?: unknown;
 }): HookCapabilityOptions {
   return {
     deepSeekStatusReporting: session.deepSeekStatusReporting,
     deepSeekBridgeUnreachable: Boolean(session.docker || session.remote),
+    adopted: Boolean(session.adopt),
   };
 }
 
