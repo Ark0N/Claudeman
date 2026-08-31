@@ -1,6 +1,9 @@
 import { describe, it, expect, beforeAll, afterAll } from 'vitest';
 import { WebServer } from '../src/web/server.js';
 import { EventEmitter } from 'node:events';
+import { safeRmHomeTree } from './mocks/index.js';
+import { homedir } from 'node:os';
+import { join } from 'node:path';
 
 const TEST_PORT = 3107;
 
@@ -295,13 +298,8 @@ describe('SSE Event Types', () => {
       expect(caseCreated).toBeDefined();
       expect((caseCreated?.data as any).name).toBe(caseName);
 
-      // Cleanup
-      const { rmSync } = await import('node:fs');
-      const { join } = await import('node:path');
-      const { homedir } = await import('node:os');
-      try {
-        rmSync(join(homedir(), 'codeman-cases', caseName), { recursive: true });
-      } catch {}
+      // Cleanup (containment-gated)
+      safeRmHomeTree(join(homedir(), 'codeman-cases', caseName));
     });
   });
 });

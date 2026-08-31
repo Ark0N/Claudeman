@@ -18,6 +18,7 @@ import { mkdirSync, rmSync, writeFileSync, existsSync } from 'node:fs';
 import { homedir } from 'node:os';
 import { join } from 'node:path';
 import { dataPath } from '../src/config/instance.js';
+import { safeRmHomeTree } from './mocks/index.js';
 import { program, resolveCliCasePath, resolveSkillTargetPath } from '../src/cli.js';
 import { getCasesDir } from '../src/config/cases-dir.js';
 
@@ -37,14 +38,18 @@ function writeLinkedCases(content: string): void {
 
 beforeEach(() => {
   rmSync(LINKED_CASES_FILE, { force: true });
-  rmSync(CASES_DIR, { recursive: true, force: true });
-  rmSync(LINKED_ROOT, { recursive: true, force: true });
+  safeRmHomeTree(CASES_DIR);
+  safeRmHomeTree(LINKED_ROOT);
 });
 
 afterEach(() => {
+  // LINKED_CASES_FILE is dataPath('linked-cases.json') → CODEMAN_DATA_DIR,
+  // which test/setup.ts points at a throwaway /tmp dir, so a plain delete is
+  // safe here. Only homedir()-derived paths (CASES_DIR/LINKED_ROOT) need the
+  // containment gate.
   rmSync(LINKED_CASES_FILE, { force: true });
-  rmSync(CASES_DIR, { recursive: true, force: true });
-  rmSync(LINKED_ROOT, { recursive: true, force: true });
+  safeRmHomeTree(CASES_DIR);
+  safeRmHomeTree(LINKED_ROOT);
 });
 
 describe('resolveSkillTargetPath (global)', () => {
