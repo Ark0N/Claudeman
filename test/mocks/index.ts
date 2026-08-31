@@ -7,5 +7,5 @@
 
 export { MockSession, createMockSession, terminalOutputs } from './mock-session.js';
 export { MockStateStore } from './mock-state-store.js';
-export { waitForEvent, createDeferred } from './test-helpers.js';
+export { waitForEvent, createDeferred, safeRmHomeTree, isUnderTestHome } from './test-helpers.js';
 export { createMockRouteContext, type MockRouteContext } from './mock-route-context.js';

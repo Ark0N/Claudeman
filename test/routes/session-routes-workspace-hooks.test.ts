@@ -26,7 +26,7 @@ import { mkdtemp, rm, readFile, mkdir, writeFile } from 'node:fs/promises';
 import { existsSync } from 'node:fs';
 import { join } from 'node:path';
 import { tmpdir } from 'node:os';
-import { createMockRouteContext, type MockRouteContext } from '../mocks/index.js';
+import { createMockRouteContext, type MockRouteContext, safeRmHomeTree } from '../mocks/index.js';
 import { installRouteErrorHandler } from '../../src/web/route-error-handler.js';
 import { registerSessionRoutes } from '../../src/web/routes/session-routes.js';
 import { generateHooksConfig, applyWorkspaceHooks } from '../../src/hooks-config.js';
@@ -259,7 +259,11 @@ describe('POST /api/quick-start workspace hooks', () => {
     // Docker fixtures + case dirs must not leak into the next test.
     await rm(join(getDataDir(), 'docker-hosts.json'), { force: true });
     await rm(join(getDataDir(), 'docker-cases.json'), { force: true });
-    await rm(CASES_DIR, { recursive: true, force: true });
+    // SAFETY (2026-08-29): CASES_DIR is `join(homedir(), 'codeman-cases')`, and
+    // on environments where `os.homedir()` ignores `$HOME` it resolves to the
+    // PROD case tree. `safeRmHomeTree` refuses to delete anything not under the
+    // redirected test HOME, so a run can never nuke the real `~/codeman-cases`.
+    safeRmHomeTree(CASES_DIR);
   });
 
   it('installs hooks into an EXISTING case directory (a linked case / cloned repo)', async () => {
