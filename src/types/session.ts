@@ -319,6 +319,74 @@ export interface SessionDocker {
 }
 
 /**
+ * Connection facts needed to reach an adopted foreign tmux server. Deliberately
+ * the exact `Pick`s that `buildSshConnectionArgs` / `buildDockerBaseArgs` consume,
+ * so an adopted session can rebuild its command after a server restart without
+ * re-reading a registry that may have been edited in the meantime.
+ */
+export interface AdoptRemoteConnection extends RemoteSshOptions {
+  hostId: string;
+  label: string;
+  host: string;
+  username: string;
+  port?: number;
+}
+
+export interface AdoptDockerConnection {
+  hostId: string;
+  label: string;
+  engine: DockerEngine;
+  containerName: string;
+  daemonHost?: string;
+  context?: string;
+}
+
+/**
+ * ADOPTION overlay — a tmux session a HUMAN started, that Codeman attached to.
+ *
+ * This is the FOURTH location overlay, alongside remote-SSH and Docker, and it
+ * obeys the same rule they do: it is **not** a `SessionMode`. The mode is still
+ * claude / codex / shell / …, decided by the process-tree probe rather than by
+ * the user.
+ *
+ * Shape of an adopted session: Codeman creates a NORMAL wrapper session on its
+ * OWN socket (`codeman-<8hex>`, so `isValidMuxName` and every capture/input/
+ * recovery path is untouched) whose single pane runs a command that attaches to
+ * the foreign target. Killing the tab kills only the wrapper — the foreign
+ * session is structurally out of reach, exactly like a non-owned remote session.
+ *
+ * ⚠️ There is no `owned` field here, unlike `SessionRemote`/`SessionDocker`: an
+ * adopted session is *by definition* someone else's. A field that could be true
+ * would invite a code path that kills it.
+ */
+export interface SessionAdopt {
+  /** Where the foreign tmux server lives. */
+  location: 'local' | 'docker' | 'remote';
+  /** Absolute socket path as seen FROM that location (passed to `tmux -S`). */
+  socketPath: string;
+  /** The foreign session we attach to. Never Codeman-named, never name-validated. */
+  targetSession: string;
+  /**
+   * Our own grouped VIEW session on the foreign server. Grouping (rather than a
+   * bare `attach`) is what keeps the human's own terminal from being resized to
+   * our viewport: tmux sizes a window to its SMALLEST attached client, and a
+   * grouped session gets an independent size. Created with
+   * `destroy-unattached on` so it evaporates with our pane.
+   */
+  viewSession: string;
+  /**
+   * True when the foreign tmux was too old to group and we fell back to a
+   * READ-ONLY attach. Surfaced in the UI — the fallback must never silently be
+   * a writable bare attach, which would resize the owner's terminal.
+   */
+  readOnly?: boolean;
+  /** The pane cwd at adoption time. Informational: an adopted pane is never `cd`'d. */
+  paneCurrentPath?: string;
+  remote?: AdoptRemoteConnection;
+  docker?: AdoptDockerConnection;
+}
+
+/**
  * Valid Claude CLI effort levels (claude >= 2.1.154).
  * `ultracode` = xhigh effort + standing dynamic-workflow orchestration; it is a
  * separate `ultracode` settings key rather than an `effortLevel` value.
@@ -571,6 +639,12 @@ export interface SessionState {
   remote?: SessionRemote;
   /** Docker execution metadata, present when this session runs inside a container via local tmux + docker exec */
   docker?: SessionDocker;
+  /**
+   * Adoption metadata, present when this session is a wrapper around a tmux
+   * session a human started outside Codeman. Its presence is what disables
+   * respawn/Ralph/orchestrator and hook-backed waits for the session.
+   */
+  adopt?: SessionAdopt;
   /** Owning username in multi-user mode; undefined in single-user (ignored when the flag is off) */
   owner?: string;
   /**

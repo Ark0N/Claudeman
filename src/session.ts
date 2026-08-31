@@ -56,6 +56,7 @@ import {
   type OmpConfig,
   type SessionRemote,
   type SessionDocker,
+  type SessionAdopt,
 } from './types.js';
 import { resolveAndClaimOmpSessionId } from './utils/omp-session-resolver.js';
 import { probeDockerCliVersion } from './docker-hosts.js';
@@ -325,10 +326,25 @@ export function queryTmuxWindowSize(muxName: string, socket: string): { cols: nu
   return { cols: DEFAULT_PTY_COLS, rows: DEFAULT_PTY_ROWS };
 }
 
-export function resolveMuxAttachCwd(workingDir: string, remote?: SessionRemote, docker?: SessionDocker): string {
+export function resolveMuxAttachCwd(
+  workingDir: string,
+  remote?: SessionRemote,
+  docker?: SessionDocker,
+  adopt?: SessionAdopt
+): string {
   // Remote and docker sessions run the CLI elsewhere (ssh / docker exec); the LOCAL
   // wrapper pane never needs the workspace as its cwd, so launch it in /tmp.
-  return remote || docker ? '/tmp' : workingDir;
+  //
+  // ⚠️ An ADOPTED session needs the same treatment and does NOT get it from the
+  // two checks above: its connection facts live on `adopt.docker`/`adopt.remote`,
+  // so `session.docker` is undefined even for an in-container adoption. Its
+  // `workingDir` is the FOREIGN pane's cwd — a path that routinely does not exist
+  // on this host. Measured against a real container: adopting an in-container
+  // session produced `workingDir: /workspace/pythonserver`, the local PTY spawn
+  // inherited it as its cwd, and the session came up with `pid: null` and a blank
+  // terminal while the wrapper tmux session and the in-container grouped view had
+  // both been created successfully — i.e. it looked half-alive rather than failed.
+  return remote || docker || adopt ? '/tmp' : workingDir;
 }
 
 /**
@@ -559,6 +575,11 @@ export class Session extends EventEmitter {
   // local tmux + `docker exec`. The container is per-CASE (shared by sibling sessions).
   private readonly _docker?: SessionDocker;
 
+  // Adoption metadata, present when this session is a WRAPPER around a tmux
+  // session a human started outside Codeman. Its presence is the single switch
+  // that disables everything Codeman can only do to a process it launched.
+  private readonly _adopt?: SessionAdopt;
+
   // Owning username in multi-user mode (undefined in single-user). Stamped at create
   // from req.authUser and round-tripped through recovery like _remote/_docker.
   private _owner?: string;
@@ -657,6 +678,8 @@ export class Session extends EventEmitter {
       remote?: SessionRemote;
       /** Docker execution metadata for sessions launched inside a container via local tmux. */
       docker?: SessionDocker;
+      /** Adoption metadata for a wrapper around a human-started tmux session. */
+      adopt?: SessionAdopt;
       /** Owning username (multi-user mode); undefined in single-user. */
       owner?: string;
       /** Session that spawned this one — tab lineage decoration, resolved by the caller. */
@@ -785,6 +808,7 @@ export class Session extends EventEmitter {
     this._tmuxHistoryLimit = config.tmuxHistoryLimit ?? DEFAULT_TMUX_HISTORY_LIMIT;
     this._remote = config.remote;
     this._docker = config.docker;
+    this._adopt = config.adopt;
     this._owner = config.owner;
     // Never self-parent: a session pointing at itself would draw a zero-length
     // lineage arc under its own tab. Only reachable via the recovery path, where
@@ -913,6 +937,25 @@ export class Session extends EventEmitter {
   /** Remote-SSH metadata when this session runs on a remote host, else undefined. */
   get remote(): SessionRemote | undefined {
     return this._remote;
+  }
+
+  /** Adoption metadata when this session wraps a human-started tmux session. */
+  get adopt(): SessionAdopt | undefined {
+    return this._adopt;
+  }
+
+  /**
+   * Is this a wrapper around a tmux session Codeman did not start?
+   *
+   * ⚠️ Deliberately NOT folded into `isExternalCliMode()`. That predicate answers
+   * "does this CLI render its own TUI", which is about the PROTOCOL. This one
+   * answers "did we launch the process", which is about AUTHORITY — an adopted
+   * session can be `mode: 'claude'` and still have no hooks installed, no
+   * `envOverrides`, no effort and no `--session-id` we chose. Conflating the two
+   * would silently grant claude-shaped automation over a process we do not own.
+   */
+  get isAdopted(): boolean {
+    return this._adopt !== undefined;
   }
 
   /**
@@ -1347,6 +1390,7 @@ export class Session extends EventEmitter {
       workingDir: this.workingDir,
       remote: this._remote,
       docker: this._docker,
+      adopt: this._adopt,
       owner: this._owner,
       parentSessionId: this._parentSessionId,
       currentTaskId: this._currentTaskId,
@@ -1563,7 +1607,7 @@ export class Session extends EventEmitter {
           name: 'xterm-256color',
           cols: ptyCols,
           rows: ptyRows,
-          cwd: resolveMuxAttachCwd(this.workingDir, this._remote, this._docker),
+          cwd: resolveMuxAttachCwd(this.workingDir, this._remote, this._docker, this._adopt),
           // COD-75: codex/gemini/antigravity/pi get COLORTERM=truecolor — mirrors buildEnvExports()
           // in tmux-manager.ts so the attach client and the tmux session agree.
           env: buildMuxAttachEnv(
@@ -1663,6 +1707,7 @@ export class Session extends EventEmitter {
       historyLimit: this._tmuxHistoryLimit,
       remote: this._remote,
       docker: this._docker,
+      adopt: this._adopt,
       owner: this._owner,
     };
   }
@@ -1967,6 +2012,7 @@ export class Session extends EventEmitter {
             historyLimit: this._tmuxHistoryLimit,
             remote: this._remote,
             docker: this._docker,
+            adopt: this._adopt,
             owner: this._owner,
           },
           spawnErrLabel: 'mux attachment',
@@ -2567,6 +2613,7 @@ export class Session extends EventEmitter {
             historyLimit: this._tmuxHistoryLimit,
             remote: this._remote,
             docker: this._docker,
+            adopt: this._adopt,
             owner: this._owner,
           },
           createSessionOptions: {
@@ -2579,6 +2626,7 @@ export class Session extends EventEmitter {
             historyLimit: this._tmuxHistoryLimit,
             remote: this._remote,
             docker: this._docker,
+            adopt: this._adopt,
             owner: this._owner,
           },
           spawnErrLabel: 'shell mux attachment',
