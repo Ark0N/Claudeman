@@ -60,6 +60,24 @@ const assistantEntry = (text: string, timestamp: string) => ({
   message: { content: [{ type: 'text', text }] },
 });
 
+/**
+ * A prompt typed while Claude is working. Shape copied from a real CLI 2.1.251
+ * row: the CLI's own queue entries carry commandMode 'task-notification' and no
+ * `origin` key at all, which is what separates them from the human's.
+ */
+const queuedEntry = (prompt: string, timestamp: string, kind: 'human' | 'task-notification' = 'human') => ({
+  type: 'attachment',
+  timestamp,
+  attachment: {
+    type: 'queued_command',
+    prompt,
+    source_uuid: `src-${timestamp}`,
+    commandMode: kind === 'human' ? 'prompt' : 'task-notification',
+    ...(kind === 'human' ? { origin: { kind: 'human' } } : {}),
+    timestamp,
+  },
+});
+
 describe('GET /api/sessions/:id/last-response (claude)', () => {
   let harness: LocalHarness;
   let testHome: string;
@@ -93,7 +111,7 @@ describe('GET /api/sessions/:id/last-response (claude)', () => {
     return { response, body: JSON.parse(response.body) };
   }
 
-  it('recovers a placeholder tmux session by UUID prefix and groups JSONL fragments into turns', async () => {
+  it('recovers a placeholder tmux session by UUID prefix and renders one message per model message', async () => {
     const restoredId = 'restored-40568a29';
     const conversationId = '40568a29-d4eb-4eb6-b671-8401428e4f39';
     const session = harness.ctx._session as typeof harness.ctx._session & {
@@ -135,15 +153,60 @@ describe('GET /api/sessions/:id/last-response (claude)', () => {
     expect(full.body.data).toEqual({
       text: 'Second half.',
       timestamp: '2026-07-21T00:00:06Z',
+      // #169's guarantees all still hold and this array proves them: the replayed
+      // 'first prompt' row, the replayed 'Checking the files.' snapshot, the
+      // sidechain row and all five synthetic rows are absent. Only the GROUPING
+      // UNIT narrows, from one card per human turn to one card per model
+      // message, carried by `turn` instead of by a '\n\n' joiner.
       messages: [
-        { role: 'user', text: 'first prompt', timestamp: '2026-07-21T00:00:00Z' },
         {
-          role: 'assistant',
-          text: 'Checking the files.\n\nThe first result is ready.',
-          timestamp: '2026-07-21T00:00:03Z',
+          kind: 'prompt',
+          label: 'Prompt',
+          role: 'user',
+          text: 'first prompt',
+          timestamp: '2026-07-21T00:00:00Z',
+          turn: 1,
         },
-        { role: 'user', text: 'second prompt', timestamp: '2026-07-21T00:00:00Z' },
-        { role: 'assistant', text: 'First half.\n\nSecond half.', timestamp: '2026-07-21T00:00:06Z' },
+        {
+          kind: 'response',
+          label: 'Response',
+          role: 'assistant',
+          text: 'Checking the files.',
+          timestamp: '2026-07-21T00:00:01Z',
+          turn: 1,
+        },
+        {
+          kind: 'response',
+          label: 'Response',
+          role: 'assistant',
+          text: 'The first result is ready.',
+          timestamp: '2026-07-21T00:00:03Z',
+          turn: 1,
+        },
+        {
+          kind: 'prompt',
+          label: 'Prompt',
+          role: 'user',
+          text: 'second prompt',
+          timestamp: '2026-07-21T00:00:00Z',
+          turn: 2,
+        },
+        {
+          kind: 'response',
+          label: 'Response',
+          role: 'assistant',
+          text: 'First half.',
+          timestamp: '2026-07-21T00:00:04Z',
+          turn: 2,
+        },
+        {
+          kind: 'response',
+          label: 'Response',
+          role: 'assistant',
+          text: 'Second half.',
+          timestamp: '2026-07-21T00:00:06Z',
+          turn: 2,
+        },
       ],
     });
     expect(session.adoptClaudeSessionId).toHaveBeenCalledWith(conversationId);
@@ -173,6 +236,137 @@ describe('GET /api/sessions/:id/last-response (claude)', () => {
       ['assistant', 'First answer.'],
       ['user', 'continue'],
       ['assistant', 'Second answer.'],
+    ]);
+  });
+
+  /**
+   * A prompt typed while Claude is working is absorbed mid-turn and recorded
+   * ONLY as an attachment row — 160 of the 347 user cards across a real
+   * ~/.claude/projects. Reading only `user` rows lost them outright AND lost the
+   * turn boundary they carry, which is what let an assistant run fuse.
+   */
+  it('surfaces a prompt the user queued while Claude was working', async () => {
+    const sessionId = harness.ctx._session.id;
+    const session = harness.ctx._session as typeof harness.ctx._session & {
+      claudeSessionId: string;
+      adoptClaudeSessionId: ReturnType<typeof vi.fn>;
+    };
+    session.claudeSessionId = sessionId;
+    session.adoptClaudeSessionId = vi.fn();
+    writeTranscript(sessionId, [
+      userEntry('start the job'),
+      assistantEntry('Working on it.', '2026-07-21T00:00:01Z'),
+      queuedEntry('actually use PowerShell', '2026-07-21T00:00:02Z'),
+      queuedEntry('background agent finished', '2026-07-21T00:00:03Z', 'task-notification'),
+      // The most common attachment subtype; it carries no prompt/origin at all.
+      { type: 'attachment', attachment: { type: 'total_tokens_reminder', tokens: 1 } },
+      assistantEntry('Switched to PowerShell.', '2026-07-21T00:00:04Z'),
+    ]);
+
+    const { body } = await getLastResponse(sessionId, true);
+    const messages = body.data.messages as Array<{ role: string; text: string; turn: number; queued?: boolean }>;
+    expect(messages.map((message) => [message.role, message.text, message.turn])).toEqual([
+      ['user', 'start the job', 1],
+      ['assistant', 'Working on it.', 1],
+      ['user', 'actually use PowerShell', 2],
+      ['assistant', 'Switched to PowerShell.', 2],
+    ]);
+    expect(messages[2].queued).toBe(true);
+    expect(messages[0].queued).toBeUndefined();
+  });
+
+  /**
+   * Mostly forward insurance. A queued prompt re-emitted as a `user` row AFTER
+   * its attachment row — the shape that would double-render — is not observed on
+   * CLI 2.1.220-2.1.251 (0 of 163 measured 2026-09-01). The only exact-text
+   * collisions are three occurrences of the same one-character nudge in a single
+   * transcript, and the guard fires on one of them, which is why 163 human
+   * queued rows yield 162 cards. The guard exists so a CLI that starts writing
+   * both rows does not double every absorbed prompt.
+   */
+  it('renders an absorbed prompt once when the CLI also writes it as a user row', async () => {
+    const sessionId = harness.ctx._session.id;
+    const session = harness.ctx._session as typeof harness.ctx._session & {
+      claudeSessionId: string;
+      adoptClaudeSessionId: ReturnType<typeof vi.fn>;
+    };
+    session.claudeSessionId = sessionId;
+    session.adoptClaudeSessionId = vi.fn();
+    writeTranscript(sessionId, [
+      userEntry('go'),
+      assistantEntry('OK.', '2026-07-21T00:00:01Z'),
+      queuedEntry('switch to PowerShell', '2026-07-21T00:00:02Z'),
+      userEntry('switch to PowerShell'),
+      assistantEntry('Done.', '2026-07-21T00:00:03Z'),
+    ]);
+
+    const { body } = await getLastResponse(sessionId, true);
+    const messages = body.data.messages as Array<{ role: string; text: string; queued?: boolean }>;
+    const absorbed = messages.filter((message) => message.role === 'user' && message.text === 'switch to PowerShell');
+    expect(absorbed).toHaveLength(1);
+    expect(absorbed[0].queued).toBe(true);
+  });
+
+  /**
+   * The brief response is what agent pollers hash (skills/codeman/preamble.sh
+   * last_text()). It must stay the last assistant row and must NEVER be derived
+   * from messages.at(-1), which can be the user's own queued prompt.
+   */
+  it('keeps the brief response on the last assistant row while a turn is in flight', async () => {
+    const sessionId = harness.ctx._session.id;
+    const session = harness.ctx._session as typeof harness.ctx._session & {
+      claudeSessionId: string;
+      adoptClaudeSessionId: ReturnType<typeof vi.fn>;
+    };
+    session.claudeSessionId = sessionId;
+    session.adoptClaudeSessionId = vi.fn();
+    writeTranscript(sessionId, [
+      userEntry('go'),
+      assistantEntry('Let me look.', '2026-07-21T00:00:01Z'),
+      { type: 'assistant', message: { content: [{ type: 'tool_use', id: 'x' }] } },
+      { type: 'user', message: { content: [{ type: 'tool_result', tool_use_id: 'x' }] } },
+    ]);
+
+    const brief = await getLastResponse(sessionId);
+    expect(brief.body.data).toEqual({ text: 'Let me look.', timestamp: '2026-07-21T00:00:01Z' });
+
+    const { body } = await getLastResponse(sessionId, true);
+    const messages = body.data.messages as Array<{ role: string; text: string }>;
+    expect(messages.at(-1)).toMatchObject({ role: 'assistant', text: 'Let me look.' });
+    expect(body.data.text).toBe('Let me look.');
+  });
+
+  /**
+   * A multi-line paste absorbed mid-turn arrives as N queued rows within a few
+   * hundred milliseconds (observed: 5 rows inside ~360ms). They are one turn, so
+   * the viewer renders them under one badge instead of N.
+   */
+  it('groups a burst of queued prompts into one turn', async () => {
+    const sessionId = harness.ctx._session.id;
+    const session = harness.ctx._session as typeof harness.ctx._session & {
+      claudeSessionId: string;
+      adoptClaudeSessionId: ReturnType<typeof vi.fn>;
+    };
+    session.claudeSessionId = sessionId;
+    session.adoptClaudeSessionId = vi.fn();
+    writeTranscript(sessionId, [
+      userEntry('go'),
+      assistantEntry('OK.', '2026-07-21T00:00:01Z'),
+      queuedEntry('one more thing', '2026-07-21T00:00:02.100Z'),
+      queuedEntry('and the requirements are', '2026-07-21T00:00:02.360Z'),
+      queuedEntry('finally, keep it fast', '2026-07-21T00:00:02.480Z'),
+      assistantEntry('Understood.', '2026-07-21T00:00:05Z'),
+    ]);
+
+    const { body } = await getLastResponse(sessionId, true);
+    const messages = body.data.messages as Array<{ role: string; turn: number }>;
+    expect(messages.map((message) => [message.role, message.turn])).toEqual([
+      ['user', 1],
+      ['assistant', 1],
+      ['user', 2],
+      ['user', 2],
+      ['user', 2],
+      ['assistant', 2],
     ]);
   });
 });

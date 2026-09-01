@@ -2183,15 +2183,26 @@ class CodemanApp {
   }
 
   /** Build one response-viewer message so the brief and full views share markup and CSS. */
-  _buildResponseViewerMessage(text, role, agentLabel) {
+  _buildResponseViewerMessage(text, role, agentLabel, meta) {
     const div = document.createElement('div');
     const isUser = role === 'user';
     div.className = 'rv-message ' + (isUser ? 'rv-msg-user' : 'rv-msg-assistant');
+    // Consecutive messages from one speaker inside one turn are segments of a
+    // single utterance: one badge, a hairline seam. Claude emits a median of 3
+    // messages per turn (p90 11, max 51), so a badge per message would be the
+    // card spam the old concatenation was introduced to avoid. `meta` is
+    // optional so the brief view's 3-argument call keeps its exact shape.
+    const continuation = !!(meta && meta.continuation);
+    if (continuation) div.classList.add('rv-msg-cont');
+    if (meta && meta.kind) div.dataset.kind = meta.kind;
+    if (meta && meta.queued) div.dataset.queued = '1';
 
-    const roleBadge = document.createElement('div');
-    roleBadge.className = 'rv-role ' + (isUser ? 'rv-role-user' : 'rv-role-assistant');
-    roleBadge.textContent = isUser ? 'You' : agentLabel;
-    div.appendChild(roleBadge);
+    if (!continuation) {
+      const roleBadge = document.createElement('div');
+      roleBadge.className = 'rv-role ' + (isUser ? 'rv-role-user' : 'rv-role-assistant');
+      roleBadge.textContent = isUser ? 'You' : agentLabel;
+      div.appendChild(roleBadge);
+    }
 
     const renderedText = document.createElement('div');
     renderedText.className = 'rv-text';
@@ -2351,19 +2362,49 @@ class CodemanApp {
       if (!body) return;
 
       if (messages.length === 0) {
-        body.textContent = 'No conversation history available';
+        // Never destroy what the eye button already rendered: the brief view has
+        // a terminal-buffer fallback (see toggleResponseViewer) that this
+        // endpoint does not, so an empty full-context result must not wipe a
+        // real answer the user is reading.
+        // ⚠️ Idempotent, because More deliberately stays live here: the branch
+        // returns before the button is hidden so a transcript that appears a
+        // moment later can still be loaded, and appending would then stack a
+        // second identical notice on every retry.
+        // `:scope >` keeps the lookup off model-rendered markdown inside .rv-text.
+        let notice = body.querySelector(':scope > .rv-notice');
+        if (!notice) {
+          notice = document.createElement('div');
+          notice.className = 'rv-notice';
+          body.appendChild(notice);
+        }
+        const emptyText = 'No full conversation history available for this session';
+        notice.textContent = window.codemanT?.(emptyText) || emptyText;
         return;
       }
 
       // Render conversation thread
       const agentLabel = this._getResponseViewerAgentLabel();
       body.innerHTML = '';
+      let previous = null;
       for (const msg of messages) {
-        body.appendChild(this._buildResponseViewerMessage(msg.text, msg.role, agentLabel));
+        // ⚠️ A numeric `turn` is REQUIRED, never same-role adjacency alone.
+        // Only the Claude reader emits turns; Codex and the external-CLI pane
+        // parser emit adjacent assistant/response blocks with no turn at all, and
+        // an older server emits none either — all three must keep rendering one
+        // badged card per message exactly as they do today.
+        const continuation =
+          !!previous && previous.role === msg.role && typeof msg.turn === 'number' && previous.turn === msg.turn;
+        body.appendChild(this._buildResponseViewerMessage(msg.text, msg.role, agentLabel, { ...msg, continuation }));
+        previous = msg;
       }
       this._bindResponseViewerInteractions(body);
 
-      if (title) title.textContent = `Conversation (${messages.length} messages)`;
+      const turns = new Set(messages.filter((msg) => typeof msg.turn === 'number').map((msg) => msg.turn)).size;
+      if (title) {
+        title.textContent = turns
+          ? `Conversation (${messages.length} messages, ${turns} turns)`
+          : `Conversation (${messages.length} messages)`;
+      }
       if (moreBtn) moreBtn.style.display = 'none';
       // Scroll to bottom (latest message)
       body.scrollTop = body.scrollHeight;

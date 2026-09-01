@@ -283,6 +283,7 @@ than into an existing checkout.
 | create a session in an arbitrary directory (no case, **no PTY**, id at `.data.session.id`) | `POST /api/v1/sessions`, then `POST /api/v1/sessions/:id/interactive` or `.../shell` to start it, see [Starting a worker](#starting-a-worker) |
 | send input | `POST /api/v1/sessions/:id/input` |
 | **read a worker's answer** (claude/codex/deepseek) | `GET /api/v1/sessions/:id/last-response` → `.data.{text,timestamp}`, clean transcript text, no TUI noise. ⚠️ **Poll it**, see [symptom 7](#7-last-response-returns-an-empty-string-right-after-stop) |
+| read the whole conversation | `GET /api/v1/sessions/:id/last-response?context=full` → `.data.messages[]`. ⚠️ **Only `{role,text}` is present for every mode.** `kind`/`label` come from claude (`prompt`/`response`), deepseek and the pane parser (which also emit `status`/`tool`) but NOT from codex; `timestamp` from claude and codex but not deepseek/pane; `turn` and `queued:true` (a prompt typed while the agent was working) from claude only. `.data.text` is unchanged by `context=full` — it stays the last assistant message, never `messages[-1]` |
 | read terminal (tail is in **BYTES**, raw ANSI) | `GET /api/v1/sessions/:id/terminal?tail=3000` → `.data.terminalBuffer`, for *diagnosis* (unsubmitted prompt?), not for reading answers |
 | full tmux scrollback (context bomb; post-mortems only) | `GET /api/v1/sessions/:id/terminal?full=1` |
 | background agents, one session | `GET /api/v1/sessions/:id/subagents` |
