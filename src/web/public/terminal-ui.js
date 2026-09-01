@@ -285,6 +285,7 @@ Object.assign(CodemanApp.prototype, {
     const container = document.getElementById('terminalContainer');
     this.terminal.open(container);
     this._installMobileTapMouseGuard();
+    this._installShiftDragSelection();
     this._installTouchSelectionFocusGuard();
 
     // Let xterm's CompositionHelper own IME key events. In particular, a
@@ -850,7 +851,25 @@ Object.assign(CodemanApp.prototype, {
       container.addEventListener('contextmenu', (ev) => {
         if (longPressTimer !== null || this._touchSelecting || this._touchSelectionActive) {
           ev.preventDefault();
+          return;
         }
+        // Right-click COPIES the selection, the mintty/PuTTY convention, because
+        // the browser's own menu structurally cannot offer it here: xterm paints
+        // glyphs into a canvas, so a terminal selection is not a DOM selection
+        // and the native "Copy" item has nothing to act on (it is absent or
+        // inert). This is the second half of the habit users bring from a native
+        // terminal running a mouse-tracking TUI — Shift+drag to select (see
+        // _installShiftDragSelection), right-click to copy — and without it that
+        // gesture dead-ends after the selection is made.
+        //
+        // With NOTHING selected the native menu is left alone: it still carries
+        // the browser-level items (reload, inspect) and suppressing it there
+        // would take them away to offer nothing in return.
+        if (!this.terminal?.hasSelection?.()) return;
+        const selection = this.terminal.getSelection();
+        if (!selection) return;
+        ev.preventDefault();
+        void this.copyTerminalSelection(selection);
       });
 
       container.addEventListener(
@@ -4727,6 +4746,51 @@ Object.assign(CodemanApp.prototype, {
     if (performance.now() <= (this._trustedTapMouseSuppressUntil || 0)) return;
     if (!ev.target?.closest?.('.xterm-screen')) return;
     this._sendSyntheticSgrTap(ev.clientX, ev.clientY);
+  },
+
+  /**
+   * Make Shift+drag START a selection instead of trying to extend one.
+   *
+   * In a native terminal running a mouse-tracking TUI (claude, codex), Shift is
+   * the "let me select text" modifier: it bypasses the app's mouse reporting so
+   * the emulator selects locally. Users bring that habit here, and here it did
+   * NOTHING — Shift+drag selected no text at all (measured).
+   *
+   * The reason is that the habit and xterm's Shift mean different things once
+   * the DECSETs are stripped. xterm reads Shift as "force selection" ONLY while
+   * the app actually has mouse tracking on; the server strips those DECSETs for
+   * claude/codex/gemini (isAltScreenStripMode), so xterm's mouseTrackingMode is
+   * permanently `none`, that branch is unreachable, and Shift instead falls into
+   * `_onIncrementalClick` — EXTEND an existing selection. Extending is a no-op
+   * when `selectionStart` is null, so the drag never anchors and no selection is
+   * ever built (this is why nothing gets cleared: there was nothing to clear).
+   *
+   * So plant the anchor xterm is missing. Runs in the CAPTURE phase on the
+   * `.xterm` root, an ancestor of the `.xterm-screen` element SelectionService
+   * binds to, so it lands before xterm's own mousedown; xterm's incremental
+   * handler then extends from our anchor and the drag behaves like a plain one.
+   * A Shift+drag with a selection ALREADY up is left alone — that is a genuine
+   * extend gesture and xterm already does it right.
+   */
+  _installShiftDragSelection() {
+    const el = this.terminal?.element;
+    if (!el || el._codemanShiftDragInstalled) return;
+    el._codemanShiftDragInstalled = true;
+    el.addEventListener(
+      'mousedown',
+      (ev) => {
+        if (!ev.isTrusted || ev.button !== 0 || !ev.shiftKey) return;
+        if (ev.altKey || ev.ctrlKey || ev.metaKey) return;
+        if (this.terminal?.hasSelection?.()) return;
+        const pos = this._clientPointToCell(ev.clientX, ev.clientY);
+        if (!pos) return;
+        // _clientPointToCell is 1-based and viewport-relative; select() takes a
+        // 0-based column and an ABSOLUTE buffer row.
+        const viewportY = this.terminal.buffer?.active?.viewportY ?? 0;
+        this.terminal.select(pos.col - 1, pos.row - 1 + viewportY, 0);
+      },
+      true
+    );
   },
 
   _installMobileTapMouseGuard() {
