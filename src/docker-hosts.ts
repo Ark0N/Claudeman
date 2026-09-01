@@ -291,6 +291,64 @@ export function toSessionDocker(host: DockerHost, dockerCase: DockerCase): Sessi
 }
 
 /**
+ * Which existing case, if any, blocks adopting `container` at `containerWorkdir`.
+ *
+ * One container may back SEVERAL adopted cases, each pointing at a different
+ * directory inside it — that is the whole reason to adopt the same container
+ * twice, and it is safe because the in-container tmux session is named per
+ * SESSION (`dockerTmuxSessionName`, `codeman-dkr-<id8>`) and not per case, so a
+ * session teardown kills exactly one session and its siblings on the shared
+ * in-container tmux server are untouched. Nothing else reaches an adopted
+ * container's lifecycle either: stop/remove throw at the builder, recreate
+ * refuses `owned === false`, and the orphan reaper filters on the
+ * `codeman.managed=1` label that only Codeman-created containers carry.
+ *
+ * So the conflicts that remain are NOT about the tmux server:
+ *  - `owned-case`  the container backs a case Codeman CREATED, whose lifecycle
+ *                  it owns; a recreate or delete there would destroy the
+ *                  adopted case's container out from under it.
+ *  - `other-owner` already adopted by a different user. Adoption hands out a
+ *                  shell inside someone else's container, so it stays scoped.
+ *  - `duplicate`   same container AND same directory: the second case would
+ *                  behave identically to the first, so name the first instead
+ *                  of silently creating a twin. A DIFFERENT directory is the
+ *                  supported case and returns null.
+ */
+export type AdoptContainerConflict =
+  | { kind: 'owned-case'; caseName: string }
+  | { kind: 'other-owner'; caseName: string }
+  | { kind: 'duplicate'; caseName: string }
+  | null;
+
+export function classifyAdoptContainerConflict(params: {
+  container: string;
+  /** Directory inside the container this adoption targets (already defaulted). */
+  containerWorkdir: string;
+  existing: ReadonlyArray<
+    Pick<DockerCase, 'name' | 'container' | 'containerWorkdir' | 'hostWorkspacePath' | 'owned' | 'owner'>
+  >;
+  /** Owner visibility test (canAccessOwned bound to the caller). */
+  canAccess: (owner?: string) => boolean;
+}): AdoptContainerConflict {
+  const { container, containerWorkdir, existing, canAccess } = params;
+  const sharing = existing.filter((item) => (item.container ?? dockerContainerName(item.name)) === container);
+  if (sharing.length === 0) return null;
+
+  // `owned` is optional and an ABSENT flag means owned (legacy cases predate the
+  // field), so this must test `!== false` rather than truthiness.
+  const owned = sharing.find((item) => item.owned !== false);
+  if (owned) return { kind: 'owned-case', caseName: owned.name };
+
+  const foreign = sharing.find((item) => !canAccess(item.owner));
+  if (foreign) return { kind: 'other-owner', caseName: foreign.name };
+
+  const twin = sharing.find((item) => (item.containerWorkdir ?? item.hostWorkspacePath) === containerWorkdir);
+  if (twin) return { kind: 'duplicate', caseName: twin.name };
+
+  return null;
+}
+
+/**
  * An ADOPTED container is one the user built and runs themselves. Codeman may
  * only exec into it; it must never create, start, stop, restart or remove it.
  * Every lifecycle branch routes through this one predicate so a new call site

@@ -70,6 +70,7 @@ import {
   dockerContainerName,
   dockerDisplayPath,
   probeAdoptableContainer,
+  classifyAdoptContainerConflict,
   listDockerContainers,
   browseInContainer,
   DOCKER_ADOPT_PROBE_MODES,
@@ -813,12 +814,35 @@ export function registerCaseRoutes(app: FastifyInstance, ctx: EventPort & Config
       ) {
         return createErrorResponse(ApiErrorCode.ALREADY_EXISTS, 'Case already exists');
       }
-      // Two cases must never share one adopted container: session close kills the
-      // in-container tmux by session id, but a shared adoption would let one case's
-      // teardown and another's launch race over the same tmux server.
+      // One container may back SEVERAL adopted cases, each pointing at a different
+      // directory inside it. What still blocks it, and why, lives in
+      // classifyAdoptContainerConflict — note that none of it is about the shared
+      // in-container tmux server, which is safe precisely because sessions there
+      // are named per SESSION id (`codeman-dkr-<id8>`), never per case.
       const container = dockerCase.container;
-      if (dockerCases.some((item) => (item.container ?? dockerContainerName(item.name)) === container)) {
-        return createErrorResponse(ApiErrorCode.ALREADY_EXISTS, `Container "${container}" is already linked to a case`);
+      const conflict = classifyAdoptContainerConflict({
+        container,
+        containerWorkdir: dockerCase.containerWorkdir ?? dockerCase.hostWorkspacePath,
+        existing: dockerCases,
+        canAccess: (owner) => canAccessOwned(getAuthUser(req), owner),
+      });
+      if (conflict?.kind === 'owned-case') {
+        return createErrorResponse(
+          ApiErrorCode.ALREADY_EXISTS,
+          `Container "${container}" belongs to case "${conflict.caseName}", which Codeman created and whose lifecycle it manages. Adopt a container you started yourself, or open that case directly.`
+        );
+      }
+      if (conflict?.kind === 'other-owner') {
+        return createErrorResponse(
+          ApiErrorCode.FORBIDDEN,
+          `Container "${container}" is already adopted by another user.`
+        );
+      }
+      if (conflict?.kind === 'duplicate') {
+        return createErrorResponse(
+          ApiErrorCode.ALREADY_EXISTS,
+          `Case "${conflict.caseName}" already adopts "${container}" at that same directory. Point this one at another directory inside the container.`
+        );
       }
 
       if (!isWorkingDirAllowed(getAuthUser(req), dockerCase.hostWorkspacePath)) {

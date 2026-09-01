@@ -18,6 +18,8 @@ import {
   removeDockerContainer,
   checkDockerConfigDrift,
   dockerConfigHash,
+  classifyAdoptContainerConflict,
+  dockerContainerName,
 } from '../src/docker-hosts.js';
 import {
   buildDockerLaunchCommand,
@@ -369,5 +371,115 @@ describe('adopted container: drift is not evaluated', () => {
     // comparison would always report drift and the launch gate would 409 forever.
     const status = await checkDockerConfigDrift(toSessionDocker(HOST, caseFor(false)));
     expect(status.drifted).toBe(false);
+  });
+});
+
+describe('adopted container: one container may back several cases', () => {
+  const base = {
+    type: 'docker' as const,
+    hostId: 'h1',
+    hostWorkspacePath: '/srv/work',
+  };
+  const mk = (over: Record<string, unknown>) => ({ ...base, ...over }) as never;
+  const mine = () => true;
+
+  it('allows a second adoption of the same container at a DIFFERENT directory', () => {
+    // The whole point of the feature: one container, two folders, two cases.
+    const conflict = classifyAdoptContainerConflict({
+      container: 'devbox',
+      containerWorkdir: '/app/api',
+      existing: [mk({ name: 'web', container: 'devbox', containerWorkdir: '/app/web', owned: false })],
+      canAccess: mine,
+    });
+    expect(conflict).toBeNull();
+  });
+
+  it('refuses an exact twin (same container AND same directory) and names the first case', () => {
+    const conflict = classifyAdoptContainerConflict({
+      container: 'devbox',
+      containerWorkdir: '/app/web',
+      existing: [mk({ name: 'web', container: 'devbox', containerWorkdir: '/app/web', owned: false })],
+      canAccess: mine,
+    });
+    expect(conflict).toEqual({ kind: 'duplicate', caseName: 'web' });
+  });
+
+  it('falls back to hostWorkspacePath when containerWorkdir is absent on either side', () => {
+    // containerWorkdir defaults to hostWorkspacePath, so an absent field on the
+    // stored case must compare equal to an incoming adoption that omits it too —
+    // otherwise the twin check silently stops firing for the default case.
+    const conflict = classifyAdoptContainerConflict({
+      container: 'devbox',
+      containerWorkdir: '/srv/work',
+      existing: [mk({ name: 'web', container: 'devbox', owned: false })],
+      canAccess: mine,
+    });
+    expect(conflict).toEqual({ kind: 'duplicate', caseName: 'web' });
+  });
+
+  it('still refuses a container backing a case Codeman CREATED', () => {
+    // Codeman owns that container's lifecycle: a recreate or case-delete there
+    // would destroy the adopted case's container out from under it.
+    const conflict = classifyAdoptContainerConflict({
+      container: 'codeman-case-web',
+      containerWorkdir: '/app/api',
+      existing: [mk({ name: 'web', container: 'codeman-case-web', owned: true })],
+      canAccess: mine,
+    });
+    expect(conflict).toEqual({ kind: 'owned-case', caseName: 'web' });
+  });
+
+  it('treats an ABSENT owned flag as owned, so legacy cases keep the old refusal', () => {
+    const conflict = classifyAdoptContainerConflict({
+      container: 'legacy',
+      containerWorkdir: '/app/api',
+      existing: [mk({ name: 'old', container: 'legacy' })],
+      canAccess: mine,
+    });
+    expect(conflict).toEqual({ kind: 'owned-case', caseName: 'old' });
+  });
+
+  it('derives the container name from the case name when the field is absent', () => {
+    const conflict = classifyAdoptContainerConflict({
+      container: dockerContainerName('web'),
+      containerWorkdir: '/app/api',
+      existing: [mk({ name: 'web', owned: true })],
+      canAccess: mine,
+    });
+    expect(conflict).toEqual({ kind: 'owned-case', caseName: 'web' });
+  });
+
+  it('refuses a container another user already adopted', () => {
+    const conflict = classifyAdoptContainerConflict({
+      container: 'devbox',
+      containerWorkdir: '/app/api',
+      existing: [mk({ name: 'theirs', container: 'devbox', owned: false, owner: 'bob' })],
+      canAccess: (owner) => owner === 'alice',
+    });
+    expect(conflict).toEqual({ kind: 'other-owner', caseName: 'theirs' });
+  });
+
+  it('an owned case outranks a foreign adoption, so the message names the real blocker', () => {
+    const conflict = classifyAdoptContainerConflict({
+      container: 'devbox',
+      containerWorkdir: '/app/api',
+      existing: [
+        mk({ name: 'theirs', container: 'devbox', owned: false, owner: 'bob' }),
+        mk({ name: 'built', container: 'devbox', owned: true }),
+      ],
+      canAccess: (owner) => owner === 'alice',
+    });
+    expect(conflict).toEqual({ kind: 'owned-case', caseName: 'built' });
+  });
+
+  it('leaves an unrelated container alone', () => {
+    expect(
+      classifyAdoptContainerConflict({
+        container: 'fresh',
+        containerWorkdir: '/app',
+        existing: [mk({ name: 'web', container: 'devbox', owned: false })],
+        canAccess: mine,
+      })
+    ).toBeNull();
   });
 });
