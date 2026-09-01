@@ -1,5 +1,28 @@
 # aicodeman
 
+## 1.24.4
+
+### Patch Changes
+
+- The Compose deployment image ships the Docker CLI instead of the whole Docker engine.
+
+  `docker/server.Dockerfile` installed Debian's `docker.io` to get a client for the mounted
+  host socket. That package is the full **engine**: even with `--no-install-recommends` it
+  pulls 15 packages including containerd, runc, dmsetup and iptables, none of which a
+  container that only talks to a socket can use. It also ships Docker 20.10.24, from 2023.
+
+  The CLI and the buildx plugin are now copied from the official `docker:29-cli` image
+  instead. Measured on the same `node:22-bookworm-slim` base: **266 MB → 108 MB**, a 158 MB
+  saving, with the current CLI (29.7.2) in place of a two-year-old one.
+
+  Verified by building the real image and running it: the binaries are static Go builds, so
+  they work on this glibc image even though they come from an Alpine one, and `docker
+--version`, `docker ps` and `docker build` all succeed against a mounted host socket as
+  the unprivileged runtime user. buildx is copied deliberately — `scripts/build-agent-image.mjs`
+  shells out to `docker build` and Codeman auto-builds the agent image on the first Docker
+  case, which without the plugin falls back to the classic builder Docker has deprecated.
+  `docker-compose` is not copied; Codeman never shells out to it.
+
 ## 1.24.3
 
 ### Patch Changes
