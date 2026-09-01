@@ -2,7 +2,8 @@
 
 Canonical agent/contributor guidance for this repository lives in [CLAUDE.md](CLAUDE.md) —
 project structure, build/test/lint commands, code style, testing safety rules
-(never run the full suite inside a managed tmux session), security notes, and
+(`npm test` is the CI gate and is safe to run bare; the three excluded suites
+have their own runners), security notes, and
 the deployment workflow are all maintained there. Please read it before making
 changes, and keep it the single source of truth rather than duplicating
 sections here.
