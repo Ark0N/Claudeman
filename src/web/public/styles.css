@@ -10321,12 +10321,17 @@ kbd {
   position: fixed;
   inset: 0;
   background: var(--modal-backdrop);
-  backdrop-filter: blur(6px);
-  -webkit-backdrop-filter: blur(6px);
   z-index: 5100;
   display: none;
   align-items: center;
   justify-content: center;
+}
+
+/* Same stale-hit-test reasoning as .offline-overlay above: this one is also a
+   persistent full-screen fixed element, shown by adding `.visible`. */
+.file-preview-overlay.visible {
+  backdrop-filter: blur(8px);
+  -webkit-backdrop-filter: blur(8px);
 }
 
 .file-preview-overlay.visible {
@@ -15022,9 +15027,26 @@ html[data-skin="daylight-blue"] .welcome-btn-tunnel.active:hover {
   padding-top: calc(20px + var(--safe-area-top));
   padding-bottom: calc(20px + var(--safe-area-bottom));
   background: rgba(6, 8, 12, 0.93);
+  overflow-y: auto;
+}
+
+/* ⚠️ `backdrop-filter` is applied ONLY while the overlay is actually shown.
+   It promotes the element to its own compositing layer, and a full-screen
+   `position: fixed` layer that is created and then hidden has been observed to
+   leave a STALE HIT-TEST REGION behind in Chrome: the page keeps rendering
+   correctly while every pointer event over the viewport lands on nothing.
+   Symptom (reported on a long-lived tab against a remote server, where a
+   connection blip shows and then hides #offlineOverlay): the terminal stops
+   scrolling AND unrelated click-to-expand controls stop responding at the same
+   time, while a freshly opened tab is fine — and a console one-liner that only
+   READS layout (getComputedStyle + elementFromPoint, both of which force a
+   hit-test recompute) restores it. Two unrelated features dying together, and a
+   read-only command curing them, is what points at hit-testing rather than at
+   either feature. Keeping the property off the hidden state means the layer is
+   never created while invisible. */
+.offline-overlay:not([hidden]) {
   backdrop-filter: blur(6px);
   -webkit-backdrop-filter: blur(6px);
-  overflow-y: auto;
 }
 
 .offline-overlay[hidden] {
