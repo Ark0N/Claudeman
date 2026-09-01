@@ -2634,8 +2634,19 @@ class CodemanApp {
     // string field (e.g. modelDisplayName, which the route also broadcasts) is
     // ever shown in this chip, render it via textContent — never interpolate an
     // untrusted string into this template.
-    const seg = (label, p) => {
-      if (p === null) return '';
+    // `idle: true` keeps a missing window's SLOT with a dimmed em dash instead of
+    // dropping it. Claude only: Claude Code documents `five_hour` as "present
+    // only while the API reports it and its resets_at has not passed", so that
+    // key leaves the statusline payload whenever no 5-hour session window is
+    // open, and a chip that silently shrank from two windows to one read as a
+    // broken feature rather than as an idle window (reported 2026-09-01). A
+    // missing CODEX bucket means the opposite — that plan has no such limit —
+    // so those stay omitted rather than showing a dash forever.
+    const seg = (label, p, idle) => {
+      if (p === null) {
+        if (!idle) return '';
+        return `<span class="pu-win pu-win-idle"><span class="pu-label">${label}</span><span class="pu-val">—</span></span>`;
+      }
       const n = Math.round(Number(p));
       if (!Number.isFinite(n)) return '';
       return `<span class="pu-win"><span class="pu-label">${label}</span><span class="pu-val ${colorClass(n)}">${n}%</span></span>`;
@@ -2644,24 +2655,31 @@ class CodemanApp {
     // provider to tell apart: a machine with Claude alone shows bare windows.
     const hasWindows = (usage) => pct(usage?.fiveHour) !== null || pct(usage?.sevenDay) !== null;
     const labelled = hasWindows(data) && hasWindows(data.codex);
-    const row = (provider, usage) => {
-      const windows = [seg('5h', pct(usage?.fiveHour)), seg('7d', pct(usage?.sevenDay))].filter(Boolean);
+    const row = (provider, usage, idle) => {
+      // hasWindows() gates the row, so a placeholder can only ever appear
+      // ALONGSIDE a real reading — a provider reporting nothing still renders
+      // nothing, never a row of em dashes.
+      if (!hasWindows(usage)) return '';
+      const windows = [seg('5h', pct(usage?.fiveHour), idle), seg('7d', pct(usage?.sevenDay), idle)].filter(Boolean);
       if (!windows.length) return '';
       const label = labelled ? `<span class="pu-provider">${provider}</span>` : '';
       return `<span class="pu-row">${label}<span class="pu-windows">${windows.join('<span class="pu-sep">·</span>')}</span></span>`;
     };
-    const rows = [row('Claude', data), row('Codex', data.codex)].filter(Boolean);
+    const rows = [row('Claude', data, true), row('Codex', data.codex, false)].filter(Boolean);
     chip.innerHTML = rows.length ? rows.join('') : '—';
     const resetStr = (w) => (w && w.resetAt ? new Date(w.resetAt).toLocaleString() : '—');
-    const details = (provider, usage) => {
+    const details = (provider, usage, idle) => {
       const lines = [];
       const five = pct(usage?.fiveHour);
       const seven = pct(usage?.sevenDay);
       if (five !== null) lines.push(`5-hour limit: ${five}% used (resets ${resetStr(usage.fiveHour)})`);
+      else if (idle && seven !== null) lines.push('5-hour limit: no active session window');
       if (seven !== null) lines.push(`Weekly limit: ${seven}% used (resets ${resetStr(usage.sevenDay)})`);
       return lines.length ? `${provider} plan usage\n${lines.join('\n')}` : '';
     };
-    chip.title = [details('Claude', data), details('Codex', data.codex)].filter(Boolean).join('\n\n') || 'Plan usage limits';
+    chip.title =
+      [details('Claude', data, true), details('Codex', data.codex, false)].filter(Boolean).join('\n\n') ||
+      'Plan usage limits';
   }
 
   // Scheduled runs

@@ -12470,6 +12470,13 @@ kbd {
   color: var(--text-dim);
   opacity: 0.45;
 }
+/* A window Claude is not currently reporting: the slot stays, dimmed, so the
+   chip keeps its shape instead of looking like half of it broke. */
+.header-plan-usage .pu-win-idle .pu-label,
+.header-plan-usage .pu-win-idle .pu-val {
+  color: var(--text-dim);
+  opacity: 0.55;
+}
 /* Green/yellow/red by how much of the window is used up. */
 .header-plan-usage .pu-green {
   color: #3fb950;

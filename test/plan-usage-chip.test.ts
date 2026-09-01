@@ -80,6 +80,34 @@ describe('header plan usage chip', () => {
     expect(codexRow).toContain('7d');
   });
 
+  it("keeps Claude's 5h slot as a dash when no session window is open", () => {
+    // Claude Code ships `five_hour` "only while the API reports it and its
+    // resets_at has not passed", so between session windows the key is simply
+    // absent. The chip used to shrink to a lone 7d segment, which reads as a
+    // broken feature rather than an idle window (reported 2026-09-01).
+    const { CodemanApp, chip } = loadCodemanAppClass();
+    const app = Object.create((CodemanApp as { prototype: object }).prototype) as UsageApp;
+
+    app.updatePlanUsageChip({ sevenDay: { usedPercentage: 52, resetAt: 2000 } });
+
+    expect(chip.innerHTML).toContain('pu-win-idle');
+    expect(chip.innerHTML).toContain('5h');
+    expect(chip.innerHTML).toContain('52%');
+    expect(chip.title).toContain('no active session window');
+  });
+
+  it('renders no row at all for a provider reporting nothing', () => {
+    // The placeholder must never stand alone: a row of em dashes would claim a
+    // provider is idle when it is really absent.
+    const { CodemanApp, chip } = loadCodemanAppClass();
+    const app = Object.create((CodemanApp as { prototype: object }).prototype) as UsageApp;
+
+    app.updatePlanUsageChip({ codex: { sevenDay: { usedPercentage: 40, resetAt: 3000 } } });
+
+    expect(chip.innerHTML).not.toContain('pu-win-idle');
+    expect(chip.innerHTML).toContain('40%');
+  });
+
   it('drops the provider label when Claude is the only provider with limits', () => {
     const { CodemanApp, chip } = loadCodemanAppClass();
     const app = Object.create((CodemanApp as { prototype: object }).prototype) as UsageApp;
