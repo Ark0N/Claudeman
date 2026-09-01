@@ -82,6 +82,8 @@ codeman users add alice --admin      # create the first admin account
 codeman web --multiuser              # named logins + per-user case spaces
 ```
 
+**Prefer Docker Compose?** A local-image Compose deployment ships in `docker/`: copy `docker/.env.example` to `docker/.env`, set `CODEMAN_PASSWORD`, then run `bash docker/Start-Codeman.sh` on Linux. Codeman runs in a container and spawns Docker cases as sibling containers through the host socket. See the [Docker deployment guide](docker/README.md) for direct Compose commands, storage and networking options.
+
 Details in [Multi-User Mode](#multi-user-mode-opt-in) below.
 
 <details>

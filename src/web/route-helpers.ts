@@ -8,7 +8,6 @@
 import { join, resolve, relative, isAbsolute } from 'node:path';
 import { realpathSync, existsSync, mkdirSync } from 'node:fs';
 import fs from 'node:fs/promises';
-import { homedir } from 'node:os';
 import type { z } from 'zod';
 import type { FastifyReply, FastifyRequest } from 'fastify';
 import { Session } from '../session.js';
@@ -21,12 +20,15 @@ import type { EventPort } from './ports/event-port.js';
 import type { AuthSessionRecord } from './ports/auth-port.js';
 import type { StaleExpirationMap } from '../utils/index.js';
 import { dataPath } from '../config/instance.js';
+import { getCasesDir } from '../config/cases-dir.js';
 import { isMultiUserMode, maxSessionsPerUser, userCasesDir } from '../config/multiuser.js';
 import { SYNTHETIC_ADMIN, findUser } from '../user-store.js';
 
 // Shared path constants used across route modules. CASES_DIR (project folders)
 // stays shared across instances; SETTINGS_PATH is per-instance runtime state.
-export const CASES_DIR = join(homedir(), 'codeman-cases');
+// The cases dir is resolved in ONE place (config/cases-dir.ts) because the CLI
+// resolves it too, and CODEMAN_CASES_PATH must move both or neither.
+export const CASES_DIR = getCasesDir();
 export const SETTINGS_PATH = dataPath('settings.json');
 
 /**

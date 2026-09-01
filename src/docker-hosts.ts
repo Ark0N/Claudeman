@@ -23,7 +23,7 @@
 
 import { existsSync, mkdirSync, readFileSync, writeFileSync } from 'node:fs';
 import fs from 'node:fs/promises';
-import { join, dirname } from 'node:path';
+import { dirname, isAbsolute, join, relative, resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { homedir } from 'node:os';
 import { createHash } from 'node:crypto';
@@ -278,6 +278,24 @@ export interface DockerMount {
 }
 
 /**
+ * Resolve a bind source into the Docker daemon's filesystem namespace.
+ *
+ * A bare-host Codeman process and its Docker daemon see the same HOME, so the
+ * source is returned unchanged. In Docker-outside-of-Docker deployments,
+ * `runtimeHome` is the path inside Codeman while `daemonHome` is the host path
+ * bind-mounted there. Sources beneath HOME must therefore be translated before
+ * they are sent through the Docker socket.
+ */
+export function resolveDockerDaemonMountSource(source: string, runtimeHome: string, daemonHome?: string): string {
+  const configuredDaemonHome = daemonHome?.trim();
+  if (!configuredDaemonHome) return source;
+
+  const relativeSource = relative(resolve(runtimeHome), resolve(source));
+  if (relativeSource.startsWith('..') || isAbsolute(relativeSource)) return source;
+  return resolve(configuredDaemonHome, relativeSource);
+}
+
+/**
  * Resolved, IO-free context for buildDockerCreateArgs. The caller (tmux-manager)
  * resolves the environment-dependent bits (host uid, existing cred mounts, the
  * derived api url, Desktop detection) so this builder stays pure and unit-testable.
@@ -300,6 +318,8 @@ export interface DockerCreateContext {
   addHostGateway: boolean;
   /** Engine host-gateway alias (host.docker.internal / host.containers.internal). */
   gatewayAlias: string;
+  /** Omit --memory-swap when the host kernel cannot enforce swap limits. */
+  disableSwapLimit?: boolean;
 }
 
 /**
@@ -317,12 +337,15 @@ function mountSpec(m: DockerMount): string {
   return `type=bind,src=${m.src},dst=${m.dst}${m.readonly ? ',readonly' : ''}`;
 }
 
-function resourceFlags(resources?: DockerResourceLimits): string[] {
+function resourceFlags(resources?: DockerResourceLimits, disableSwapLimit = false): string[] {
   if (!resources) return [];
   const flags: string[] = [];
   if (resources.memory) {
-    // memory-swap == memory disables swap, making --memory a REAL OOM cap.
-    flags.push('--memory', resources.memory, '--memory-swap', resources.memory);
+    flags.push('--memory', resources.memory);
+    // memory-swap == memory disables swap where the daemon supports swap
+    // accounting. Some kernels, including the deployed Unraid host, do not;
+    // requesting it there emits a warning and Docker ignores the value.
+    if (!disableSwapLimit) flags.push('--memory-swap', resources.memory);
   }
   if (resources.cpus) flags.push('--cpus', resources.cpus);
   if (resources.pidsLimit) flags.push('--pids-limit', String(resources.pidsLimit));
@@ -387,7 +410,7 @@ export function buildDockerCreateArgs(ctx: DockerCreateContext): string[] {
   if (addHostGateway) args.push('--add-host', `${gatewayAlias}:host-gateway`);
 
   args.push(
-    ...resourceFlags(docker.resources),
+    ...resourceFlags(docker.resources, ctx.disableSwapLimit),
     // GPU passthrough (needs the NVIDIA container toolkit on the host). No storage
     // cap is set, so the container's writable layer + volumes grow elastically as
     // data flows in (bounded only by host disk).

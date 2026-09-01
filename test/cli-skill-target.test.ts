@@ -19,6 +19,7 @@ import { homedir } from 'node:os';
 import { join } from 'node:path';
 import { dataPath } from '../src/config/instance.js';
 import { program, resolveCliCasePath, resolveSkillTargetPath } from '../src/cli.js';
+import { getCasesDir } from '../src/config/cases-dir.js';
 
 const LINKED_CASES_FILE = dataPath('linked-cases.json');
 const CASES_DIR = join(homedir(), 'codeman-cases');
@@ -140,5 +141,38 @@ describe('skill command wiring', () => {
         .sort();
       expect(flags).toEqual(['--case', '--global']);
     }
+  });
+});
+
+describe('cases dir override (CODEMAN_CASES_PATH)', () => {
+  // The Docker Compose deployment points Codeman at a host-absolute bind mount
+  // so a Docker case resolves to the same path inside the container and on the
+  // host daemon. The override shipped on the server's CASES_DIR only, which left
+  // the CLI looking in the home default: `codeman skill install --case <name>`
+  // then reported "Case not found" on exactly the deployment it exists for.
+  const saved = process.env.CODEMAN_CASES_PATH;
+  afterEach(() => {
+    if (saved === undefined) delete process.env.CODEMAN_CASES_PATH;
+    else process.env.CODEMAN_CASES_PATH = saved;
+  });
+
+  it('moves the CLI and the server together', () => {
+    process.env.CODEMAN_CASES_PATH = '/srv/codeman-cases';
+    expect(getCasesDir()).toBe('/srv/codeman-cases');
+    expect(resolveCliCasePath('demo')).toBe(join('/srv/codeman-cases', 'demo'));
+  });
+
+  it('falls back to the home default when unset', () => {
+    delete process.env.CODEMAN_CASES_PATH;
+    expect(getCasesDir()).toBe(CASES_DIR);
+    expect(resolveCliCasePath('demo')).toBe(join(CASES_DIR, 'demo'));
+  });
+
+  it('still lets a linked case win over the override', () => {
+    // The registry lookup runs first, so a case linked in from outside the cases
+    // dir keeps resolving to its real location under Compose too.
+    process.env.CODEMAN_CASES_PATH = '/srv/codeman-cases';
+    writeLinkedCases(JSON.stringify({ linked: join(LINKED_ROOT, 'linked') }));
+    expect(resolveCliCasePath('linked')).toBe(join(LINKED_ROOT, 'linked'));
   });
 });

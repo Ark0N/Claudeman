@@ -19,19 +19,20 @@
  * including the sweep's deleted-workspace guard.
  */
 
-import { describe, it, expect, beforeEach, afterEach } from 'vitest';
+import { describe, it, expect, beforeEach, afterEach, vi } from 'vitest';
 import Fastify, { type FastifyInstance } from 'fastify';
 import fastifyCookie from '@fastify/cookie';
 import { mkdtemp, rm, readFile, mkdir, writeFile } from 'node:fs/promises';
 import { existsSync } from 'node:fs';
 import { join } from 'node:path';
 import { tmpdir } from 'node:os';
-import { createMockRouteContext } from '../mocks/index.js';
+import { createMockRouteContext, type MockRouteContext } from '../mocks/index.js';
 import { installRouteErrorHandler } from '../../src/web/route-error-handler.js';
 import { registerSessionRoutes } from '../../src/web/routes/session-routes.js';
 import { generateHooksConfig, applyWorkspaceHooks } from '../../src/hooks-config.js';
 import { getDataDir } from '../../src/config/instance.js';
 import { CASES_DIR } from '../../src/web/route-helpers.js';
+import { Session } from '../../src/session.js';
 
 interface HooksFile {
   hooks?: Record<string, Array<{ matcher?: string; hooks?: Array<{ command?: string }> }>>;
@@ -223,6 +224,7 @@ describe('POST /api/sessions workspace hooks', () => {
 
 describe('POST /api/quick-start workspace hooks', () => {
   let app: FastifyInstance;
+  let ctx: MockRouteContext;
 
   const quickStart = (payload: Record<string, unknown>) =>
     app.inject({ method: 'POST', url: '/api/quick-start', payload });
@@ -230,15 +232,19 @@ describe('POST /api/quick-start workspace hooks', () => {
   const hooksFileIn = (dir: string) => join(dir, '.claude', 'settings.local.json');
 
   beforeEach(async () => {
+    vi.spyOn(Session.prototype, 'startInteractive').mockResolvedValue(undefined);
+    vi.spyOn(Session.prototype, 'startShell').mockResolvedValue(undefined);
     app = Fastify({ logger: false });
     await app.register(fastifyCookie);
-    registerSessionRoutes(app, createMockRouteContext());
+    ctx = createMockRouteContext();
+    registerSessionRoutes(app, ctx);
     installRouteErrorHandler(app);
     await app.ready();
   });
 
   afterEach(async () => {
     await app.close();
+    vi.restoreAllMocks();
     // Docker fixtures + case dirs must not leak into the next test.
     await rm(join(getDataDir(), 'docker-hosts.json'), { force: true });
     await rm(join(getDataDir(), 'docker-cases.json'), { force: true });
@@ -260,7 +266,7 @@ describe('POST /api/quick-start workspace hooks', () => {
   });
 
   /** Minimal docker host + case fixtures (docker IO is no-op'd under vitest). */
-  const writeDockerFixtures = async (caseName: string, hostWorkspacePath: string) => {
+  const writeDockerFixtures = async (caseName: string, hostWorkspacePath: string, lastClaudeSessionId?: string) => {
     await mkdir(getDataDir(), { recursive: true });
     await writeFile(
       join(getDataDir(), 'docker-hosts.json'),
@@ -268,7 +274,7 @@ describe('POST /api/quick-start workspace hooks', () => {
     );
     await writeFile(
       join(getDataDir(), 'docker-cases.json'),
-      JSON.stringify([{ name: caseName, type: 'docker', hostId: 'd1', hostWorkspacePath }])
+      JSON.stringify([{ name: caseName, type: 'docker', hostId: 'd1', hostWorkspacePath, lastClaudeSessionId }])
     );
   };
 
@@ -296,6 +302,35 @@ describe('POST /api/quick-start workspace hooks', () => {
 
       expect((await quickStart({ caseName: 'dockshell', mode: 'shell' })).statusCode).toBe(200);
       expect(existsSync(join(ws, '.claude'))).toBe(false);
+    } finally {
+      await rm(ws, { recursive: true, force: true });
+    }
+  });
+
+  it.each(['codex', 'gemini'] as const)('does not pass a saved Claude conversation id to Docker %s', async (mode) => {
+    const ws = await mkdtemp(join(tmpdir(), `codeman-docker-${mode}-`));
+    try {
+      await writeDockerFixtures('dockexternal', ws, 'e83a9063-3cb4-44d2-a9a0-df153b81721f');
+
+      const res = await quickStart({ caseName: 'dockexternal', mode });
+      expect(res.statusCode).toBe(200);
+      const session = ctx.sessions.get(JSON.parse(res.body).sessionId);
+      expect(session?.toState().resumeSessionId).toBeUndefined();
+    } finally {
+      await rm(ws, { recursive: true, force: true });
+    }
+  });
+
+  it('passes a saved Claude conversation id only to Docker Claude', async () => {
+    const ws = await mkdtemp(join(tmpdir(), 'codeman-docker-resume-'));
+    const resumeId = 'e83a9063-3cb4-44d2-a9a0-df153b81721f';
+    try {
+      await writeDockerFixtures('dockresume', ws, resumeId);
+
+      const res = await quickStart({ caseName: 'dockresume', mode: 'claude' });
+      expect(res.statusCode).toBe(200);
+      const session = ctx.sessions.get(JSON.parse(res.body).sessionId);
+      expect(session?.toState().resumeSessionId).toBe(resumeId);
     } finally {
       await rm(ws, { recursive: true, force: true });
     }

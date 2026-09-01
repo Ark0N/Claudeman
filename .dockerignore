@@ -1,0 +1,18 @@
+.git
+.agents
+.claude
+.codex
+# `**/` matters: a .dockerignore pattern is matched against the WHOLE
+# context-relative path, so a bare `.env` excludes ONLY the root file and
+# `COPY . .` would bake docker/.env -- CODEMAN_PASSWORD and any provider API
+# keys -- into the published image at /opt/codeman/docker/.env (verified).
+**/.env
+**/.env.*
+!**/.env.example
+node_modules
+dist
+coverage
+out
+test-results
+tmp
+*.log

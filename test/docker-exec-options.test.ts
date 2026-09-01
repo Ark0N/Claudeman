@@ -80,6 +80,26 @@ describe('buildDockerLaunchCommand', () => {
     expect(cmd).toContain("docker start 'codeman-case-myproj'");
   });
 
+  it('avoids eager create expansion, tolerates a concurrent creator, and preserves real failures in compatibility mode', () => {
+    const opts = launchOpts();
+    opts.createContext.disableSwapLimit = true;
+    const cmd = buildDockerLaunchCommand(opts);
+    // No command substitution or shell variables: either could expand eagerly
+    // before the inspect side of || short-circuits in a nested launch shell.
+    expect(cmd).not.toContain('$(');
+    expect(cmd).not.toContain('codeman_create_output');
+    expect(cmd).toContain('if docker create');
+    expect(cmd).toContain("'/tmp/codeman-create-1a2b3c4d5e6f.log'");
+    // If another session created the case between inspect and create, re-inspect
+    // succeeds and the losing creator continues without printing the conflict.
+    expect(cmd).toContain("elif docker inspect 'codeman-case-myproj' >/dev/null 2>&1; then rm -f");
+    expect(cmd).toContain('Your kernel does not support swap limit capabilities');
+    expect(cmd).toContain('else sed');
+    expect(cmd).toContain('>&2; rm -f');
+    expect(cmd).toContain('; false; fi;');
+    expect(cmd).not.toContain('--memory-swap');
+  });
+
   it('execs a TTY into the durable in-container tmux', () => {
     const cmd = buildDockerLaunchCommand(launchOpts());
     expect(cmd).toContain("exec docker exec -it --workdir '/home/arkon/cases/myproj'");

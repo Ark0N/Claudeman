@@ -32,6 +32,7 @@ import {
   resolveClaudeJsonSeedMount,
   resolveDockerClaudeArtifacts,
   resolveDockerCredentialArtifacts,
+  resolveDockerDaemonMountSource,
   toSessionDocker,
   writeDockerCases,
   writeDockerHosts,
@@ -266,6 +267,32 @@ describe('buildDockerCreateArgs', () => {
     // elastic disk: no fixed storage cap is ever emitted
     expect(s).not.toContain('--storage-opt');
     expect(buildDockerCreateArgs(ctx()).join(' ')).not.toContain('--gpus');
+  });
+
+  it('omits the unsupported swap limit while retaining the memory limit when disabled', () => {
+    const s = buildDockerCreateArgs(ctx({ disableSwapLimit: true })).join(' ');
+    expect(s).toContain('--memory 4g');
+    expect(s).not.toContain('--memory-swap');
+  });
+});
+
+describe('resolveDockerDaemonMountSource', () => {
+  const runtimeHome = join(tmpdir(), 'codeman-runtime-home');
+  const daemonHome = join(tmpdir(), 'codeman-daemon-home');
+
+  it('maps paths beneath the runtime HOME into the daemon-visible HOME', () => {
+    const source = join(runtimeHome, '.codeman', 'docker-seeds', 'codeman-case-test1.json');
+    expect(resolveDockerDaemonMountSource(source, runtimeHome, daemonHome)).toBe(
+      join(daemonHome, '.codeman', 'docker-seeds', 'codeman-case-test1.json')
+    );
+  });
+
+  it('preserves direct-host and non-HOME sources', () => {
+    const source = join(runtimeHome, '.claude', 'settings.json');
+    expect(resolveDockerDaemonMountSource(source, runtimeHome)).toBe(source);
+
+    const outsideHome = join(tmpdir(), 'codeman-cases', 'test1');
+    expect(resolveDockerDaemonMountSource(outsideHome, runtimeHome, daemonHome)).toBe(outsideHome);
   });
 });
 
