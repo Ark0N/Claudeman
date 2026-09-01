@@ -1,5 +1,41 @@
 # aicodeman
 
+## 1.24.2
+
+### Patch Changes
+
+- Fix every new claude session dying on Claude Code 2.1.252's rewritten folder-trust dialog.
+
+  That dialog used to offer `❯ 1. Yes, I trust this folder` / `2. No, exit`, so Codeman
+  answered it by pressing Enter on the highlighted default. 2.1.252 dropped the numbers,
+  reversed the options and highlights `No, exit`, so the same Enter now answers _exit_: a
+  session in any directory claude had not seen before died (`Pane is dead (status 1)`)
+  about six seconds after it started, before the agent ever drew a composer.
+  - `trustDialogNextKey()` (`src/session-trust-dialog.ts`) now reads the `❯` marker off
+    the rendered pane and returns ONE keystroke at a time: an arrow while the cursor is on
+    the wrong option, Enter only once the screen shows it on the trust option. A frame it
+    cannot read presses nothing. Both the 2.1.252 and the older numbered layout are
+    handled, and the direction is derived from the frame rather than assumed, so a further
+    reordering costs a repaint instead of a session.
+  - The scan schedules its own follow-up read. It had only ever run from the PTY data
+    handler, which was enough while one Enter answered the dialog; the arrow that moves the
+    cursor is the last output the pane produces, so a two-keystroke answer would otherwise
+    stall with the cursor sitting on the right option forever. The keystroke cap goes from
+    3 to 6 for the same reason.
+  - The bundled `codeman` agent skill gets the same treatment (preamble 1.21.0): its
+    `_accept_trust` fallback reads `terminal?full=1`, steers onto the trust option and
+    confirms only after re-reading, instead of posting a blind `\r`. It sends those
+    keystrokes under its own `clientId`, because input sequence numbers are monotonic per
+    client and spending prompt numbers on dialog keys would make the next send-and-wait
+    look like a stale duplicate and vanish silently.
+  - Readiness recipes in `docs/extending-codeman.md`, `docs/api-reference.md` and the
+    skill's own reference carry the corrected answer and a new symptom-table entry for a
+    worker whose pane is dead seconds after the spawn.
+
+  Also included: a CLAUDE.md audit against the tree, correcting counted drift (route
+  modules, handler counts, frontend module count and app.js size, install.sh size) and
+  documenting several subsystems that had no entry.
+
 ## 1.24.1
 
 ### Patch Changes
