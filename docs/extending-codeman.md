@@ -228,6 +228,14 @@ window: the wait resolves on `idle` in a couple of seconds with `timedOut: false
 indistinguishable from a finished turn. Wait for the pid, then wait for the
 composer, answering the dialog only as the bounded fallback.
 
+⚠️ **Answering it is not "press Enter".** Claude Code 2.1.252 dropped the options'
+numbers, reversed them, and highlights `No, exit` by default, so a blind `\r` quits
+the CLI and the pane is dead seconds after the spawn. Read the `❯` marker off the
+rendered pane (`GET .../terminal?full=1`), send `ESC [ B` while it sits on `No, exit`,
+re-read, and confirm only once the marker is on `Yes, I trust this folder`. Codeman's
+own auto-accept (`trustDialogNextKey()` in `src/session-trust-dialog.ts`) does exactly
+this, inside a 90 s startup window and a 6-keystroke cap.
+
 A worked orchestration: start a worker, get it ready, prompt it, wait, clean up.
 
 ```bash
@@ -244,24 +252,36 @@ SID=$("${CURL[@]}" -X POST "$API/api/v1/quick-start" \
 [ -n "$SID" ] && [ "$SID" != null ] || { echo "quick-start failed"; exit 1; }
 
 # 2. READINESS: composer marker first, trust dialog only as the bounded fallback.
-#    Skip this and step 3 reports a turn that never ran. Do NOT probe trust first
-#    and Enter blindly: the dialog text stays in the buffer for the life of the
-#    session, so on every later run that probe matches stale text and the Enter
-#    lands in a ready composer. Match single tokens only: TUI text can arrive
-#    without its spaces. Stage 1 is short on purpose (an already-trusted case
-#    matches in <1 s; a first-run case can never pass it and pays it in full).
+#    Skip this and step 3 reports a turn that never ran. Match single tokens only:
+#    TUI text can arrive without its spaces. Stage 1 is short on purpose (an
+#    already-trusted case matches in <1 s; a first-run case can never pass it and
+#    pays it in full).
+#    ⚠️ NEVER answer the dialog with a bare \r. Its highlighted option is `No, exit`
+#    (claude-cli 2.1.252), so a blind Enter quits the CLI; and the dialog text stays
+#    in the buffer for the life of the session, so a `from=buffer` probe for `trust`
+#    keeps matching long after it is gone. Read the CURRENT pane instead and steer.
 until [ "$("${CURL[@]}" "$API/api/v1/sessions/$SID" | jq '.data.pid')" != null ]
 do sleep 1; done
 R=$("${CURL[@]}" -G "$API/api/v1/sessions/$SID/wait-output" \
       --data-urlencode 'match=bypass' --data-urlencode 'from=buffer' \
       --data-urlencode 'timeout=5000')           # composer's status bar = ready
 if ! jq -e '.data.wait.matched' <<<"$R" >/dev/null; then
-  T=$("${CURL[@]}" -G "$API/api/v1/sessions/$SID/wait-output" \
-        --data-urlencode 'match=trust' --data-urlencode 'from=buffer' \
-        --data-urlencode 'timeout=2000')
-  jq -e '.data.wait.matched' <<<"$T" >/dev/null && \
+  ESC=$(printf '\033')   # \x1b is GNU-sed only; this form also works on macOS
+  for _ in 1 2 3 4 5 6; do
+    # Which option the ❯ marker sits on, read off the CURRENT frame.
+    K=$("${CURL[@]}" -G "$API/api/v1/sessions/$SID/terminal" --data-urlencode 'full=1' \
+        | jq -r '.data.terminalBuffer // empty' \
+        | sed -e "s/$ESC\[[0-9;?]*[a-zA-Z]//g" -e "s/$ESC[()][AB0]//g" | tr -d ' \t' \
+        | grep -i '❯[0-9.]*\(yes,itrustthisfolder\|no,exit\)' | tail -1 \
+        | sed -e 's/.*[Yy]es,.*/confirm/' -e 's/.*[Nn]o,.*/move/')
+    [ -n "$K" ] || break                      # no dialog on screen: nothing to answer
+    [ "$K" = confirm ] && IN="\r" || IN="$ESC[B"
     "${CURL[@]}" -X POST "$API/api/v1/sessions/$SID/input" \
-      -H 'Content-Type: application/json' -d '{"input":"\r","useMux":true}' >/dev/null
+      -H 'Content-Type: application/json' \
+      -d "$(jq -nc --arg i "$IN" '{input:$i,useMux:true}')" >/dev/null
+    [ "$K" = confirm ] && break
+    sleep 1                                   # re-read: confirm the arrow landed
+  done
   "${CURL[@]}" -G "$API/api/v1/sessions/$SID/wait-output" \
     --data-urlencode 'match=bypass' --data-urlencode 'from=buffer' \
     --data-urlencode 'timeout=45000' >/dev/null

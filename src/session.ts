@@ -66,6 +66,8 @@ import { RalphTracker } from './ralph-tracker.js';
 import { BashToolParser } from './bash-tool-parser.js';
 import {
   isTrustDialogScreen,
+  trustDialogNextKey,
+  TRUST_KEY_CONFIRM,
   TRUST_DIALOG_WINDOW_MS,
   TRUST_DIALOG_RETRY_MS,
   TRUST_DIALOG_MAX_ATTEMPTS,
@@ -455,8 +457,9 @@ export class Session extends EventEmitter {
   private _lastPaneProbeAt = 0; // Throttle for the tmux screen probe
   private _lastPaneProbeWorking: boolean | null = null; // Its last verdict (null = could not read)
   private _trustDialogAccepted: boolean = false; // Stops the trust-dialog scan (answered, or given up)
-  private _trustDialogAttempts = 0; // Enter presses sent at the trust dialog
+  private _trustDialogAttempts = 0; // Keystrokes sent at the trust dialog
   private _lastTrustDialogScanAt = 0; // Throttle for the trust-dialog screen read
+  private _trustDialogTimer: NodeJS.Timeout | null = null; // Re-read after a keystroke (see below)
   private _interactiveStartedAt = 0; // When the interactive pane launched (bounds that scan)
   private _taskTracker: TaskTracker;
 
@@ -1841,6 +1844,10 @@ export class Session extends EventEmitter {
     this._interactiveStartedAt = Date.now();
     this._trustDialogAttempts = 0;
     this._lastTrustDialogScanAt = 0;
+    if (this._trustDialogTimer) {
+      clearTimeout(this._trustDialogTimer);
+      this._trustDialogTimer = null;
+    }
 
     // COD-118: if the PTY exit breaker has tripped (repeated non-zero exits in a
     // short window), refuse to respawn. This is the uniform choke point that stops
@@ -2229,6 +2236,15 @@ export class Session extends EventEmitter {
    * makes a retry safe, since the terminal buffer is append-only and keeps the
    * dialog in its tail long after it has been answered.
    *
+   * ⚠️ **The keystroke is read off the screen, never assumed.** Claude Code
+   * 2.1.252 dropped the option numbers, put "No, exit" first, and highlights IT
+   * by default, so the bare `\r` this used to send now answers *exit*: a fresh
+   * case died (`Pane is dead (status 1)`) about six seconds after spawning.
+   * `trustDialogNextKey()` returns one step at a time — an arrow while the
+   * cursor is on the wrong option, Enter only once the screen shows it on the
+   * trust option — and this method re-reads the pane between the two, so a
+   * dropped arrow costs a repaint instead of the session.
+   *
    * Three guards keep an Enter press off a live session: a startup-only window,
    * a two-marker match (isTrustDialogScreen), and an attempt cap.
    */
@@ -2249,17 +2265,39 @@ export class Session extends EventEmitter {
       this._terminalBuffer.value.slice(-TRUST_DIALOG_SCAN_BYTES);
     if (!isTrustDialogScreen(screen)) return;
 
+    // Null means the frame does not say which option is highlighted. Waiting for
+    // the next repaint is the safe move; pressing Enter blind is the bug.
+    const key = trustDialogNextKey(screen);
+    if (key === null) return;
+
     this._trustDialogAttempts++;
     if (this._trustDialogAttempts > TRUST_DIALOG_MAX_ATTEMPTS) {
       this._trustDialogAccepted = true; // leave it to the user rather than keep typing
       console.warn(`[Session] Workspace trust dialog did not clear after retries: ${this.id}`);
       return;
     }
+    const step = key === TRUST_KEY_CONFIRM ? 'confirming' : 'moving to the trust option';
     console.log(
-      `[Session] Auto-accepting workspace trust dialog for: ${this.id} (attempt ${this._trustDialogAttempts})`
+      `[Session] Auto-accepting workspace trust dialog for: ${this.id} (attempt ${this._trustDialogAttempts}, ${step})`
     );
-    // Enter confirms the highlighted default, "1. Yes, I trust this folder".
-    this.writeViaMux('\r');
+    this.writeViaMux(key);
+
+    // ⚠️ Schedule the next read; do NOT wait for more PTY output. This scan only
+    // ever ran from `onData`, which was enough while one Enter answered the
+    // dialog. It is not enough now: the arrow that moves the cursor is the LAST
+    // output the pane produces, so a dialog left sitting on the trust option
+    // never gets its Enter and the worker stays parked on it forever (measured
+    // on a live 2.1.252 spawn: cursor moved at 6 s, then nothing). The timer is
+    // one-shot and self-rearming through this same path, and every exit route
+    // goes through _clearAllTimers().
+    // The +100ms puts the re-entry OUTSIDE the scan throttle above; firing at
+    // exactly the throttle boundary would let the scan return early and break
+    // the chain with the dialog still on screen.
+    if (this._trustDialogTimer) clearTimeout(this._trustDialogTimer);
+    this._trustDialogTimer = setTimeout(() => {
+      this._trustDialogTimer = null;
+      this._maybeAcceptTrustDialog();
+    }, TRUST_DIALOG_RETRY_MS + 100);
   }
 
   /**
@@ -2784,6 +2822,12 @@ export class Session extends EventEmitter {
   }
 
   private _clearAllTimers(): void {
+    // Clear the workspace-trust follow-up read
+    if (this._trustDialogTimer) {
+      clearTimeout(this._trustDialogTimer);
+      this._trustDialogTimer = null;
+    }
+
     // Clear activity timeout to prevent memory leak
     if (this.activityTimeout) {
       clearTimeout(this.activityTimeout);
