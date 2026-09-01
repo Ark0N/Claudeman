@@ -650,6 +650,15 @@ export const RemoteHostSchema = z.object({
     .max(100)
     .regex(/^[a-zA-Z0-9._-]+$/, 'Invalid SSH username'),
   port: z.number().int().min(1).max(65535).optional(),
+  // SSH password for hosts that accept no key. Opt-in, stored 0600, never
+  // returned by the API (redactRemoteHost) and never placed on a command line —
+  // it reaches ssh through `sshpass -e` / the SSHPASS environment variable.
+  //
+  // ⚠️ Deliberately NOT filtered by NO_SHELL_META like the path fields below: a
+  // password legitimately contains `$` and backticks, and unlike those it is never
+  // interpolated into a shell string. An EMPTY string is allowed on purpose — it is
+  // the "clear the stored password" gesture (see mergeRemoteHostSecret).
+  password: z.string().max(1024).optional(),
   // Identity (private-key) file PATH only — never key bytes. Reject shell
   // metacharacters ($, backtick) that survive into the `bash -c` launch layer.
   identityFile: z.string().min(1).max(4096).regex(NO_SHELL_META, 'Invalid identity file path').optional(),

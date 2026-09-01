@@ -88,6 +88,17 @@ export interface RemoteSshOptions {
   jumpHost?: string;
   /** Arbitrary additional `-o KEY=VALUE` options (escape hatch). Each `KEY=VALUE`. */
   extraSshOptions?: string[];
+  /**
+   * SSH password, for hosts that accept no key. OPTIONAL and opt-in: storing it
+   * is a user choice, and a host without it keeps the key-only path unchanged.
+   *
+   * ⚠️ This is the one secret in remote-hosts.json, which is why that file is
+   * written 0600. It is never returned by the API (see redactRemoteHost) and
+   * never reaches a command line — it goes to ssh through `sshpass -e`, which
+   * reads the SSHPASS environment variable, and that variable is injected into
+   * the pane with socket-scoped `tmux setenv` like every other secret here.
+   */
+  password?: string;
 }
 
 export interface RemoteHost extends RemoteSshOptions {

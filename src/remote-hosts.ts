@@ -2,7 +2,7 @@ import { existsSync, mkdirSync } from 'node:fs';
 import fs from 'node:fs/promises';
 import { join } from 'node:path';
 import { homedir } from 'node:os';
-import { exec } from 'node:child_process';
+import { exec, execFileSync } from 'node:child_process';
 import { promisify } from 'node:util';
 import type {
   RemoteCase,
@@ -37,13 +37,86 @@ async function readJsonArray<T>(path: string): Promise<T[]> {
   }
 }
 
+/**
+ * ⚠️ 0600: remote-hosts.json can now hold an SSH password (RemoteSshOptions.password).
+ * The mode is applied to every file written here rather than to that one path, so a
+ * future secret in a sibling registry cannot land world-readable by omission.
+ */
 async function writeJsonArray<T>(configDir: string, path: string, value: T[]): Promise<void> {
   if (!existsSync(configDir)) mkdirSync(configDir, { recursive: true });
-  await fs.writeFile(path, JSON.stringify(value, null, 2));
+  await fs.writeFile(path, JSON.stringify(value, null, 2), { mode: 0o600 });
+  // writeFile's `mode` applies only when it CREATES the file; an existing one keeps
+  // whatever it had, so tighten it explicitly for registries written before this.
+  //
+  // ⚠️ try/catch, not `.catch()`: on a filesystem without chmod semantics — or a
+  // test double that stubs only readFile/writeFile — `fs.chmod` can be missing
+  // outright, and calling it then throws SYNCHRONOUSLY, which no `.catch()` on the
+  // (never-returned) promise can absorb. Tightening the mode is best-effort; the
+  // file has already been written with the right mode when it was created.
+  try {
+    await fs.chmod(path, 0o600);
+  } catch {
+    /* best-effort */
+  }
 }
 
 export async function readRemoteHosts(configDir: string): Promise<RemoteHost[]> {
   return readJsonArray<RemoteHost>(remoteHostsPath(configDir));
+}
+
+/**
+ * Strip the stored SSH password before a host leaves the server.
+ *
+ * The API answers with `passwordSet: true` instead, which is what a UI needs to
+ * render "saved — replace or clear" without ever shipping the secret to a
+ * browser. Callers that PERSIST must merge against the stored host (see
+ * mergeRemoteHostSecret) or a round-trip through the UI would erase it.
+ */
+export function redactRemoteHost(host: RemoteHost): RemoteHost & { passwordSet: boolean } {
+  const { password, ...rest } = host;
+  return { ...rest, passwordSet: !!password };
+}
+
+/**
+ * Carry a stored password across an update that did not send one.
+ *
+ * A redacted host round-tripping through the UI has no `password` field, so a
+ * blind write would silently drop it and the next launch would fall back to key
+ * auth and fail. An EXPLICIT empty string is the clear-it gesture and must be
+ * honoured, which is why this distinguishes undefined from ''.
+ */
+export function mergeRemoteHostSecret(incoming: RemoteHost, stored?: RemoteHost): RemoteHost {
+  if (incoming.password !== undefined) {
+    return incoming.password === '' ? { ...incoming, password: undefined } : incoming;
+  }
+  return stored?.password ? { ...incoming, password: stored.password } : incoming;
+}
+
+/**
+ * Is `sshpass` runnable on this host?
+ *
+ * Password auth needs it, and it ships in no base image — a missing binary
+ * otherwise surfaces as a pane that dies with `sshpass: command not found`,
+ * which reads like a broken host rather than a missing prerequisite. Cached
+ * per-process: the answer cannot change without an install, and probing on every
+ * launch would fork a process per session start.
+ */
+let _sshpassAvailable: boolean | undefined;
+export function sshpassAvailable(): boolean {
+  if (_sshpassAvailable === undefined) {
+    try {
+      execFileSync('sh', ['-c', 'command -v sshpass'], { stdio: 'ignore', timeout: 5000 });
+      _sshpassAvailable = true;
+    } catch {
+      _sshpassAvailable = false;
+    }
+  }
+  return _sshpassAvailable;
+}
+
+/** Test seam: forget the cached probe. */
+export function resetSshpassProbe(): void {
+  _sshpassAvailable = undefined;
 }
 
 export async function writeRemoteHosts(configDir: string, hosts: RemoteHost[]): Promise<void> {
@@ -177,7 +250,29 @@ function expandIdentityPath(identityFile: string): string {
  *    operator already set ConnectTimeout via extraSshOptions, so their value wins.
  */
 export function buildSshConnectionArgs(remote: RemoteSshOptions & Pick<RemoteHost, 'port'>): string[] {
-  const parts: string[] = ['ssh', '-o BatchMode=yes'];
+  // A stored password goes to ssh through `sshpass -e`, which reads it from the
+  // SSHPASS environment variable — never from argv (world-readable via /proc on a
+  // shared host) and never from a temp file we would have to clean up. The
+  // variable itself is injected into the pane with socket-scoped `tmux setenv`,
+  // the same discipline every other secret here follows.
+  //
+  // ⚠️ MEASURED, and the naive version fails silently: `BatchMode=yes` disables
+  // the password PROMPT, and answering that prompt is exactly how sshpass works,
+  // so the two are mutually exclusive — `sshpass -e ssh -o BatchMode=yes host`
+  // comes back `Permission denied (publickey,password)`, which reads like a wrong
+  // password rather than a wrong flag. With a password we therefore send
+  // `BatchMode=no` plus `NumberOfPasswordPrompts=1`, which keeps the launch
+  // non-interactive in the way that actually matters here: a WRONG password fails
+  // immediately instead of ssh sitting on a prompt nobody can answer (also
+  // measured — it returns at once rather than hanging).
+  //
+  // ⚠️ `sshpass -e ssh` is the FIRST TOKEN rather than a separate array entry
+  // because several callers destructure `[ssh, batchMode, ...rest]` and re-insert
+  // flags at fixed positions (notably `-t`); a prepended entry would shift those.
+  const usesPassword = !!remote.password;
+  const parts: string[] = usesPassword
+    ? ['sshpass -e ssh', '-o BatchMode=no', '-o NumberOfPasswordPrompts=1']
+    : ['ssh', '-o BatchMode=yes'];
   const hasConnectTimeout = (remote.extraSshOptions ?? []).some((opt) => /^ConnectTimeout=/i.test(opt));
   if (!hasConnectTimeout) parts.push('-o ConnectTimeout=10');
   if (remote.port) parts.push(`-p ${remote.port}`);
@@ -234,9 +329,27 @@ export async function checkRemoteTmuxAvailable(
   if (process.env.VITEST) {
     return { ok: true, tmuxPath: '(test-mode)' };
   }
+  // ⚠️ A password host needs sshpass BOTH here and in the pane, and this probe is
+  // the earlier of the two — catching it here turns "the pane died with
+  // `sshpass: command not found`", which reads like a broken host, into a named
+  // prerequisite at link time. Mirrors how the tmux prerequisite itself is handled.
+  if (host.password && !sshpassAvailable()) {
+    return {
+      ok: false,
+      error:
+        'This host authenticates with a password, which needs `sshpass` on the Codeman machine, and it is not installed. Install it (Debian/Ubuntu: `apt install sshpass`), or give the host an SSH key instead.',
+    };
+  }
   const command = buildRemoteTmuxCheckCommand(host);
   try {
-    const { stdout } = await execAsync(command, { timeout: 15_000 });
+    // ⚠️ This probe runs in the SERVER process, not in a tmux pane, so the pane's
+    // `tmux setenv SSHPASS` does not apply to it. The password is handed to this
+    // child through its ENVIRONMENT rather than the command line, which is the same
+    // trust level (`/proc/<pid>/environ` is owner-readable) and keeps it out of `ps`.
+    const { stdout } = await execAsync(command, {
+      timeout: 15_000,
+      ...(host.password ? { env: { ...process.env, SSHPASS: host.password } } : {}),
+    });
     const tmuxPath = stdout.trim();
     if (!tmuxPath) {
       return {

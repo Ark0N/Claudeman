@@ -85,6 +85,8 @@ import type { AdoptedContainerProbe, DockerBrowseResult, DockerContainerInfo } f
 import { buildDockerRemoveCommand } from '../../tmux-manager.js';
 import {
   checkRemoteTmuxAvailable,
+  redactRemoteHost,
+  mergeRemoteHostSecret,
   listRemoteCodemanSessions,
   readRemoteCases,
   readRemoteHosts,
@@ -551,8 +553,11 @@ export function registerCaseRoutes(app: FastifyInstance, ctx: EventPort & Config
 
   // Hosts are machine-level infra config (ssh users/identity paths): non-admins get an
   // empty list in multi-user mode, matching the admin-only write side. No-op otherwise.
+  // ⚠️ redactRemoteHost: a host may now carry an SSH password, and it must never
+  // reach a browser. Callers get `passwordSet` instead, which is all a UI needs to
+  // render "saved — replace or clear".
   app.get('/api/remote-hosts', async (req) =>
-    isMultiUserMode() && !isAdmin(req) ? [] : readRemoteHosts(CODEMAN_CONFIG_DIR)
+    isMultiUserMode() && !isAdmin(req) ? [] : (await readRemoteHosts(CODEMAN_CONFIG_DIR)).map(redactRemoteHost)
   );
 
   // Hosts are machine-level resources: only admins may define them in multi-user mode.
@@ -590,7 +595,7 @@ export function registerCaseRoutes(app: FastifyInstance, ctx: EventPort & Config
       return createErrorResponse(ApiErrorCode.ALREADY_EXISTS, 'Remote host already exists');
     }
     await writeRemoteHosts(CODEMAN_CONFIG_DIR, [...hosts, host]);
-    return { success: true, data: { host } };
+    return { success: true, data: { host: redactRemoteHost(host) } };
   });
 
   app.put('/api/remote-hosts/:id', async (req, reply): Promise<ApiResponse<{ host: unknown }>> => {
@@ -602,9 +607,13 @@ export function registerCaseRoutes(app: FastifyInstance, ctx: EventPort & Config
     const index = hosts.findIndex((item) => item.id === id);
     if (index === -1) return createErrorResponse(ApiErrorCode.NOT_FOUND, 'Remote host not found');
     const next = [...hosts];
-    next[index] = host;
+    // ⚠️ The GET above redacts the password, so a host round-tripping through the
+    // UI arrives WITHOUT one; writing it straight back would silently erase the
+    // stored secret and the next launch would fall back to key auth and fail. An
+    // explicit empty string still clears it — see mergeRemoteHostSecret.
+    next[index] = mergeRemoteHostSecret(host, hosts[index]);
     await writeRemoteHosts(CODEMAN_CONFIG_DIR, next);
-    return { success: true, data: { host } };
+    return { success: true, data: { host: redactRemoteHost(next[index]) } };
   });
 
   app.delete('/api/remote-hosts/:id', async (req, reply): Promise<ApiResponse<{ id: string }>> => {

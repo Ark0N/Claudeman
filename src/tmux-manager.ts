@@ -2110,6 +2110,30 @@ export class TmuxManager extends EventEmitter implements TerminalMultiplexer {
   /**
    * Configure Gemini-specific environment on a tmux session.
    */
+  /**
+   * Hand a remote host's stored SSH password to the pane as `SSHPASS`.
+   *
+   * `buildSshConnectionArgs` launches such a host through `sshpass -e`, which
+   * reads exactly this variable. Injected with socket-scoped `tmux setenv` so the
+   * secret never appears in `ps` — the same discipline the CLI API keys follow —
+   * and inherited by `respawn-pane`, so a respawned wrapper reconnects without the
+   * server having to re-send anything.
+   *
+   * ⚠️ A user's own `envOverrides` cannot reach this variable: `SSHPASS` matches
+   * no entry in ALLOWED_ENV_PREFIXES / ALLOWED_ENV_KEYS, so unlike the DeepSeek
+   * case there is no later `applyEnvOverrides` pass that could override it.
+   */
+  private _configureSshPassword(muxName: string, remote?: SessionRemote): void {
+    if (!remote?.password) return;
+    try {
+      execSync(`${this.tmux()} setenv -t "${muxName}" SSHPASS ${shellescape(remote.password)}`, { stdio: 'ignore' });
+    } catch {
+      // Best-effort like the sibling _configure* helpers: a failed setenv surfaces
+      // as an auth failure in the pane, which is visible, rather than as a thrown
+      // session-create that hides the real cause.
+    }
+  }
+
   private _configureGemini(muxName: string): void {
     setGeminiEnvVars(this.tmux(), muxName);
   }
@@ -2373,6 +2397,10 @@ export class TmuxManager extends EventEmitter implements TerminalMultiplexer {
 
       // Apply user-supplied env overrides (e.g., CLAUDE_CODE_EFFORT_LEVEL) via tmux setenv
       // so secret values stay off the bash command line. Must run before respawn-pane.
+      // A password-authenticated remote host needs SSHPASS in the pane (see
+      // _configureSshPassword); a no-op for key auth and every non-remote session.
+      this._configureSshPassword(muxName, remote);
+
       this.applyEnvOverrides(muxName, envOverrides);
 
       // Replace the shell with the actual command (no echo in terminal). Keep
@@ -2602,6 +2630,10 @@ export class TmuxManager extends EventEmitter implements TerminalMultiplexer {
       }
 
       // Re-apply user env overrides before respawn so the new shell inherits them.
+      // A password-authenticated remote host needs SSHPASS in the pane (see
+      // _configureSshPassword); a no-op for key auth and every non-remote session.
+      this._configureSshPassword(muxName, remote);
+
       this.applyEnvOverrides(muxName, envOverrides);
 
       // -c /tmp + cd bounce — see createSession() for rationale (stale FUSE state).
