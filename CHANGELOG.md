@@ -1,5 +1,49 @@
 # aicodeman
 
+## 1.24.3
+
+### Patch Changes
+
+- Docker Compose deployment, and the plan-usage chip stops losing its 5-hour window.
+
+  **Run Codeman itself in a container** (#349, @opticon454). `docker/` now carries a
+  local-image Compose deployment: copy `docker/.env.example` to `docker/.env`, set
+  `CODEMAN_PASSWORD`, run `bash docker/Start-Codeman.sh`. Docker cases then start as
+  **sibling** containers through the mounted host socket rather than nested ones, which
+  inverts an assumption the bare-host path takes for granted: the daemon no longer shares
+  Codeman's filesystem, so a bind source that is valid inside Codeman means nothing to it.
+  `CODEMAN_DOCKER_HOST_HOME` translates sources under HOME into the daemon's namespace and
+  `CODEMAN_CASES_PATH` points the cases dir at a host-absolute bind mount, so a workspace
+  resolves to the same absolute path on both sides. `CODEMAN_DOCKER_DISABLE_SWAP_LIMIT=1`
+  drops `--memory-swap` for hosts without swap accounting (`--memory` still applies) and
+  filters only that one kernel warning. Guides: `docs/docker-compose.md`, `docker/README.md`.
+
+  Three things were fixed while landing it:
+  - **`docker/.env` was being baked into the image.** A `.dockerignore` pattern matches the
+    whole context-relative path, so the bare `.env` line excluded only the root file while
+    `COPY . .` picked up `docker/.env` — the file the deployment's own README tells you to
+    fill with `CODEMAN_PASSWORD` and provider API keys — and left it at
+    `/opt/codeman/docker/.env`. Now excluded via `**/.env`, verified in both directions
+    against a real build context with a canary secret.
+  - **`codeman skill install --case <name>` could not find a case under Compose.**
+    `CODEMAN_CASES_PATH` moved the server's cases dir but not the CLI's, which still
+    hardcoded `~/codeman-cases`. Both now resolve through one place.
+  - **A Docker case handed its Claude conversation id to every other CLI.** `resumeOnStart`
+    seeded `dockerResumeId` from `lastClaudeSessionId` regardless of mode, and
+    `appendResumeFlag()` maps a resume id onto codex/gemini/pi/grok/deepseek/omp/antigravity.
+    This one is a plain master bug, unrelated to Compose.
+
+  **The plan-usage chip keeps its 5-hour slot.** It silently shrank from `5h 4% · 7d 52%`
+  to a lone `7d 52%`, which reads as half the feature breaking. Nothing was broken: Claude
+  Code ships `rate_limits.five_hour` "only while the API reports it and its resets_at has
+  not passed", so between 5-hour session windows the key simply leaves the statusline
+  payload. The slot now stays with a dimmed em dash and the tooltip says "no active session
+  window". Claude only — a missing Codex bucket means that plan has no such limit, so those
+  stay omitted.
+
+  ### Thanks
+  - @opticon454 for #349, and for a write-up that made an infrastructure PR quick to review
+
 ## 1.24.2
 
 ### Patch Changes
