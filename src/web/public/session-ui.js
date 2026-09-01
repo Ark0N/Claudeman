@@ -2466,6 +2466,9 @@ Object.assign(CodemanApp.prototype, {
       'remoteHostPort',
       'remoteHostCodexCommand',
       'remoteHostIdentityFile',
+      // ⚠️ Must be cleared with the rest: a password left in the field would be
+      // silently inherited by the NEXT host created from this form.
+      'remoteHostPassword',
       'remoteHostSocksProxy',
       'remoteHostJumpHost',
       'remoteHostExtraSshOptions',
@@ -3049,6 +3052,8 @@ Object.assign(CodemanApp.prototype, {
     // COD-107 — port + advanced SSH connection options.
     const portRaw = document.getElementById('remoteHostPort').value.trim();
     const identityFile = document.getElementById('remoteHostIdentityFile').value.trim();
+    // Deliberately NOT trimmed: leading/trailing spaces can be part of a password.
+    const password = document.getElementById('remoteHostPassword').value;
     const socksProxy = document.getElementById('remoteHostSocksProxy').value.trim();
     const jumpHost = document.getElementById('remoteHostJumpHost').value.trim();
     const extraSshOptions = document.getElementById('remoteHostExtraSshOptions').value
@@ -3085,6 +3090,7 @@ Object.assign(CodemanApp.prototype, {
         username,
         ...(port ? { port } : {}),
         ...(identityFile ? { identityFile } : {}),
+        ...(password ? { password } : {}),
         ...(socksProxy ? { socksProxy } : {}),
         ...(jumpHost ? { jumpHost } : {}),
         ...(extraSshOptions.length ? { extraSshOptions } : {}),
@@ -3417,6 +3423,8 @@ Object.assign(CodemanApp.prototype, {
     const username = document.getElementById('remoteHostUsername').value.trim();
     const portRaw = document.getElementById('remoteHostPort').value.trim();
     const identityFile = document.getElementById('remoteHostIdentityFile').value.trim();
+    // Deliberately NOT trimmed: leading/trailing spaces can be part of a password.
+    const password = document.getElementById('remoteHostPassword').value;
     const socksProxy = document.getElementById('remoteHostSocksProxy').value.trim();
     const jumpHost = document.getElementById('remoteHostJumpHost').value.trim();
     const codexCommand = document.getElementById('remoteHostCodexCommand').value.trim();
@@ -3436,6 +3444,7 @@ Object.assign(CodemanApp.prototype, {
       username,
       ...(port ? { port } : {}),
       ...(identityFile ? { identityFile } : {}),
+      ...(password ? { password } : {}),
       ...(socksProxy ? { socksProxy } : {}),
       ...(jumpHost ? { jumpHost } : {}),
       ...(extraSshOptions.length ? { extraSshOptions } : {}),

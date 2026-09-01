@@ -2819,6 +2819,11 @@
                   <span class="form-hint">Optional. Path to a private key on this machine (passed to ssh -i). Never the key contents.</span>
                 </div>
                 <div class="form-row">
+                  <label>Password</label>
+                  <input type="password" id="remoteHostPassword" placeholder="leave blank to use a key" autocomplete="new-password" autocapitalize="off" autocorrect="off" spellcheck="false">
+                  <span class="form-hint">Optional, for hosts that accept no key. Stored on this machine only (<code>remote-hosts.json</code>, mode 0600), never sent back to the browser, and handed to ssh through <code>sshpass</code>&#39;s SSHPASS variable rather than the command line. Needs <code>sshpass</code> installed here. Prefer a key when the host allows one.</span>
+                </div>
+                <div class="form-row">
                   <label>SOCKS Proxy</label>
                   <input type="text" id="remoteHostSocksProxy" placeholder="127.0.0.1:1080" autocomplete="off" autocapitalize="off" spellcheck="false">
                   <span class="form-hint">Optional. host:port of a SOCKS5 proxy (e.g. cloudflared). Routes ssh through it via a ProxyCommand.</span>

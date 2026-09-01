@@ -5,10 +5,10 @@
  * environment variable, never argv), and the variable itself is injected into
  * the pane with socket-scoped `tmux setenv` like every other secret here.
  */
-import { promises as fs } from 'node:fs';
+import { promises as fs, readFileSync } from 'node:fs';
 import { mkdtempSync } from 'node:fs';
 import { tmpdir } from 'node:os';
-import { join } from 'node:path';
+import { join, resolve } from 'node:path';
 import { describe, expect, it } from 'vitest';
 import {
   buildSshConnectionArgs,
@@ -106,5 +106,44 @@ describe('remote-hosts.json holds a secret, so it is 0600', () => {
     await fs.writeFile(path, '[]', { mode: 0o644 });
     await writeRemoteHosts(dir, [{ ...host, password: 'secret' }]);
     expect((await fs.stat(path)).mode & 0o777).toBe(0o600);
+  });
+});
+
+describe('the remote-host form wires the password without leaking it', () => {
+  const html = readFileSync(resolve(import.meta.dirname, '../src/web/public/index.html'), 'utf8');
+  const ui = readFileSync(resolve(import.meta.dirname, '../src/web/public/session-ui.js'), 'utf8');
+
+  it('renders a masked field, never a plain text input', () => {
+    const field = /<input[^>]*id="remoteHostPassword"[^>]*>/.exec(html)?.[0] ?? '';
+    expect(field, 'remoteHostPassword must exist').not.toBe('');
+    expect(field).toContain('type="password"');
+  });
+
+  it('sends the password on BOTH submit paths', () => {
+    // The form is reachable from "add a remote host" AND from the remote-case
+    // create flow, which builds its own host payload; wiring only one leaves the
+    // other silently key-only.
+    expect(ui.match(/\.\.\.\(password \? \{ password \} : \{\}\),/g) ?? []).toHaveLength(2);
+    expect(ui.match(/getElementById\('remoteHostPassword'\)/g) ?? []).toHaveLength(2);
+  });
+
+  it('does not trim the value, since spaces can be part of a password', () => {
+    for (const m of ui.matchAll(/const password = document\.getElementById\('remoteHostPassword'\)\.value([^;]*);/g)) {
+      expect(m[1]).toBe('');
+    }
+  });
+
+  it('clears the field with the rest of the form', () => {
+    // Left behind, a typed password would be inherited by the NEXT host created
+    // from this form — a real leak between two different machines' credentials.
+    const list = /const remoteFields = \[([\s\S]*?)\];/.exec(ui)?.[1] ?? '';
+    expect(list, 'remoteFields list not found').not.toBe('');
+    expect(list).toContain("'remoteHostPassword'");
+  });
+
+  it('never populates the field from a server response', () => {
+    // GET redacts the password, so anything assigning to this field would be
+    // writing a placeholder that a later save would persist as the real value.
+    expect(ui).not.toMatch(/getElementById\('remoteHostPassword'\)\.value\s*=/);
   });
 });
