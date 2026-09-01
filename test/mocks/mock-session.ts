@@ -29,6 +29,32 @@ export class MockSession extends EventEmitter {
   terminalBuffer: string = '';
   /** Mirrors Session.lastSubmitAt — the response viewer credits history entries by it. */
   lastSubmitAt: number = 0;
+  /** Mirrors Session.claudeSessionId — the conversation the viewer reads. */
+  claudeSessionId: string | null = null;
+  /** Mirrors Session.claudeSessionIdIsFirstHand — set only by a hook adoption. */
+  claudeSessionIdIsFirstHand: boolean = false;
+  /** Mirrors Session.claudeSessionChain — oldest first, current last. */
+  claudeSessionChain: string[] = [];
+
+  /** Mirrors Session.adoptClaudeSessionId, including the first-hand chain rule. */
+  adoptClaudeSessionId(newId: string, options: { firstHand?: boolean } = {}): void {
+    if (!newId) return;
+    if (options.firstHand) {
+      this.claudeSessionIdIsFirstHand = true;
+      if (this.claudeSessionChain[this.claudeSessionChain.length - 1] !== newId) {
+        const existing = this.claudeSessionChain.indexOf(newId);
+        if (existing !== -1) this.claudeSessionChain.splice(existing, 1);
+        this.claudeSessionChain.push(newId);
+      }
+    }
+    if (newId === this.claudeSessionId) return;
+    this.claudeSessionId = newId;
+  }
+
+  /** Mirrors Session.markPromptSubmitted. */
+  markPromptSubmitted(): void {
+    this.lastSubmitAt = Date.now();
+  }
 
   private _muxName: string | null = null;
 

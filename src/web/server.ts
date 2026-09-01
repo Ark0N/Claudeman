@@ -2794,6 +2794,10 @@ export class WebServer extends EventEmitter {
               // the launch conversation until the user types again, even though
               // the re-attached CLI is on a post-`/clear` one.
               lastSubmitAt: savedState?.lastSubmitAt,
+              // Conversations this pane provably owned, oldest first. Its tail is
+              // the conversation the CLI was on when the server stopped, which is
+              // what a re-attach must point the viewer at instead of the launch id.
+              claudeSessionChain: savedState?.claudeSessionChain,
               // The pane's last output, previous run's value. Without it every
               // restart restamped all sessions "now" (constructor + the attach
               // repaint within the same second), flattening the home screens'

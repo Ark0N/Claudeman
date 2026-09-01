@@ -366,18 +366,32 @@ export function generateHooksConfig(): { hooks: Record<string, unknown[]> } {
   // never lands in this config and rotation needs no respawn. If the var/file is
   // missing the header is empty — the middleware then allows the request only on
   // the plain loopback bypass (tunnel down), same as pre-secret behavior.
-  const curlCmd = (event: HookEventType) =>
+  const curlCmd = (event: HookEventType, options: { discardStdout?: boolean } = {}) =>
     `HOOK_DATA=$(cat 2>/dev/null || echo '{}'); ` +
     `printf '{"event":"${event}","sessionId":"%s","data":%s}' "$CODEMAN_SESSION_ID" "$HOOK_DATA" | ` +
     // `-k`, same as the statusline exporter: CODEMAN_API_URL is loopback HTTPS with
     // a self-signed cert on --https/tailscale installs. Without it curl exits 60,
     // the `|| true` swallows it, and ALL SIX hook events die silently: respawn loses
     // its definitive idle signals and the wait endpoints lose stop/blocked.
-    `curl -sk -X POST "$CODEMAN_API_URL/api/hook-event" ` +
+    `curl -sk ${options.discardStdout ? '-o /dev/null ' : ''}-X POST "$CODEMAN_API_URL/api/hook-event" ` +
     `-H 'Content-Type: application/json' ` +
     `-H "X-Codeman-Hook-Secret: $(cat "$CODEMAN_HOOK_SECRET_FILE" 2>/dev/null)" ` +
     `--data @- ` +
     `2>/dev/null || true`;
+
+  // The same POST with stdout DISCARDED, via curl's own `-o`. UserPromptSubmit is
+  // one of the hook events whose stdout Claude Code injects into the model's
+  // context (the CLI's own hook reference: "Exit code 0 - stdout shown to
+  // Claude"), so an undiscarded curl pastes Codeman's `{"success":true,…}`
+  // envelope into the user's prompt on every single turn.
+  // ⚠️ It MUST be curl's flag, not a trailing redirect. `curlCmd` already ends
+  // `… 2>/dev/null || true`, and in `pipeline || true >/dev/null` the shell binds
+  // the redirection to `true` — which never runs on the success path — so the
+  // envelope still reaches stdout. Verified in dash and bash.
+  // ⚠️ The flag is opt-in so the other events' command text stays byte-identical:
+  // their stdout feeds the SSE stream harmlessly, and changing it would rewrite
+  // every workspace's settings file for no gain.
+  const curlCmdSilent = (event: HookEventType) => curlCmd(event, { discardStdout: true });
 
   return {
     hooks: {
@@ -408,6 +422,16 @@ export function generateHooksConfig(): { hooks: Record<string, unknown[]> } {
       Stop: [
         {
           hooks: [{ type: 'command', command: curlCmd('stop'), timeout: HOOK_TIMEOUT_SECONDS }],
+        },
+      ],
+      // The pane's LIVE conversation id, reported by the CLI process itself.
+      // Without it the response viewer has to guess which `<uuid>.jsonl` a pane
+      // is on after a `/clear`, and the only anchor it can guess from is an
+      // Enter that went THROUGH Codeman — so a user who attaches to tmux
+      // directly never gets one and stays pinned to the launch conversation.
+      UserPromptSubmit: [
+        {
+          hooks: [{ type: 'command', command: curlCmdSilent('prompt_submitted'), timeout: HOOK_TIMEOUT_SECONDS }],
         },
       ],
       SubagentStop: [
@@ -735,9 +759,22 @@ export async function refreshStaleCodemanHooks(casePath: string): Promise<void> 
     // Approvals Inbox needs the elicitation_complete/elicitation_response
     // matchers; their absence marks a pre-inbox hooks block.
     const hasElicitationComplete = hooksJson.includes('elicitation_complete');
+    // The UserPromptSubmit event is what gives a tmux-driven pane a first-hand
+    // conversation id; its absence marks a pre-prompt_submitted hooks block.
+    // ⚠️ No surrounding quotes: `hooksJson` is JSON.stringify'd, so the marker
+    // inside the command reads \"prompt_submitted\" and a quoted needle never
+    // matches — which would make this gate permanently false and rewrite every
+    // workspace's settings file on every Claude spawn. The sibling markers are
+    // quote-free for the same reason.
+    const hasPromptSubmit = hooksJson.includes('prompt_submitted');
     if (
       !isOurs ||
-      (hasSecret && hasBackgroundWake && hasSubagentStopGuard && hasElicitationComplete && !hasTlsFlaglessCurl)
+      (hasSecret &&
+        hasBackgroundWake &&
+        hasSubagentStopGuard &&
+        hasElicitationComplete &&
+        hasPromptSubmit &&
+        !hasTlsFlaglessCurl)
     )
       return;
     const generated = generateHooksConfig();

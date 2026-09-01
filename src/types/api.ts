@@ -110,6 +110,10 @@ export type HookEventType =
   | 'stop'
   | 'teammate_idle'
   | 'task_completed'
+  // Claude Code's UserPromptSubmit. The payload's `session_id` is the pane's
+  // LIVE conversation id, reported by the CLI process itself, so it survives a
+  // `/clear` without any cwd/timestamp correlation.
+  | 'prompt_submitted'
   // No Claude Code hook behind this one: it is the DeepSeek status bridge's
   // "a turn STARTED" report (see deepseek-status-shim.ts). Keep in step with
   // HookEventSchema in web/schemas.ts.

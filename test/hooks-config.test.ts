@@ -42,6 +42,34 @@ describe('generateHooksConfig', () => {
     expect(config.hooks.Stop).toHaveLength(1);
   });
 
+  it('reports the live conversation id on every prompt, with stdout discarded', () => {
+    const config = generateHooksConfig();
+    expect(config.hooks.UserPromptSubmit).toBeInstanceOf(Array);
+    expect(config.hooks.UserPromptSubmit).toHaveLength(1);
+    const command = (config.hooks.UserPromptSubmit as Array<{ hooks: Array<{ command: string }> }>)[0].hooks[0].command;
+    expect(command).toContain('"event":"prompt_submitted"');
+    expect(command).toContain('$CODEMAN_SESSION_ID');
+    // ⚠️ Claude Code injects a UserPromptSubmit hook's stdout into the model's
+    // context ("Exit code 0 - stdout shown to Claude"), so without this the API
+    // envelope is pasted into the user's own prompt on every turn. Every other
+    // event's stdout is harmless (it feeds SSE).
+    // ⚠️ Assert curl's OWN flag, not a trailing redirect: the command already
+    // ends `… 2>/dev/null || true`, and in `pipeline || true >/dev/null` the
+    // shell binds the redirect to `true`, which never runs on the success path.
+    // A `endsWith('>/dev/null')` assertion passes on exactly that broken form.
+    expect(command).toContain('curl -sk -o /dev/null -X POST');
+    expect(command.trimEnd().endsWith('>/dev/null')).toBe(false);
+  });
+
+  it("leaves every other hook event's command text byte-identical", () => {
+    // The opt-in discard exists so the five SSE-fed events do not change shape:
+    // rewriting their command churns every workspace's settings.local.json.
+    const config = generateHooksConfig();
+    const stop = (config.hooks.Stop as Array<{ hooks: Array<{ command: string }> }>)[0].hooks[0].command;
+    expect(stop).toContain('curl -sk -X POST');
+    expect(stop).not.toContain('-o /dev/null');
+  });
+
   it('should guard subagent stops while their background work is active', () => {
     const config = generateHooksConfig();
     const subagentHooks = config.hooks.SubagentStop as Array<{
@@ -322,6 +350,39 @@ describe('writeHooksConfig', () => {
     expect(parsed.hooks.PostToolUse[0].hooks).toHaveLength(1);
     expect(serialized).toContain('CODEMAN_BACKGROUND_REWAKE_V3');
     expect(serialized).not.toContain('CODEMAN_BACKGROUND_REWAKE_V1');
+  });
+
+  it('heals a hooks block written before UserPromptSubmit existed', async () => {
+    const claudeDir = join(testDir, '.claude');
+    const settingsPath = join(claudeDir, 'settings.local.json');
+    mkdirSync(claudeDir, { recursive: true });
+    // An otherwise-current block from the previous release: the pane would keep
+    // guessing its conversation from ~/.claude/history.jsonl forever.
+    const hooks = generateHooksConfig().hooks;
+    delete hooks.UserPromptSubmit;
+    writeFileSync(settingsPath, JSON.stringify({ hooks }, null, 2));
+
+    await refreshStaleCodemanHooks(testDir);
+
+    const parsed = JSON.parse(readFileSync(settingsPath, 'utf-8'));
+    expect(JSON.stringify(parsed.hooks.UserPromptSubmit)).toContain('prompt_submitted');
+  });
+
+  it('leaves an already-current hooks block untouched', async () => {
+    // ⚠️ The staleness gate reads a JSON.stringify'd blob, so a marker written
+    // with surrounding quotes never matches and the gate is permanently false —
+    // which rewrites every workspace's settings.local.json on every Claude
+    // spawn instead of never. This asserts the no-op, which is the property a
+    // quoted needle silently breaks.
+    const claudeDir = join(testDir, '.claude');
+    const settingsPath = join(claudeDir, 'settings.local.json');
+    mkdirSync(claudeDir, { recursive: true });
+    writeFileSync(settingsPath, JSON.stringify({ hooks: generateHooksConfig().hooks }, null, 2));
+    const before = readFileSync(settingsPath, 'utf-8');
+
+    await refreshStaleCodemanHooks(testDir);
+
+    expect(readFileSync(settingsPath, 'utf-8')).toBe(before);
   });
 
   it('replaces the V2 background hook without duplicating it', async () => {
