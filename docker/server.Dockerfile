@@ -29,13 +29,33 @@ RUN apt-get update \
  && apt-get install -y --no-install-recommends \
       ca-certificates \
       curl \
-      docker.io \
       git \
       openssh-client \
       procps \
       ripgrep \
       tmux \
  && rm -rf /var/lib/apt/lists/*
+
+# The Docker CLI, taken from the official image rather than Debian's `docker.io`.
+# That package is the full ENGINE: with --no-install-recommends it still pulls 15
+# packages including containerd, runc, dmsetup and iptables, none of which a
+# client that only talks to a mounted socket can use. Measured on top of this
+# base image: `docker.io` costs 266 MB and ships Docker 20.10.24 (2023), while
+# these two files cost 108 MB and ship the current CLI (493 MB vs 335 MB total).
+#
+# The binaries are STATIC Go builds, so they run on this glibc image even though
+# the image they come from is Alpine (verified: `docker --version`, `docker ps`
+# and `docker build` all work here against a mounted host socket).
+#
+# buildx is copied on purpose. `scripts/build-agent-image.mjs` shells out to
+# `docker build` — Codeman auto-builds the agent image on the first Docker case —
+# and without the plugin that silently falls back to the CLASSIC builder, which
+# Docker has deprecated and will eventually drop. `docker-compose` is NOT copied:
+# Codeman never shells out to it.
+COPY --from=docker:29-cli /usr/local/bin/docker /usr/local/bin/docker
+COPY --from=docker:29-cli \
+     /usr/local/libexec/docker/cli-plugins/docker-buildx \
+     /usr/local/libexec/docker/cli-plugins/docker-buildx
 
 # Keep credentials out of the image. Users authenticate these CLIs at runtime
 # through Codeman sessions, and the configured host bind mount retains state.
