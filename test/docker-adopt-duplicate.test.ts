@@ -55,8 +55,8 @@ describe('the picker only offers what the server would accept', () => {
   });
 });
 
-describe('applying a source fills what stays and clears what must differ', () => {
-  const fn = ui.slice(ui.indexOf('applyDockerCloneSource()'), ui.indexOf('applyDockerCloneSource()') + 1400);
+describe('applying a source fills every field, including the two that must differ', () => {
+  const fn = ui.slice(ui.indexOf('applyDockerCloneSource()'), ui.indexOf('dockerCloneGuard()'));
 
   it('carries over container, host and workspace', () => {
     for (const id of ['dockerContainerName', 'dockerHostId', 'dockerWorkspacePath']) {
@@ -64,19 +64,58 @@ describe('applying a source fills what stays and clears what must differ', () =>
     }
   });
 
-  it('clears the case name and the container workdir', () => {
-    // Keeping either would pre-fill a value the server is certain to refuse —
-    // the name as an existing case, the workdir as an exact twin.
-    expect(fn).toContain("set('dockerCaseName', '')");
-    expect(fn).toContain("set('dockerAdoptWorkdir', '')");
+  it('PRE-FILLS the case name and container workdir rather than clearing them', () => {
+    // Editing `/srv/app/api` into `/srv/app/web` beats retyping a long path, and a
+    // form with three fields mysteriously filled and two blank reads as broken.
+    // What stops an unchanged submit is the guard, not an empty field.
+    expect(fn).toContain("set('dockerCaseName', option.value)");
+    expect(fn).toContain("set('dockerAdoptWorkdir', option.dataset.workdir)");
   });
 
-  it('focuses the workdir, the field the user came here to change', () => {
-    expect(fn).toMatch(/getElementById\('dockerAdoptWorkdir'\)\?\.focus\(\)/);
+  it('remembers what it applied, so the guard can tell unchanged from similar', () => {
+    expect(fn).toContain('select.dataset.appliedName = option.value');
+    expect(fn).toContain('select.dataset.appliedWorkdir =');
+  });
+
+  it('focuses the workdir with the caret at the END, where the edit happens', () => {
+    expect(fn).toMatch(/setSelectionRange\(workdir\.value\.length, workdir\.value\.length\)/);
   });
 
   it('does nothing for the blank "start from scratch" option', () => {
     expect(fn).toMatch(/if \(!option \|\| !option\.value\) return;/);
+  });
+});
+
+describe('the guard refuses a duplicate that was never edited', () => {
+  const fn = ui.slice(ui.indexOf('dockerCloneGuard()'), ui.indexOf('dockerCloneGuard()') + 1400);
+
+  it('flags an unchanged case name', () => {
+    expect(fn).toMatch(/appliedName/);
+    expect(fn).toContain('give this one a new name');
+  });
+
+  it('flags an unchanged container workdir', () => {
+    expect(fn).toMatch(/appliedWorkdir/);
+    expect(fn).toContain('another directory');
+  });
+
+  it('stays silent when no source was picked', () => {
+    // Typing a fresh adoption by hand must not be second-guessed.
+    expect(fn).toMatch(/if \(!select \|\| !select\.value\) return null;/);
+  });
+
+  it('runs BEFORE the request, and focuses the offending field', () => {
+    const submit = ui.slice(ui.indexOf('const cloneIssue'), ui.indexOf('const cloneIssue') + 500);
+    expect(submit).toContain('cloneIssue.el.focus()');
+    expect(submit).toContain('return;');
+  });
+
+  it('reports into a status element that actually exists', () => {
+    // A dead id would silently drop the explanation next to the field.
+    const submit = ui.slice(ui.indexOf('const cloneIssue'), ui.indexOf('const cloneIssue') + 500);
+    const id = /getElementById\('([^']+)'\)/.exec(submit)?.[1];
+    expect(id).toBeTruthy();
+    expect(html).toContain(`id="${id}"`);
   });
 });
 
