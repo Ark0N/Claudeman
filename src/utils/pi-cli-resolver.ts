@@ -16,9 +16,9 @@
  */
 
 import { execFileSync } from 'node:child_process';
-import { join } from 'node:path';
-import { homedir } from 'node:os';
 import { EXEC_TIMEOUT_MS } from '../config/exec-timeout.js';
+import { getCli } from '../config/cli-registry/registry.js';
+import { expandHome } from './cli-resolver.js';
 import {
   createCliExecutableResolver,
   formatCliNotFoundMessage,
@@ -26,13 +26,12 @@ import {
 } from './cli-executable-resolver.js';
 
 /** Common directories where the Pi CLI binary may be installed */
-const PI_SEARCH_DIRS = [
-  join(homedir(), '.local', 'bin'),
-  '/usr/local/bin',
-  join(homedir(), '.bun', 'bin'),
-  join(homedir(), '.npm-global', 'bin'),
-  join(homedir(), 'bin'),
-];
+/**
+ * Directories probed after `which`, read from this CLI's registry entry so the spawn
+ * path, `codeman doctor` and this resolver cannot disagree about where to look.
+ * `~` is expanded by `expandHome`; nothing else is interpreted.
+ */
+const PI_SEARCH_DIRS = (): string[] => (getCli('pi')?.discovery.searchDirs ?? []).map(expandHome);
 
 /**
  * A real `pi --version` prints a semver-shaped string (e.g. `0.84.1`).

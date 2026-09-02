@@ -20,9 +20,9 @@
  */
 
 import { execFileSync } from 'node:child_process';
-import { join } from 'node:path';
-import { homedir } from 'node:os';
 import { EXEC_TIMEOUT_MS } from '../config/exec-timeout.js';
+import { getCli } from '../config/cli-registry/registry.js';
+import { expandHome } from './cli-resolver.js';
 import {
   createCliExecutableResolver,
   formatCliNotFoundMessage,
@@ -30,12 +30,12 @@ import {
 } from './cli-executable-resolver.js';
 
 /** Common directories where the Grok CLI binary may be installed */
-const GROK_SEARCH_DIRS = [
-  join(homedir(), '.grok', 'bin'),
-  join(homedir(), '.local', 'bin'),
-  '/usr/local/bin',
-  join(homedir(), 'bin'),
-];
+/**
+ * Directories probed after `which`, read from this CLI's registry entry so the spawn
+ * path, `codeman doctor` and this resolver cannot disagree about where to look.
+ * `~` is expanded by `expandHome`; nothing else is interpreted.
+ */
+const GROK_SEARCH_DIRS = (): string[] => (getCli('grok')?.discovery.searchDirs ?? []).map(expandHome);
 
 /**
  * A real `grok --version` prints `grok 1.0.5 (5115b46bc9)` (measured, 1.0.5).

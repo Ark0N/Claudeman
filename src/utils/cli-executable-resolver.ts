@@ -207,13 +207,23 @@ export function createProductionCliResolverHost(options: ProductionCliResolverHo
 export function createCliExecutableResolver<T = undefined>(
   options: {
     binary: string;
-    searchDirs: string[];
+    /**
+     * Where to look after the process PATH. A THUNK is accepted alongside an array so a
+     * caller sourcing its dirs from the CLI registry can defer the lookup: passing
+     * `searchDirs: FOO_SEARCH_DIRS()` evaluates at module import, which froze the dirs
+     * before a user `clis.json` or a `reloadCliRegistry()` could be seen. Resolved on each
+     * probe and each `diagnostics()` call — a handful of string ops, and only when a probe
+     * actually runs.
+     */
+    searchDirs: string[] | (() => string[]);
     validateCandidate?: (path: string) => CandidateValidation<T>;
     /** Clock injection for tests driving the failure backoff. Defaults to `Date.now`. */
     now?: () => number;
   },
   host: CliResolverHost = createProductionCliResolverHost()
 ): CliExecutableResolver<T> {
+  const resolveSearchDirs = (): string[] =>
+    typeof options.searchDirs === 'function' ? options.searchDirs() : options.searchDirs;
   if (!SAFE_BINARY_NAME.test(options.binary)) {
     throw new Error(`Unsafe CLI binary name: ${options.binary}`);
   }
@@ -248,7 +258,7 @@ export function createCliExecutableResolver<T = undefined>(
 
       cached = accept(host.findOnProcessPath(options.binary), 'process-path');
       if (!cached) {
-        for (const dir of options.searchDirs) {
+        for (const dir of resolveSearchDirs()) {
           cached = accept(join(dir, options.binary), 'common-directory');
           if (cached) break;
         }
@@ -271,7 +281,7 @@ export function createCliExecutableResolver<T = undefined>(
       processPath: host.processPath,
       shellPath: host.shellPath,
       shellArgs: [...host.shellArgs],
-      searchDirs: [...options.searchDirs],
+      searchDirs: [...resolveSearchDirs()],
     }),
   };
 }

@@ -1257,7 +1257,7 @@ program
   .action(async (options) => {
     const { createRealHost, checkAll } = await import('./utils/dependency-checker.js');
     const { renderTable, renderJson, computeExitCode } = await import('./utils/dependency-report.js');
-    const { DEPENDENCY_REGISTRY, TOOL_CATEGORIES } = await import('./config/dependency-registry.js');
+    const { dependencyRegistry, TOOL_CATEGORIES } = await import('./config/dependency-registry.js');
 
     if (options.category && !(TOOL_CATEGORIES as readonly string[]).includes(options.category)) {
       console.error(`Unknown category "${options.category}". Valid categories: ${TOOL_CATEGORIES.join(', ')}`);
@@ -1265,9 +1265,8 @@ program
     }
 
     const host = createRealHost();
-    const registry = options.category
-      ? DEPENDENCY_REGISTRY.filter((t) => t.category === options.category)
-      : DEPENDENCY_REGISTRY;
+    const allTools = dependencyRegistry();
+    const registry = options.category ? allTools.filter((t) => t.category === options.category) : allTools;
     const results = checkAll(registry, host);
 
     if (options.json) {

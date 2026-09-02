@@ -7,8 +7,8 @@
  * @module utils/antigravity-cli-resolver
  */
 
-import { join } from 'node:path';
-import { homedir } from 'node:os';
+import { getCli } from '../config/cli-registry/registry.js';
+import { expandHome } from './cli-resolver.js';
 import {
   createCliExecutableResolver,
   formatCliNotFoundMessage,
@@ -16,14 +16,12 @@ import {
 } from './cli-executable-resolver.js';
 
 /** Common directories where the Antigravity CLI binary may be installed */
-const ANTIGRAVITY_SEARCH_DIRS = [
-  join(homedir(), '.local', 'bin'),
-  join(homedir(), '.antigravity', 'bin'),
-  '/usr/local/bin',
-  join(homedir(), '.bun', 'bin'),
-  join(homedir(), '.npm-global', 'bin'),
-  join(homedir(), 'bin'),
-];
+/**
+ * Directories probed after `which`, read from this CLI's registry entry so the spawn
+ * path, `codeman doctor` and this resolver cannot disagree about where to look.
+ * `~` is expanded by `expandHome`; nothing else is interpreted.
+ */
+const ANTIGRAVITY_SEARCH_DIRS = (): string[] => (getCli('antigravity')?.discovery.searchDirs ?? []).map(expandHome);
 
 const ANTIGRAVITY_NOT_FOUND =
   'Antigravity CLI not found. Install with: curl -fsSL https://antigravity.google/cli/install.sh | bash';

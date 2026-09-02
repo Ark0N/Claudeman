@@ -275,8 +275,13 @@ describe('DeepSeek status bridge', () => {
     // Those sessions must keep the pane segmenter. Static, because standing up
     // a docker/remote session in the unit harness is exactly what the tmux
     // test-mode mocks exist to avoid.
+    //
+    // The mode check itself is now a capability read (`transcript === 'deepseek-zstd'`) —
+    // which reader understands this CLI's on-disk history is exactly the kind of fact the
+    // CLI registry owns. What this test guards is unchanged and is the part that matters:
+    // the two LOCATION exclusions beside it.
     const routes = readFileSync(join(process.cwd(), 'src/web/routes/session-routes.ts'), 'utf-8');
-    expect(routes).toMatch(/session\.mode === 'deepseek' && !session\.docker && !session\.remote/);
+    expect(routes).toMatch(/capabilities\.transcript === 'deepseek-zstd' && !session\.docker && !session\.remote/);
   });
 
   it('maps the harness lifecycle states onto real hook events', () => {

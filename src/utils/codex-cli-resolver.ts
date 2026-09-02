@@ -7,21 +7,18 @@
  * @module utils/codex-cli-resolver
  */
 
-import { join } from 'node:path';
-import { homedir } from 'node:os';
 import { spawn } from 'node:child_process';
+import { getCli } from '../config/cli-registry/registry.js';
+import { expandHome } from './cli-resolver.js';
 import { createCliExecutableResolver, formatCliNotFoundMessage } from './cli-executable-resolver.js';
 import { parseCodexRateLimitsResponse, type StatusTelemetry } from '../usage-telemetry.js';
 
-/** Common directories where the Codex CLI binary may be installed */
-const CODEX_SEARCH_DIRS = [
-  join(homedir(), '.codex', 'bin'), // Default install location
-  join(homedir(), '.local', 'bin'), // Alternative install location
-  '/usr/local/bin', // Homebrew / system
-  join(homedir(), '.bun', 'bin'), // Bun global
-  join(homedir(), '.npm-global', 'bin'), // npm global
-  join(homedir(), 'bin'), // User bin
-];
+/**
+ * Directories probed after `which`, read from this CLI's registry entry so the spawn
+ * path, `codeman doctor` and this resolver cannot disagree about where to look.
+ * `~` is expanded by `expandHome`; nothing else is interpreted.
+ */
+const CODEX_SEARCH_DIRS = (): string[] => (getCli('codex')?.discovery.searchDirs ?? []).map(expandHome);
 
 const CODEX_BINARY = process.platform === 'win32' ? 'codex.exe' : 'codex';
 const codexResolver = createCliExecutableResolver({ binary: CODEX_BINARY, searchDirs: CODEX_SEARCH_DIRS });

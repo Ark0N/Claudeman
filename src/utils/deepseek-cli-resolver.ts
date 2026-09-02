@@ -35,6 +35,8 @@ import { existsSync, readdirSync, readFileSync } from 'node:fs';
 import { join } from 'node:path';
 import { homedir } from 'node:os';
 import { EXEC_TIMEOUT_MS } from '../config/exec-timeout.js';
+import { getCli } from '../config/cli-registry/registry.js';
+import { expandHome } from './cli-resolver.js';
 import {
   createCliExecutableResolver,
   formatCliNotFoundMessage,
@@ -49,12 +51,12 @@ import {
  * user's prefix points. `~/.local/bin` heads the list because it is the default
  * for a prefix-relocated npm (and is where this box's install landed).
  */
-const DEEPSEEK_SEARCH_DIRS = [
-  join(homedir(), '.local', 'bin'),
-  '/usr/local/bin',
-  join(homedir(), '.npm-global', 'bin'),
-  join(homedir(), 'bin'),
-];
+/**
+ * Directories probed after `which`, read from this CLI's registry entry so the spawn
+ * path, `codeman doctor` and this resolver cannot disagree about where to look.
+ * `~` is expanded by `expandHome`; nothing else is interpreted.
+ */
+const DEEPSEEK_SEARCH_DIRS = (): string[] => (getCli('deepseek')?.discovery.searchDirs ?? []).map(expandHome);
 
 /**
  * A real `dsh --version` prints a bare `0.1.1-rc.2` (measured, 0.1.1-rc.2), so

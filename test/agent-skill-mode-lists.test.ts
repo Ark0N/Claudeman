@@ -48,7 +48,7 @@ import { describe, expect, it } from 'vitest';
 import { readFileSync } from 'node:fs';
 import { fileURLToPath } from 'node:url';
 import { join } from 'node:path';
-import { CreateSessionSchema, QuickStartSchema } from '../src/web/schemas.js';
+import { CreateSessionSchema, QuickStartSchema, sessionModeIds } from '../src/web/schemas.js';
 import { isExternalCliMode } from '../src/session.js';
 import { hooksAvailableForMode } from '../src/web/session-wait-registry.js';
 import type { SessionMode } from '../src/types/session.js';
@@ -63,14 +63,20 @@ const SKILL_FILES = [
   'reference/verbs.md',
 ];
 
-/** Modes the API actually accepts, read off the schema rather than restated here. */
-function schemaModes(schema: typeof CreateSessionSchema | typeof QuickStartSchema): SessionMode[] {
-  // `mode` is `z.enum([...]).optional()`; unwrap the optional to reach `.options`.
-  return (schema as unknown as { shape: { mode: { unwrap(): { options: SessionMode[] } } } }).shape.mode.unwrap()
-    .options;
+/**
+ * Modes the API actually accepts, read off the runtime source of truth rather than restated
+ * here — the whole point of this file is to catch the skill docs drifting from what the API
+ * takes, which a second hardcoded list could not do.
+ *
+ * `mode` used to be a `z.enum([...])` whose `.options` this unwrapped. It is now resolved at
+ * parse time from the enabled CLI registry (so enabling a CLI does not need a restart), and
+ * there is no frozen member list on the schema to read; `sessionModeIds()` is that list.
+ */
+function schemaModes(): SessionMode[] {
+  return sessionModeIds() as SessionMode[];
 }
 
-const MODES = schemaModes(CreateSessionSchema);
+const MODES = schemaModes();
 const EXTERNAL_MODES = MODES.filter(isExternalCliMode);
 
 /**
@@ -101,10 +107,21 @@ function modesIn(run: string): SessionMode[] {
 }
 
 describe('agent skill run-mode lists', () => {
-  it('derives the mode list from the schema, and both endpoints agree', () => {
+  it('derives the mode list from the registry, and both endpoints agree', () => {
     expect(MODES).toContain('pi');
-    expect(new Set(schemaModes(QuickStartSchema))).toEqual(new Set(MODES));
     expect(EXTERNAL_MODES.length).toBeGreaterThan(1);
+    // Guard against a parsing/registry regression silently making every scan below vacuous.
+    expect(MODES.length).toBeGreaterThanOrEqual(9);
+
+    // Both endpoints now share one mode validator, so comparing member lists would compare
+    // a thing with itself. Parse through each schema instead: that survives the two
+    // drifting apart later, which is what this assertion is actually for.
+    for (const mode of MODES) {
+      expect(CreateSessionSchema.safeParse({ workingDir: '/tmp', mode }).success).toBe(true);
+      expect(QuickStartSchema.safeParse({ caseName: 'demo', mode }).success).toBe(true);
+    }
+    expect(CreateSessionSchema.safeParse({ workingDir: '/tmp', mode: 'not-a-cli' }).success).toBe(false);
+    expect(QuickStartSchema.safeParse({ caseName: 'demo', mode: 'not-a-cli' }).success).toBe(false);
   });
 
   it('documents the CLI availability probe for every agent mode', () => {
