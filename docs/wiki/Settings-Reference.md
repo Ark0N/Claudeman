@@ -82,7 +82,8 @@ every session or only the active tab.
 
 Claude model cards, the 1M context window switch, and the thinking effort segment. The cards
 and the switch compose into one model choice, so there is no separate "which one wins"
-question.
+question. Fable 5.1 is selectable directly and includes its 1M context window by default;
+the switch remains for the older Fable 5, Opus, and Opus 4.6 `[1m]` variants.
 
 Model and effort are both **soft defaults**: the model is written into the case's
 `.claude/settings.local.json` and effort is passed at start, so `/model` and `/effort`

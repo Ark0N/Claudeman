@@ -127,6 +127,17 @@ describe('App Settings modal structure', () => {
     expect(modal).toContain('id="appSettingsOpusContext1m"');
   });
 
+  it('models: exposes Fable 5.1 directly without inventing a [1m] variant', () => {
+    const modal = settingsModal();
+    const select = modal.match(/id="appSettingsClaudeModel"([\s\S]*?)<\/select>/)?.[1] ?? '';
+    expect(select).toContain('value="claude-fable-5-1"');
+    expect(select).toContain('data-ctx-default="1"');
+    expect(select).not.toContain('claude-fable-5-1[1m]');
+    expect(settingsUi).toContain("card.dataset.ctxDefault === '1'");
+    expect(settingsUi).toContain('Fable 5.1 includes a 1M context window by default.');
+    expect((modal.match(/value="claude-fable-5-1"/g) || []).length).toBe(6);
+  });
+
   it('has retired the modal-tab chrome everywhere, not just here', () => {
     // Session Options and Add Case moved onto this same `set-*` surface, so the
     // old tab classes have no users left. A reappearance means a modal drifted

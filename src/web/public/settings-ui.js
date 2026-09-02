@@ -855,6 +855,7 @@ Object.assign(CodemanApp.prototype, {
         card.setAttribute('role', 'radio');
         card.dataset.value = opt.value;
         if (opt.dataset.ctx === '1') card.dataset.ctx = '1';
+        if (opt.dataset.ctxDefault === '1') card.dataset.ctxDefault = '1';
         const top = document.createElement('span');
         top.className = 'set-mc-top';
         const name = document.createElement('span');
@@ -869,10 +870,10 @@ Object.assign(CodemanApp.prototype, {
         meta.className = 'set-mc-meta';
         meta.textContent = opt.dataset.meta || '';
         card.appendChild(meta);
-        if (opt.dataset.ctx === '1') {
+        if (opt.dataset.ctx === '1' || opt.dataset.ctxDefault === '1') {
           const ctx = document.createElement('span');
           ctx.className = 'set-mc-ctx';
-          ctx.textContent = '1M capable';
+          ctx.textContent = opt.dataset.ctxDefault === '1' ? '1M included' : '1M capable';
           card.appendChild(ctx);
         }
         card.addEventListener('click', () => {
@@ -903,27 +904,38 @@ Object.assign(CodemanApp.prototype, {
     const grid = document.getElementById('appSettingsModelCards');
     if (!select || !grid) return;
     const base = this._settingsModelBase || '';
-    let capable = false;
+    let switchable = false;
+    let defaultContext = false;
     grid.querySelectorAll('.set-modelcard').forEach(card => {
       const on = card.dataset.value === base;
       card.classList.toggle('selected', on);
       card.setAttribute('aria-checked', on ? 'true' : 'false');
-      if (on) capable = card.dataset.ctx === '1';
+      if (on) {
+        switchable = card.dataset.ctx === '1';
+        defaultContext = card.dataset.ctxDefault === '1';
+      }
     });
-    const ctxOn = !!document.getElementById('appSettingsOpusContext1m')?.checked;
-    select.value = base && capable && ctxOn ? `${base}[1m]` : base;
-    // A model with no 1M variant makes the switch inert; say so instead of
-    // leaving a toggle that looks like it does something.
+    const contextSwitch = document.getElementById('appSettingsOpusContext1m');
+    // Fable 5.1's 1M window is part of the model, not a `[1m]` variant. Show
+    // that truthfully while keeping the older models' switchable variants.
+    if (defaultContext && contextSwitch) contextSwitch.checked = true;
+    if (contextSwitch) contextSwitch.disabled = !!base && !switchable;
+    const ctxOn = !!contextSwitch?.checked;
+    select.value = base && switchable && ctxOn ? `${base}[1m]` : base;
+    // A model with no switchable 1M variant makes the toggle inert; distinguish
+    // models that simply lack 1M from Fable 5.1, where 1M is always included.
     const row = document.getElementById('appSettingsContextRow');
     const desc = document.getElementById('appSettingsContextDesc');
-    const inert = !!base && !capable;
+    const inert = !!base && !switchable;
     row?.classList.toggle('set-row-disabled', inert);
     if (desc) {
-      desc.textContent = inert
-        ? 'The selected model has no 1M variant.'
-        : base
-          ? 'Available for Fable 5, Opus and Opus 4.6.'
-          : 'With no model pinned, this starts new sessions on Opus with a 1M window.';
+      desc.textContent = defaultContext
+        ? 'Fable 5.1 includes a 1M context window by default.'
+        : inert
+          ? 'The selected model has no 1M variant.'
+          : base
+            ? 'Available for Fable 5, Opus and Opus 4.6.'
+            : 'With no model pinned, this starts new sessions on Opus with a 1M window.';
     }
   },
 
