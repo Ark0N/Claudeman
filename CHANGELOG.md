@@ -1,5 +1,20 @@
 # aicodeman
 
+## 1.24.5
+
+### Patch Changes
+
+- Fable 5.1 is selectable in App Settings.
+
+  `claude-fable-5-1` is in Claude Code's model catalog (display name "Fable 5.1", June 2026 knowledge cutoff), but the model picker only went up to Fable 5, so pinning it meant hand-editing a case's `.claude/settings.local.json`. It now appears as a card under **App Settings -> Models -> New Claude sessions**, and as an option in **Task routing** (Default for tasks, plus the Explore / Implement / Test / Review overrides).
+
+  It is offered exactly the way Fable 5 already is: the "1M capable" badge, the 1M context window switch stays live for it, and base + switch compose into `claude-fable-5-1[1m]`. Both strings are accepted by the CLI.
+
+  Deliberately not claimed: that a 1M window is what sets Fable 5.1 apart. The CLI's model catalog marks both fable entries as natively 1M with the same window, so an always-on window for 5.1 next to a switchable one for 5 would encode a difference the models do not have.
+
+  ### Thanks
+  - @shenlvkang-collab for #370, which surfaced that Fable 5.1 was missing from the picker.
+
 ## 1.24.4
 
 ### Patch Changes
