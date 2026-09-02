@@ -2863,6 +2863,13 @@
               <label class="checkbox-row"><input type="checkbox" id="dockerAdoptExisting"> Attach to an existing container</label>
               <span class="form-hint">On: Codeman only runs docker exec into a container you already built and run — it never creates, starts, stops or removes it. The CLIs must already be installed and logged in inside it.</span>
             </div>
+            <div class="form-row docker-adopt-only" id="dockerAdoptCloneRow" hidden>
+              <label>Duplicate an Existing Case</label>
+              <select id="dockerAdoptCloneFrom" onchange="app.applyDockerCloneSource()">
+                <option value="">Start from scratch</option>
+              </select>
+              <span class="form-hint">Same container, another directory inside it. Picks up the container, host and workspace below &mdash; you only set a new name and container workdir. Adopted containers only: an owned container&#39;s lifecycle belongs to its one case.</span>
+            </div>
             <div class="form-row docker-adopt-only">
               <label>Container Name</label>
               <input type="text" id="dockerContainerName" list="dockerContainerList" placeholder="my-dev-box" pattern="[a-zA-Z0-9][a-zA-Z0-9_.-]+" autocomplete="off" autocapitalize="off" spellcheck="false">

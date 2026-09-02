@@ -3139,7 +3139,10 @@ Object.assign(CodemanApp.prototype, {
     const adopting = document.getElementById('dockerAdoptExisting')?.checked;
     if (adopting) modal.setAttribute('data-docker-adopt', '1');
     else modal.removeAttribute('data-docker-adopt');
-    if (adopting) void this._loadDockerContainerOptions();
+    if (adopting) {
+      void this._loadDockerContainerOptions();
+      void this._loadDockerCloneOptions();
+    }
   },
 
   /**
@@ -3151,6 +3154,79 @@ Object.assign(CodemanApp.prototype, {
    * Best-effort by design — the endpoint returns [] for an unreachable daemon,
    * and an empty list simply leaves the field as plain text input.
    */
+  /**
+   * Fill the "Duplicate an Existing Case" picker with the ADOPTED docker cases.
+   *
+   * One adopted container can back several cases, each pointing at a different
+   * directory inside it (classifyAdoptContainerConflict) — but re-typing the
+   * container, host and workspace by hand for every directory is exactly the
+   * friction that makes the capability go unused. Picking a case here fills those
+   * three and leaves only the two fields that MUST differ: the case name and the
+   * container workdir.
+   *
+   * ⚠️ Adopted cases only (`docker.owned === false`). An owned container's
+   * lifecycle belongs to its one case — a second case on it would be destroyed
+   * out from under itself by that case's recreate or delete — and the server
+   * refuses it, so offering it here would only produce a confusing error.
+   */
+  async _loadDockerCloneOptions() {
+    const select = document.getElementById('dockerAdoptCloneFrom');
+    const row = document.getElementById('dockerAdoptCloneRow');
+    if (!select || !row) return;
+    let cases = [];
+    try {
+      const res = await fetch('/api/cases');
+      const data = await res.json();
+      cases = (Array.isArray(data) ? data : data?.data || []).filter(
+        (c) => c?.docker && c.docker.owned === false
+      );
+    } catch {
+      cases = [];
+    }
+    select.textContent = '';
+    const blank = document.createElement('option');
+    blank.value = '';
+    blank.textContent = 'Start from scratch';
+    select.appendChild(blank);
+    for (const c of cases) {
+      const option = document.createElement('option');
+      option.value = c.name;
+      // Server-supplied strings: textContent, never markup.
+      option.textContent = `${c.name} — ${c.docker.container}:${c.docker.containerWorkdir || c.docker.path}`;
+      option.dataset.container = c.docker.container;
+      option.dataset.hostId = c.docker.hostId;
+      option.dataset.path = c.docker.path;
+      select.appendChild(option);
+    }
+    // Nothing to duplicate yet: an empty picker is noise on the first adoption.
+    row.hidden = cases.length === 0;
+  },
+
+  /**
+   * Apply the picked case: carry over what STAYS the same, clear what must not.
+   *
+   * The two cleared fields are the point of the feature — a duplicate that kept
+   * the original's name would be rejected as an existing case, and one that kept
+   * its container workdir would be rejected as an exact twin (both by the server,
+   * with a clear message, but a form that pre-fills a value it knows will be
+   * refused is just a trap).
+   */
+  applyDockerCloneSource() {
+    const select = document.getElementById('dockerAdoptCloneFrom');
+    const option = select?.selectedOptions?.[0];
+    if (!option || !option.value) return;
+    const set = (id, value) => {
+      const el = document.getElementById(id);
+      if (el) el.value = value || '';
+    };
+    set('dockerContainerName', option.dataset.container);
+    set('dockerHostId', option.dataset.hostId);
+    set('dockerWorkspacePath', option.dataset.path);
+    set('dockerCaseName', '');
+    set('dockerAdoptWorkdir', '');
+    document.getElementById('dockerAdoptWorkdir')?.focus();
+  },
+
   async _loadDockerContainerOptions() {
     const list = document.getElementById('dockerContainerList');
     if (!list) return;
