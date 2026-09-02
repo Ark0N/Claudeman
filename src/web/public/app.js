@@ -2794,7 +2794,7 @@ class CodemanApp {
         } else if (msg.t === 'ia') {
           // Input ACK — the server applied (or deduped) this seq; drop it from
           // the durable queue so it can never be re-delivered/lost.
-          this._onWsInputAck(msg.seq);
+          this._onWsInputAck(msg.seq, msg);
         }
       } catch {
         // Ignore malformed messages
@@ -2972,7 +2972,11 @@ class CodemanApp {
       this._pendingDeliveries.set(sessionId, list);
     }
     list.push(rec);
-    this._persistReliableState();
+    // ⚠️ SYNCHRONOUS, not the debounced writer: the seq counter is precisely the
+    // thing that must survive a crash, and a debounce puts it on the path most
+    // likely to be lost. A counter that comes back BELOW the server's watermark
+    // makes every later keystroke a silently-dropped duplicate (see _onWsInputAck).
+    this._persistReliableNow();
     this._updateConnectionIndicator();
     this._drainSession(sessionId);
   }
@@ -3078,9 +3082,40 @@ class CodemanApp {
     this.markIdleAlertSeen?.(sessionId);
   }
 
-  /** Server input-ACK frame ({t:'ia',seq}) over the WebSocket. */
-  _onWsInputAck(seq) {
-    if (this._wsSessionId && Number.isInteger(seq)) this._ackDelivery(this._wsSessionId, seq);
+  /**
+   * Server input-ACK frame ({t:'ia',seq}) over the WebSocket.
+   *
+   * `dup:true` means the server REJECTED the frame as already-seen rather than
+   * applying it, and `last` is its watermark for this clientId. That combination
+   * is the escape hatch from a rolled-back counter: our seqs persist on a
+   * debounced write, so a tab killed between a send and that write comes back
+   * counting from BELOW the server's watermark, and from then on every keystroke
+   * is dropped-but-ACKed — a silently dead terminal that a reload cannot fix,
+   * because the stale counter is restored from localStorage too.
+   *
+   * ⚠️ Only a FIRST-attempt record is re-queued. A retry (`tries > 1`) being
+   * called a duplicate is the mechanism working as designed — the original did
+   * land — and re-sending it would type the same thing twice.
+   */
+  _onWsInputAck(seq, msg) {
+    const sessionId = this._wsSessionId;
+    if (!sessionId || !Number.isInteger(seq)) return;
+    if (msg && msg.dup) {
+      const list = this._pendingDeliveries.get(sessionId);
+      const rec = list && list.find((r) => r.seq === seq);
+      const watermark = Number.isInteger(msg.last) ? msg.last : seq;
+      // Lift the counter clear of the server's watermark before anything else, so
+      // the re-queue below (and every later keystroke) gets an acceptable seq.
+      if ((this._seqCounters.get(sessionId) || 0) <= watermark) {
+        this._seqCounters.set(sessionId, watermark);
+        this._persistReliableNow();
+      }
+      const lost = rec && rec.tries <= 1 ? rec.data : null;
+      this._ackDelivery(sessionId, seq);
+      if (lost !== null) this._reliableSend(sessionId, lost, rec.useMux);
+      return;
+    }
+    this._ackDelivery(sessionId, seq);
   }
 
   /** Called from ws.onopen — flush everything pending over the fresh socket. */

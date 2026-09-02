@@ -3300,6 +3300,21 @@ export class Session extends EventEmitter {
    * half-open socket silently drops frames with no error) would type a prompt
    * twice whenever an ACK is lost after the write landed.
    */
+  /**
+   * The highest input seq recorded for `clientId`, or 0 when this session has
+   * never seen it.
+   *
+   * Reported back on a REJECTED (duplicate) frame so the client can lift its own
+   * counter above this watermark. Without that number a client whose persisted
+   * counter fell behind ours has no way to find its way out: every fresh
+   * keystroke it sends lands at or below the watermark, is dropped as a
+   * duplicate, and is ACKed anyway — so the UI looks healthy while nothing is
+   * delivered, and a reload restores the same stale counter from localStorage.
+   */
+  lastInputSeq(clientId: string): number {
+    return this._appliedInputSeq.get(clientId) ?? 0;
+  }
+
   shouldApplyInput(clientId: string, seq: number): boolean {
     const last = this._appliedInputSeq.get(clientId);
     if (last !== undefined && seq <= last) return false;
