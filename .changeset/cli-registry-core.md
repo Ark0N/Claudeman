@@ -28,7 +28,7 @@ env-prefix validation, the doctor's tool list, and each resolver's search direct
 re-read the catalog, so a CLI enabled while the server is running moves every surface at once
 rather than only the run menu.
 
-Three user-visible changes, all small and all deliberate:
+Four user-visible changes, all small and all deliberate:
 
 - `probeDockerCliVersion()` derives the in-container binary name from the registry rather
   than assuming it equals the mode name. Only Claude reaches that path today, so nothing was
@@ -38,6 +38,11 @@ Three user-visible changes, all small and all deliberate:
   replaces simply omitted — its own comment said the rule was "every mode except shell", so
   the two were an oversight from when those CLIs were added, and a remote session in either
   mode reported no version at all.
+- OMP now requires tmux like its seven siblings. `session.ts` carried a hand-written list of
+  modes with no direct-PTY fallback and omp was missing from it, even though CLAUDE.md's own
+  text says "all eight require tmux" — so an omp session whose mux creation failed silently
+  fell back to a direct PTY. `requiresMux` comes off the entry now, so the list cannot drift
+  from the rule again.
 - `codeman doctor`'s CLI rows come from the registry, so Claude's install hint is now the
   documented install command rather than a docs URL, five CLIs gain install hints they never
   had, and the row order follows the catalog (Claude now sorts below tmux).

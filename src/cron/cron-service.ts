@@ -414,26 +414,37 @@ export class CronService {
     let session: Session;
     try {
       const mode = job.agentType;
-      // Refuse a launch the CLI cannot survive, rather than opening a dead pane. The
-      // launcher CLIs answer with their own specific reason (for dsh: binary missing, no
-      // pane-capable profile, or the named profile cannot drive a pane); ordinary CLIs
-      // answer with the resolver's not-found message. Cron sends no per-CLI config, so
-      // there is no caller-named target to report on.
-      const cronLaunchError = await resolveCliLaunchError(mode);
-      if (cronLaunchError) return this.failRun(job, run, cronLaunchError);
+      // A LAUNCHER CLI's binary is not its agent, so "installed" is not "runnable": without
+      // this, a job on a box carrying only dsh's stock web/headless profiles spawns a bare
+      // `dsh` that boots a profile unable to drive a pane, and the prompt is typed into a
+      // logging server or a dead pane instead of failing the run with an actionable message.
+      //
+      // ⚠️ Scoped to `discovery.launcherProfile`, which is byte-identical to the
+      // `mode === 'deepseek'` check this replaces (dsh is the only launcher today) and
+      // generalises to the next one. Deliberately NOT every CLI: cron has never pre-flighted
+      // a merely-missing binary, and doing so replaces tmux-manager's own not-found throw
+      // ("Session launch failed") with a different message for claude and shell. An earlier
+      // draft of this line was unscoped and did exactly that — three cron tests caught it.
+      if (getCli(mode)?.discovery.launcherProfile !== undefined) {
+        const cronLaunchError = await resolveCliLaunchError(mode);
+        if (cronLaunchError) return this.failRun(job, run, cronLaunchError);
+      }
       const globalNice = await this.deps.getGlobalNiceConfig();
       const modelConfig = await this.deps.getModelConfig();
       const claudeModeConfig = await this.deps.getClaudeModeConfig();
       const effectiveClaudeMode = await resolveClaudeModeForUsername(claudeModeConfig.claudeMode, job.owner);
       // Cron carries no per-CLI config object, so the only model it can supply is the global
-      // default — and only to a CLI that takes one that way. `capabilities.model` is the same
-      // question the HTTP routes ask; the ladder it replaces named `shell` and `deepseek` by
-      // hand and had to be edited in step with them (deepseek's model is a profile
-      // composition entry, not a session flag).
+      // default — and only to a CLI that takes a model at all.
+      //
+      // ⚠️ `!== 'none'` is the faithful reading of the `mode !== 'shell' && mode !== 'deepseek'`
+      // ladder this replaces: those two are exactly the entries declaring `model.source: 'none'`
+      // (shell has no model; deepseek's is a profile composition entry, not a session flag).
+      // NOT `=== 'claude-settings-file'`, which is the HTTP route's question — there, every
+      // external CLI reads its model from its own config object earlier in the chain, so only
+      // claude reaches the global default. Cron has no such config, so the same expression
+      // means something different here.
       const model =
-        getCli(mode)?.capabilities.model.source === 'claude-settings-file'
-          ? modelConfig?.defaultModel || undefined
-          : undefined;
+        getCli(mode)?.capabilities.model.source !== 'none' ? modelConfig?.defaultModel || undefined : undefined;
       // Section 6.3: materialize the safe default for a non-granted owner (see
       // clampCronExternalCliConfigs — cron sends no per-CLI config, so the CLI's own
       // spawn default is what would otherwise apply).
