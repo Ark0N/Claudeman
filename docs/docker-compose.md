@@ -61,6 +61,16 @@ If `docker info` reports `SwapLimit=false`, set `CODEMAN_DOCKER_DISABLE_SWAP_LIM
 
 If that directory was created by an earlier root-running image, change its ownership to the configured `PUID:PGID` before starting this version. This preserves existing CLI credentials and session state while allowing the unprivileged runtime account to use them.
 
+## Updating
+
+Codeman updates itself from **App Settings → Updates**, as it does on a bare host. The checkout mounted at `/opt/codeman` is the same directory Compose builds from, so the update's `git checkout` and rebuild land on the host and survive container recreation; the restart is the server exiting, which `restart: unless-stopped` turns into a relaunch on the new build.
+
+That applies application code only. A release that changes `docker/server.Dockerfile`, `docker/docker-compose.yaml`, or adds a key to `docker/.env.example` needs the image rebuilt or the container recreated, which a container cannot do to itself. The updater detects each case and refuses with a message naming what changed; run `docker/Start-Codeman.sh` on the host to apply those.
+
+`CODEMAN_REPO_PATH` overrides which checkout is mounted. It defaults to the compose project's parent directory, so it normally needs no setting. Point it at a directory that is not a git checkout and in-app updates are reported as unavailable.
+
+Full detail, including the fingerprint baseline and the troubleshooting table: [`docker-self-update.md`](docker-self-update.md).
+
 ## Docker cases
 
 The default socket path is `/var/run/docker.sock`, which works with a standard Linux Docker Engine. The Bash start script detects its numeric group ID. When running Compose directly, set `DOCKER_SOCKET_GID`, for example using `stat -c '%g' /var/run/docker.sock`, so the unprivileged `CODEMAN_RUNTIME_USER` account can create Docker cases. Docker Desktop users should set `DOCKER_SOCKET` in `docker/.env` only when their Docker installation exposes a different compatible socket path.

@@ -7,6 +7,10 @@
  * (see `dataPath('update-status.json')`) that the browser polls across the
  * restart boundary.
  *
+ * The Docker Compose deployment updates in place too (same script, same status
+ * file) — see `docs/docker-self-update.md` for how the container restarts itself
+ * and what the environment gate refuses.
+ *
  * Backend logic: `src/web/self-update.ts`. Routes: `src/web/routes/system-routes.ts`
  * (`/api/system/update/check`, `POST /api/system/update`, `/api/system/update/status`).
  *
@@ -17,11 +21,56 @@
  * Which init system supervises the running server (decides how we restart it).
  * `launchd-daemon` = a KeepAlive system-level LaunchDaemon (headless Macs, no GUI
  * login): restart works by killing the server and letting launchd respawn it.
+ * `docker-compose` = the Compose deployment (`docker/docker-compose.yaml`): the
+ * "restart" is the server exiting so the container's `restart: unless-stopped`
+ * policy relaunches it on the freshly built `dist/`.
  */
-export type SupervisorKind = 'systemd' | 'launchd' | 'launchd-daemon' | 'none';
+export type SupervisorKind = 'systemd' | 'launchd' | 'launchd-daemon' | 'docker-compose' | 'none';
 
-/** How Codeman was installed — only `git` installs can self-update in place. */
-export type InstallKind = 'git' | 'npm' | 'unknown';
+/**
+ * How Codeman was installed. `git` and `docker-compose` can self-update in
+ * place; `docker-compose` is a git checkout bind-mounted into the container, so
+ * the pull/build happen on the host filesystem and survive container recreation.
+ */
+export type InstallKind = 'git' | 'docker-compose' | 'npm' | 'unknown';
+
+/**
+ * Why an in-place container update is refused. Each is derived mechanically from
+ * the target release's own files — nothing here depends on a human remembering
+ * to declare something at release time.
+ *
+ * - `dockerfile-changed` / `compose-changed`: the release changes the ENVIRONMENT,
+ *   which a self-restart cannot apply (a restart reuses the existing container's
+ *   image and config). Needs a rebuild + recreate from the host.
+ * - `env-keys-missing`: the release's `docker/.env.example` gained keys the user's
+ *   `docker/.env` has no value for. Compose interpolates an unset `${VAR}` to the
+ *   EMPTY STRING and starts anyway, so without this check a new required setting
+ *   arrives as a silently blank env var.
+ * - `no-auto-restart`: the container's restart policy would not bring it back
+ *   after the server exits, so applying the update would take Codeman down.
+ */
+export type EnvironmentBlockerKind = 'dockerfile-changed' | 'compose-changed' | 'env-keys-missing' | 'no-auto-restart';
+
+/** One reason an in-place container update is refused, with UI-ready text. */
+export interface EnvironmentBlocker {
+  kind: EnvironmentBlockerKind;
+  /** One-line explanation shown in App Settings → Updates. */
+  message: string;
+  /** Optional specifics (e.g. the names of the missing env keys). */
+  details?: string[];
+}
+
+/**
+ * Result of the environment gate for a candidate release. `checked: false` means
+ * the gate did not run (not a container install, or the target tag's files could
+ * not be read) — callers must not treat that as "no blockers".
+ */
+export interface EnvironmentGate {
+  checked: boolean;
+  blockers: EnvironmentBlocker[];
+  /** The host command that resolves every blocker. */
+  hostCommand: string;
+}
 
 /**
  * Lifecycle of a single update run. `idle`/`completed`/`failed`/
@@ -96,6 +145,8 @@ export interface UpdateCheckResult {
   /** epoch ms of the check. */
   checkedAt: number;
   source: 'github-api' | 'git-ls-remote' | 'none';
+  /** Environment gate for THIS candidate release (container installs only). */
+  environment?: EnvironmentGate;
   error?: string;
 }
 

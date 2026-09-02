@@ -26,6 +26,18 @@ Codeman, Claude, OpenCode, and other local sessions run as the unprivileged acco
 
 To retain Docker-case support without root when running Compose directly, set `DOCKER_SOCKET_GID` to the numeric group ID of the host socket. On a standard Linux Docker host, obtain it with `stat -c '%g' /var/run/docker.sock`. The Bash start script detects it automatically.
 
+## Updating
+
+Use **App Settings → Updates** in the web UI. The checkout Compose builds from is
+also mounted at `/opt/codeman`, so an update's `git checkout` and rebuild persist
+on the host, and the server exiting is what restarts the container onto the new
+build.
+
+Releases that change `server.Dockerfile`, `docker-compose.yaml`, or add a key to
+`.env.example` cannot be applied that way — the updater detects them, names what
+changed, and asks you to run `Start-Codeman.sh` here on the host instead. Details:
+[`../docs/docker-self-update.md`](../docs/docker-self-update.md).
+
 ## Application data storage
 
 The default configuration uses a host-folder bind mount:

@@ -15,6 +15,11 @@ services:
     ports:
       - "${CODEMAN_PORT}:${CODEMAN_PORT}"
     environment:
+      # Tells the self-updater to restart by exiting (the restart policy below
+      # relaunches it) rather than by looking for an init system that is not
+      # here. Also set in the image; repeated so a container started without the
+      # image default still self-identifies.
+      CODEMAN_IN_CONTAINER: "1"
       CODEMAN_DOCKER_BRIDGE_HOOKS: ${CODEMAN_DOCKER_BRIDGE_HOOKS}
       # Host-side equivalent of the runtime user's HOME. Docker case seed,
       # credential and hook mounts are translated into the daemon namespace.
@@ -48,6 +53,32 @@ services:
       - type: bind
         source: ${DOCKER_SOCKET}
         target: /var/run/docker.sock
+      # The application source, so App Settings -> Updates can update in place.
+      # This is the SAME checkout used as the build context above, mounted over
+      # the image's baked copy: a `git checkout` performed inside the container
+      # then lands on the host and survives the container being recreated.
+      # Without it the pull would go to the container's writable layer and be
+      # silently discarded by the next `up`. See docs/docker-self-update.md.
+      # Defaults to `..` — the build context above — which Compose resolves
+      # against the project directory, so plain `docker compose up` works with
+      # no extra configuration. Set CODEMAN_REPO_PATH only to point elsewhere.
+      - type: bind
+        source: ${CODEMAN_REPO_PATH:-..}
+        target: /opt/codeman
+      # Build artefacts live in named volumes layered OVER the repo bind mount,
+      # so `npm install` and `npm run build` inside the container never write
+      # into the host checkout. That keeps container-compiled native modules
+      # (node-pty is built from source here) out of a checkout that may also be
+      # used to run Codeman natively, and keeps `git status` clean. Docker seeds
+      # an EMPTY named volume from the image, so the first start inherits the
+      # image's already-built node_modules and dist rather than paying for a
+      # bootstrap build.
+      - type: volume
+        source: codeman-node-modules
+        target: /opt/codeman/node_modules
+      - type: volume
+        source: codeman-dist
+        target: /opt/codeman/dist
     extra_hosts:
       - "host.docker.internal:host-gateway"
     security_opt:
@@ -63,3 +94,12 @@ services:
       timeout: 5s
       retries: 3
       start_period: 30s
+
+volumes:
+  # Container-owned build artefacts. They persist across container recreation,
+  # so an in-app update's `npm install` output is not thrown away by the next
+  # `up`, and they are seeded from the image on first use. Removing them (or
+  # `docker compose down -v`) is the supported reset: the next start rebuilds
+  # from the image.
+  codeman-node-modules:
+  codeman-dist:
