@@ -2028,6 +2028,8 @@
                   <div class="set-modelgrid" id="appSettingsModelCards" role="radiogroup" aria-label="Model for new Claude sessions" data-search="model opus sonnet haiku fable claude"></div>
                   <select id="appSettingsClaudeModel" class="set-select set-field-hidden" aria-hidden="true" tabindex="-1">
                     <option value="" data-meta="Whatever the CLI picks">Default (CLI setting)</option>
+                    <option value="claude-fable-5-1" data-meta="Latest" data-base="claude-fable-5-1" data-ctx="1">Fable 5.1</option>
+                    <option value="claude-fable-5-1[1m]" data-variant="1m" data-base="claude-fable-5-1">Fable 5.1 (1M context)</option>
                     <option value="claude-fable-5" data-meta="Most powerful" data-base="claude-fable-5" data-ctx="1">Fable 5</option>
                     <option value="claude-fable-5[1m]" data-variant="1m" data-base="claude-fable-5">Fable 5 (1M context)</option>
                     <option value="opus" data-meta="Most capable" data-base="opus" data-ctx="1">Opus</option>
@@ -2040,7 +2042,7 @@
                   <div class="set-row" id="appSettingsContextRow" data-search="1m context window opus long">
                     <div class="set-row-text">
                       <span class="set-row-label">1M context window</span>
-                      <span class="set-row-desc" id="appSettingsContextDesc">Available for Fable 5, Opus and Opus 4.6.</span>
+                      <span class="set-row-desc" id="appSettingsContextDesc">Available for Fable 5.1, Fable 5, Opus and Opus 4.6.</span>
                     </div>
                     <label class="switch switch-sm"><input type="checkbox" id="appSettingsOpusContext1m"><span class="slider"></span></label>
                   </div>
@@ -2080,6 +2082,7 @@
                     </div>
                     <select id="appSettingsDefaultModel" class="set-select">
                       <option value="">Default (CLI default)</option>
+                      <option value="claude-fable-5-1">Fable 5.1 (Latest)</option>
                       <option value="claude-fable-5">Fable 5 (Most powerful)</option>
                       <option value="opus">Opus (Most capable)</option>
                       <option value="sonnet">Sonnet (Balanced)</option>
@@ -2094,6 +2097,7 @@
                         <option value="haiku">Haiku</option>
                         <option value="sonnet">Sonnet</option>
                         <option value="opus">Opus</option>
+                        <option value="claude-fable-5-1">Fable 5.1</option>
                         <option value="claude-fable-5">Fable 5</option>
                       </select>
                     </div>
@@ -2104,6 +2108,7 @@
                         <option value="haiku">Haiku</option>
                         <option value="sonnet">Sonnet</option>
                         <option value="opus">Opus</option>
+                        <option value="claude-fable-5-1">Fable 5.1</option>
                         <option value="claude-fable-5">Fable 5</option>
                       </select>
                     </div>
@@ -2114,6 +2119,7 @@
                         <option value="haiku">Haiku</option>
                         <option value="sonnet">Sonnet</option>
                         <option value="opus">Opus</option>
+                        <option value="claude-fable-5-1">Fable 5.1</option>
                         <option value="claude-fable-5">Fable 5</option>
                       </select>
                     </div>
@@ -2124,6 +2130,7 @@
                         <option value="haiku">Haiku</option>
                         <option value="sonnet">Sonnet</option>
                         <option value="opus">Opus</option>
+                        <option value="claude-fable-5-1">Fable 5.1</option>
                         <option value="claude-fable-5">Fable 5</option>
                       </select>
                     </div>
