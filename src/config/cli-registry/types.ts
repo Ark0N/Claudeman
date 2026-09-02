@@ -443,6 +443,19 @@ export interface CliOverlays {
    */
   remote?: { command?: string } | { disabled: true };
   docker?: { command?: string } | { disabled: true };
+  /**
+   * ⚠️ DECLARED-FOR-LATER, unlike `remote`/`docker` above, which are live.
+   *
+   * The Docker credential-seeding path still reads its own `CRED_STORES` table in
+   * `docker-hosts.ts`, because this shape cannot yet express that table: it allows ONE store
+   * per CLI, and the live table needs two for gemini (`.gemini` for the CLI's own auth plus
+   * `.config/gcloud` for Vertex), while deepseek's entry here declares none at all even
+   * though `.dsh` is seeded. Wiring it therefore means making this an ARRAY and correcting
+   * those two entries — a change to credential seeding, which is both the highest-consequence
+   * thing in this file to get wrong and the least covered by tests, since every docker IO
+   * path is no-op'd under vitest. It belongs in its own change, measured against a real
+   * container.
+   */
   credStore?: CliCredStore;
 }
 
@@ -453,7 +466,7 @@ export interface CliOverlays {
 /**
  * ⚠️ DECLARED-FOR-LATER: fields no code reads yet.
  *
- * `shortBadge`, `accent`, `capabilities.echo`, `capabilities.wheelForward`,
+ * `shortBadge`, `accent`, `overlays.credStore`, `capabilities.echo`, `capabilities.wheelForward`,
  * `capabilities.keyboardAccessory` and `capabilities.maxFrameBytes` all describe FRONTEND
  * behaviour, and the frontend is deliberately untouched by the change that introduced this
  * registry — `app.js`, `terminal-ui.js`, `styles.css` and friends keep their own

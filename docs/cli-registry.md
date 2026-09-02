@@ -103,6 +103,8 @@ This matters because it is invisible when it is wrong. `capabilities.privilegedP
 
 Treat those values as **transcribed, not authoritative** — nothing enforces that `echo.policy` matches `_updateLocalEchoState`'s fallthrough, or that `accent` matches the gradient CSS paints, so re-measure before wiring one up. A field that is both wrong and unread is worse than an absent one, because the next reader trusts it; `test/cli-registry-no-id-branching.test.ts` pins the list so it cannot quietly grow, and wiring one up makes its line there fail, which is the direction you want.
 
+`overlays.credStore` is in the same category, for a sharper reason: the Docker credential-seeding path still reads its own `CRED_STORES` table, because this shape allows ONE store per CLI and the live table needs two for gemini (`.gemini` for the CLI's own auth plus `.config/gcloud` for Vertex), while deepseek declares none here even though `.dsh` is seeded. Wiring it means making the field an array and correcting those two entries — a change to credential seeding, which is simultaneously the worst thing here to get wrong and the least covered by tests, since every docker IO path is no-op'd under vitest.
+
 Everything else in the interface is live, including `overlays.remote` / `overlays.docker`, which back `defaultRemoteCommandForMode()` and `defaultDockerCommandForMode()` directly. Those two used to be hardcoded `Record<…CommandMode, string>` tables duplicating the registry with nothing keeping the two in step; `test/location-overlay-commands.test.ts` pins every resulting command as a literal string.
 
 ## Resolve at call time, never at import

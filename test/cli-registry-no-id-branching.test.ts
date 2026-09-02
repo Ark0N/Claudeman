@@ -315,6 +315,9 @@ describe('declared-for-later fields', () => {
     'capabilities.wheelForward',
     'capabilities.keyboardAccessory',
     'capabilities.maxFrameBytes',
+    // The Docker credential-seeding path still reads its own CRED_STORES table: this shape
+    // allows ONE store per CLI and the live table needs two for gemini. See CliOverlays.
+    'overlays.credStore',
   ];
 
   /** Read every `.ts` under src/, minus the registry itself (which of course names them). */
