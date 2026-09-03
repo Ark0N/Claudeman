@@ -2300,7 +2300,7 @@ export class TmuxManager extends EventEmitter implements TerminalMultiplexer {
     if (!cliRunsInContainer && mode === 'grok' && !cliDir) {
       throw new Error(getGrokNotFoundMessage());
     }
-    if (mode === 'omp' && !cliDir) {
+    if (!cliRunsInContainer && mode === 'omp' && !cliDir) {
       throw new Error(getOmpNotFoundMessage());
     }
 
