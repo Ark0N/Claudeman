@@ -23,7 +23,7 @@
  *   ralph-tracker (todo/completion parsing), bash-tool-parser (tool invocation tracking),
  *   task-tracker (background tasks), mux-interface (tmux abstraction)
  * @consumedby session-manager, web/server, respawn-controller
- * @emits session:terminal, session:idle, session:working, session:completion, session:exit
+ * @emits session:terminal, session:idle, session:working, session:completion, session:promptSubmitted, session:exit
  *
  * @module session
  */
@@ -56,6 +56,7 @@ import {
   type OmpConfig,
   type SessionRemote,
   type SessionDocker,
+  type SessionNameSource,
 } from './types.js';
 import { resolveAndClaimOmpSessionId } from './utils/omp-session-resolver.js';
 import { probeDockerCliVersion } from './docker-hosts.js';
@@ -116,6 +117,7 @@ import { SessionAutoOps } from './session-auto-ops.js';
 import { detectUsageLimitPause } from './usage-limit-patterns.js';
 import { SessionTaskCache } from './session-task-cache.js';
 import { InteractivePtyExitBreaker } from './session-pty-exit-breaker.js';
+import { isGeneratedSessionName, SubmittedPromptTracker } from './session-auto-name.js';
 import { parseTerminalAttachmentRequests } from './attachment-magic.js';
 import {
   sanitizeAttachmentHistory,
@@ -406,6 +408,8 @@ export class Session extends EventEmitter {
   private _taskCache = new SessionTaskCache();
 
   private _name: string;
+  private _nameSource: SessionNameSource;
+  private readonly _submittedPromptTracker = new SubmittedPromptTracker();
   private ptyProcess: pty.IPty | null = null;
   private _pid: number | null = null;
   private _status: SessionStatus = 'idle';
@@ -610,6 +614,8 @@ export class Session extends EventEmitter {
       workingDir: string;
       mode?: SessionMode;
       name?: string;
+      /** Whether the current name is still eligible for automatic replacement. */
+      nameSource?: SessionNameSource;
       /** Terminal multiplexer instance (tmux) */
       mux?: TerminalMultiplexer;
       /** Whether to use multiplexer wrapping */
@@ -677,6 +683,8 @@ export class Session extends EventEmitter {
     this.createdAt = config.createdAt || Date.now();
     this.mode = config.mode || 'claude';
     this._name = config.name || '';
+    this._nameSource =
+      config.nameSource ?? (!this._name || isGeneratedSessionName(this._name) ? 'auto' : 'manual');
     this._resumeSessionId = config.resumeSessionId;
     // NOW, not `createdAt`: recovery passes the ORIGINAL creation time of a
     // days-old tmux session, and seeding last-activity from it would report a
@@ -1212,6 +1220,19 @@ export class Session extends EventEmitter {
 
   set name(value: string) {
     this._name = value;
+    this._nameSource = 'manual';
+  }
+
+  /** Replace an automatically generated name without taking ownership from auto naming. */
+  applyAutoName(value: string): boolean {
+    const name = value.trim();
+    if (!name || this._nameSource !== 'auto' || this._name === name) return false;
+    this._name = name;
+    return true;
+  }
+
+  get nameSource(): SessionNameSource {
+    return this._nameSource;
   }
 
   setAutoClear(enabled: boolean, threshold?: number): void {
@@ -1355,6 +1376,7 @@ export class Session extends EventEmitter {
       // attach repaint, so the home screens' quiet ordering survives a restart.
       lastActivityAt: this._wireActivityAt,
       name: this._name,
+      nameSource: this._nameSource,
       mode: this.mode,
       autoClearEnabled: this._autoOps.autoClearEnabled,
       autoClearThreshold: this._autoOps.autoClearThreshold,
@@ -3204,9 +3226,10 @@ export class Session extends EventEmitter {
    * input could disappear while the caller believed it had been delivered.
    */
   write(data: string): boolean {
-    this._trackSubmit(data);
+    const submittedPrompt = this._trackSubmit(data);
     if (!this.ptyProcess) return false;
     this.ptyProcess.write(data);
+    this._emitSubmittedPrompt(submittedPrompt);
     return true;
   }
 
@@ -3223,9 +3246,17 @@ export class Session extends EventEmitter {
     return this._lastSubmitAt;
   }
 
-  private _trackSubmit(data: string): void {
+  private _trackSubmit(data: string): string[] {
+    const submitted = this._submittedPromptTracker.feed(data);
     if (data.includes('\r') || data.includes('\n')) {
       this._lastSubmitAt = Date.now();
+    }
+    return submitted;
+  }
+
+  private _emitSubmittedPrompt(prompts: string[]): void {
+    for (const prompt of prompts) {
+      this.emit('promptSubmitted', prompt);
     }
   }
 
@@ -3299,13 +3330,16 @@ export class Session extends EventEmitter {
    * ```
    */
   async writeViaMux(data: string): Promise<boolean> {
-    this._trackSubmit(data);
+    const submittedPrompt = this._trackSubmit(data);
     if (this._mux && this._muxSession) {
-      return this._mux.sendInput(this.id, data);
+      const sent = await this._mux.sendInput(this.id, data);
+      if (sent) this._emitSubmittedPrompt(submittedPrompt);
+      return sent;
     }
     // Fallback to PTY write
     if (this.ptyProcess) {
       this.ptyProcess.write(data);
+      this._emitSubmittedPrompt(submittedPrompt);
       return true;
     }
     return false;
