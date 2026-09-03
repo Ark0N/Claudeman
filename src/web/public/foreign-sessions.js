@@ -72,6 +72,10 @@ Object.assign(CodemanApp.prototype, {
    */
   startForeignPolling() {
     if (this._foreignPollTimer) return;
+    // The containers are rebuilt when the home screen is shown, so the first
+    // poll of every visit must paint even if the data is byte-identical to the
+    // last visit's.
+    this._foreignRenderSig = null;
     void this.loadForeignSessions();
     this._foreignPollTimer = setInterval(() => {
       void this.loadForeignSessions();
@@ -107,6 +111,9 @@ Object.assign(CodemanApp.prototype, {
       // A failed poll must not blank a list the user is looking at: keep the
       // last good result and let the next tick recover.
       this._foreignError = true;
+      const errSig = 'error';
+      if (errSig === this._foreignRenderSig) return;
+      this._foreignRenderSig = errSig;
       this.renderAllForeignSessions();
       return;
     }
@@ -115,6 +122,14 @@ Object.assign(CodemanApp.prototype, {
     this._foreignNotes = Array.isArray(data.notes) ? data.notes : [];
     this._foreignCanScanWide = data.canScanWide === true;
     if (Number.isFinite(data.pollIntervalMs)) this._foreignPollMs = data.pollIntervalMs;
+    // renderForeignSessions() rebuilds the block with innerHTML, so painting on
+    // every poll destroys and recreates these rows every few seconds whether or
+    // not anything changed — visible as a flicker, and it drops any in-progress
+    // interaction with a row. Nothing here is time-varying (no age stamps), so
+    // an unchanged payload has nothing to repaint.
+    const sig = JSON.stringify([this._foreignSessions, this._foreignNotes, this._foreignCanScanWide]);
+    if (sig === this._foreignRenderSig) return;
+    this._foreignRenderSig = sig;
     this.renderAllForeignSessions();
   },
 
