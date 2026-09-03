@@ -71,3 +71,39 @@ describe('Session.shouldApplyInput (exactly-once input dedup)', () => {
     expect(s.shouldApplyInput('recent', 2)).toBe(true);
   });
 });
+
+describe('Session.lastInputSeq (the watermark a stuck client needs)', () => {
+  it('reports 0 for a client it has never seen', () => {
+    expect(makeSession().lastInputSeq('c-new')).toBe(0);
+  });
+
+  it('reports the highest seq applied for that client', () => {
+    const s = makeSession();
+    s.shouldApplyInput('c-1', 7);
+    expect(s.lastInputSeq('c-1')).toBe(7);
+  });
+
+  it('is what a rolled-back client must clear to be heard again', () => {
+    // The failure this exists for: the client's seq counter persists on a
+    // DEBOUNCED write, so a tab killed between a send and that write comes back
+    // counting from below the watermark. Every later keystroke then lands at or
+    // under it and is rejected — silently, because a rejected frame is ACKed too.
+    const s = makeSession();
+    for (let i = 1; i <= 40; i++) s.shouldApplyInput('c-1', i);
+    // Restored counter starts over at 1: dropped, and every subsequent one too.
+    expect(s.shouldApplyInput('c-1', 1)).toBe(false);
+    expect(s.shouldApplyInput('c-1', 2)).toBe(false);
+    // The watermark it is handed back is exactly what makes it recoverable.
+    const watermark = s.lastInputSeq('c-1');
+    expect(watermark).toBe(40);
+    expect(s.shouldApplyInput('c-1', watermark + 1)).toBe(true);
+  });
+
+  it('does not resurrect a seq that forgetInputSeq rolled back', () => {
+    const s = makeSession();
+    s.shouldApplyInput('c-1', 5);
+    s.forgetInputSeq('c-1', 5);
+    expect(s.lastInputSeq('c-1')).toBe(4);
+    expect(s.shouldApplyInput('c-1', 5)).toBe(true);
+  });
+});

@@ -10321,12 +10321,17 @@ kbd {
   position: fixed;
   inset: 0;
   background: var(--modal-backdrop);
-  backdrop-filter: blur(6px);
-  -webkit-backdrop-filter: blur(6px);
   z-index: 5100;
   display: none;
   align-items: center;
   justify-content: center;
+}
+
+/* Same stale-hit-test reasoning as .offline-overlay above: this one is also a
+   persistent full-screen fixed element, shown by adding `.visible`. */
+.file-preview-overlay.visible {
+  backdrop-filter: blur(8px);
+  -webkit-backdrop-filter: blur(8px);
 }
 
 .file-preview-overlay.visible {
@@ -15022,9 +15027,26 @@ html[data-skin="daylight-blue"] .welcome-btn-tunnel.active:hover {
   padding-top: calc(20px + var(--safe-area-top));
   padding-bottom: calc(20px + var(--safe-area-bottom));
   background: rgba(6, 8, 12, 0.93);
+  overflow-y: auto;
+}
+
+/* ⚠️ `backdrop-filter` is applied ONLY while the overlay is actually shown.
+   It promotes the element to its own compositing layer, and a full-screen
+   `position: fixed` layer that is created and then hidden has been observed to
+   leave a STALE HIT-TEST REGION behind in Chrome: the page keeps rendering
+   correctly while every pointer event over the viewport lands on nothing.
+   Symptom (reported on a long-lived tab against a remote server, where a
+   connection blip shows and then hides #offlineOverlay): the terminal stops
+   scrolling AND unrelated click-to-expand controls stop responding at the same
+   time, while a freshly opened tab is fine — and a console one-liner that only
+   READS layout (getComputedStyle + elementFromPoint, both of which force a
+   hit-test recompute) restores it. Two unrelated features dying together, and a
+   read-only command curing them, is what points at hit-testing rather than at
+   either feature. Keeping the property off the hidden state means the layer is
+   never created while invisible. */
+.offline-overlay:not([hidden]) {
   backdrop-filter: blur(6px);
   -webkit-backdrop-filter: blur(6px);
-  overflow-y: auto;
 }
 
 .offline-overlay[hidden] {
@@ -16645,6 +16667,44 @@ html[data-tab-orientation='vertical'] .home-sessions {
    label as a row label, its `.form-hint` as a row description. Scoped to the
    document, so `.form-row` everywhere else is untouched.
    ─────────────────────────────────────────────────────────────────────────── */
+/* Adopt-an-existing-container mode swaps which half of the Docker panel applies:
+   the create-time fields (image, network, resources, credential mounts) describe
+   a `docker create` that adoption never runs, and the container name is the one
+   field only adoption needs. `.docker-adopt-only` is hidden by default so the
+   panel stays exactly as it was until the checkbox is ticked. Rules carry
+   `!important` because the adapter block above paints `.form-row` as a row card
+   and `details.advanced-options` has its own display. */
+/* Run-menu notice: why a container case is offering no agent modes. Lives at the
+   top of the menu so the reason is where the missing entries would have been. */
+.run-mode-notice {
+  padding: 8px 12px;
+  margin: 0 0 4px;
+  font-size: 12px;
+  line-height: 1.45;
+  color: var(--text-muted, #9aa0a6);
+  border-bottom: 1px solid var(--border, #333);
+  white-space: normal;
+}
+
+#createCaseModal .docker-adopt-only {
+  display: none !important;
+}
+#createCaseModal[data-docker-adopt='1'] .docker-adopt-only {
+  display: block !important;
+}
+#createCaseModal[data-docker-adopt='1'] .docker-create-only {
+  display: none !important;
+}
+#createCaseModal .btn-inline-check {
+  background: none;
+  border: none;
+  padding: 0;
+  font: inherit;
+  color: var(--accent, #4a9eff);
+  cursor: pointer;
+  text-decoration: underline;
+}
+
 #createCaseModal .set-doc .form-row {
   margin: 0 0 3px;
   padding: 7px 10px;
@@ -17579,4 +17639,174 @@ html[data-session-list="sidebar"][data-sidebar="collapsed"] .btn-sidebar-toggle 
   .session-sidebar {
     transition: none;
   }
+}
+
+/* ═══════════════════════════════════════════════════════════════
+   Foreign sessions — tmux sessions a human started outside Codeman
+   (foreign-sessions.js). Rendered on the welcome screen and, with the
+   same row builder, inside the phone overview.
+
+   Colour vocabulary is deliberately the session-tab one: a mode dot on
+   the left, name over a dim meta line, action pinned right. A block that
+   invented its own language here would read as a different product.
+   ═══════════════════════════════════════════════════════════════ */
+
+.welcome-foreign {
+  width: 100%;
+  margin-top: 0.75rem;
+}
+
+.foreign-sessions {
+  display: flex;
+  flex-direction: column;
+  gap: 0.4rem;
+  text-align: left;
+}
+
+/* `.foreign-sessions` is a flex container, so `[hidden]` needs re-asserting or
+   the module's only visibility lever does nothing (same trap as .home-sessions). */
+.foreign-sessions[hidden] {
+  display: none;
+}
+
+.foreign-header {
+  display: flex;
+  align-items: center;
+  gap: 0.5rem;
+}
+
+.foreign-title {
+  font-size: 0.85rem;
+  color: var(--text-dim);
+  font-weight: 500;
+  text-align: left;
+}
+
+.foreign-count {
+  font-size: 0.68rem;
+  color: var(--text-dim);
+  background: rgba(255, 255, 255, 0.05);
+  border-radius: 999px;
+  padding: 0.1rem 0.45rem;
+  white-space: nowrap;
+}
+
+.foreign-scan-toggle {
+  margin-left: auto;
+  font-size: 0.68rem;
+  color: var(--text-dim);
+  background: transparent;
+  border: 1px solid var(--border);
+  border-radius: 999px;
+  padding: 0.12rem 0.5rem;
+  cursor: pointer;
+}
+
+.foreign-scan-toggle[aria-pressed='true'] {
+  color: var(--session-blue, #4a9eff);
+  border-color: var(--session-blue, #4a9eff);
+}
+
+.foreign-list {
+  display: flex;
+  flex-direction: column;
+  gap: 0.3rem;
+  max-height: min(40vh, 320px);
+  overflow-y: auto;
+}
+
+.foreign-row {
+  display: flex;
+  align-items: center;
+  gap: 0.55rem;
+  padding: 0.4rem 0.55rem;
+  border: 1px solid var(--border);
+  border-radius: 6px;
+  background: rgba(255, 255, 255, 0.02);
+  min-width: 0;
+}
+
+.foreign-row--open {
+  opacity: 0.62;
+}
+
+.foreign-dot {
+  width: 8px;
+  height: 8px;
+  border-radius: 50%;
+  flex: 0 0 auto;
+  background: var(--text-muted, #888);
+}
+
+.foreign-dot--claude {
+  background: #d97757;
+}
+.foreign-dot--codex {
+  background: #9b8cff;
+}
+.foreign-dot--shell {
+  background: #4caf7d;
+}
+
+.foreign-row-body {
+  display: flex;
+  flex-direction: column;
+  min-width: 0;
+  flex: 1 1 auto;
+}
+
+.foreign-row-name {
+  font-size: 0.82rem;
+  color: var(--text);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.foreign-row-sub {
+  font-size: 0.68rem;
+  color: var(--text-dim);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.foreign-open-btn {
+  flex: 0 0 auto;
+  font-size: 0.7rem;
+  padding: 0.22rem 0.6rem;
+  border-radius: 5px;
+  border: 1px solid var(--border);
+  background: rgba(255, 255, 255, 0.04);
+  color: var(--text);
+  cursor: pointer;
+}
+
+.foreign-open-btn:hover:not(:disabled) {
+  border-color: var(--session-blue, #4a9eff);
+  color: var(--session-blue, #4a9eff);
+}
+
+.foreign-open-btn:disabled {
+  opacity: 0.55;
+  cursor: default;
+}
+
+.foreign-empty {
+  font-size: 0.72rem;
+  color: var(--text-dim);
+  padding: 0.3rem 0.1rem;
+}
+
+.foreign-notes {
+  display: flex;
+  flex-direction: column;
+  gap: 0.15rem;
+}
+
+.foreign-note {
+  font-size: 0.66rem;
+  color: var(--text-dim);
+  opacity: 0.85;
+  line-height: 1.35;
 }

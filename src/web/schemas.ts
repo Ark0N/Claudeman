@@ -650,6 +650,15 @@ export const RemoteHostSchema = z.object({
     .max(100)
     .regex(/^[a-zA-Z0-9._-]+$/, 'Invalid SSH username'),
   port: z.number().int().min(1).max(65535).optional(),
+  // SSH password for hosts that accept no key. Opt-in, stored 0600, never
+  // returned by the API (redactRemoteHost) and never placed on a command line —
+  // it reaches ssh through `sshpass -e` / the SSHPASS environment variable.
+  //
+  // ⚠️ Deliberately NOT filtered by NO_SHELL_META like the path fields below: a
+  // password legitimately contains `$` and backticks, and unlike those it is never
+  // interpolated into a shell string. An EMPTY string is allowed on purpose — it is
+  // the "clear the stored password" gesture (see mergeRemoteHostSecret).
+  password: z.string().max(1024).optional(),
   // Identity (private-key) file PATH only — never key bytes. Reject shell
   // metacharacters ($, backtick) that survive into the `bash -c` launch layer.
   identityFile: z.string().min(1).max(4096).regex(NO_SHELL_META, 'Invalid identity file path').optional(),
@@ -812,6 +821,74 @@ export const DockerCaseLinkSchema = z.object({
     .min(2)
     .max(128)
     .regex(/^[a-zA-Z0-9][a-zA-Z0-9_.-]+$/, 'Invalid container name')
+    .optional(),
+});
+
+/**
+ * ADOPT an already-running container the user built and runs themselves. The
+ * container name is REQUIRED (there is nothing to derive it from — we are not
+ * creating it), and `hostWorkspacePath` still points at real host bytes so the
+ * file routes, watchers and transcript correlation keep working exactly as they
+ * do for an owned case. Everything that only makes sense at container-create
+ * time (image, network, resources, gpus, credential mounts) is deliberately
+ * absent: adoption never runs `docker create`.
+ */
+export const DockerCaseAdoptSchema = z.object({
+  name: z.string().regex(/^[a-zA-Z0-9_-]+$/, 'Invalid case name format'),
+  hostId: z.string().regex(/^[a-zA-Z0-9_-]+$/, 'Invalid docker host id'),
+  container: z
+    .string()
+    .min(2)
+    .max(128)
+    .regex(/^[a-zA-Z0-9][a-zA-Z0-9_.-]+$/, 'Invalid container name'),
+  hostWorkspacePath: z
+    .string()
+    .min(1)
+    .max(2000)
+    .regex(/^\//, 'Workspace path must be absolute')
+    .regex(/^[^,]*$/, 'Workspace path must not contain commas (docker --mount is comma-delimited)')
+    .regex(NO_SHELL_META, 'Invalid characters in workspace path'),
+  containerWorkdir: z
+    .string()
+    .min(1)
+    .max(2000)
+    .regex(/^\//, 'Container workdir must be absolute')
+    .regex(/^[^,]*$/, 'Container workdir must not contain commas (docker --mount is comma-delimited)')
+    .regex(NO_SHELL_META, 'Invalid characters in container workdir')
+    .optional(),
+});
+
+/** Read-only adoption preflight: report on an existing container, link nothing. */
+export const DockerAdoptPreflightSchema = z.object({
+  hostId: z.string().regex(/^[a-zA-Z0-9_-]+$/, 'Invalid docker host id'),
+  container: z
+    .string()
+    .min(2)
+    .max(128)
+    .regex(/^[a-zA-Z0-9][a-zA-Z0-9_.-]+$/, 'Invalid container name'),
+  /** Optional: also verify this path exists INSIDE the container. */
+  containerWorkdir: z
+    .string()
+    .min(1)
+    .max(2000)
+    .regex(/^\//, 'Container workdir must be absolute')
+    .regex(NO_SHELL_META, 'Invalid characters in container workdir')
+    .optional(),
+});
+
+/** Read-only directory listing inside a container (adoption workdir picker). */
+export const DockerBrowseSchema = z.object({
+  hostId: z.string().regex(/^[a-zA-Z0-9_-]+$/, 'Invalid docker host id'),
+  container: z
+    .string()
+    .min(2)
+    .max(128)
+    .regex(/^[a-zA-Z0-9][a-zA-Z0-9_.-]+$/, 'Invalid container name'),
+  path: z
+    .string()
+    .max(2000)
+    .regex(/^\//, 'Path must be absolute')
+    .regex(NO_SHELL_META, 'Invalid characters in path')
     .optional(),
 });
 
@@ -1742,3 +1819,25 @@ export const WebviewUpdateSchema = WebviewBaseSchema.partial();
 
 /** POST /api/webviews/probe: reachability + framing check for the editor's Test button. */
 export const WebviewProbeSchema = z.object({ url: webviewUrlSchema });
+
+/**
+ * Adopt a FOREIGN tmux session (one a human started outside Codeman).
+ *
+ * ⚠️ The body carries ONLY the opaque candidate id from `GET /api/mux/foreign`.
+ * The socket path, session name and host are re-resolved server-side by re-running
+ * discovery, so a browser can never hand the launch chain a path or a session name
+ * to interpolate. That is the same discipline that keeps the docker-adopt and
+ * remote-attach paths free of caller-supplied command fragments.
+ */
+export const AdoptForeignSessionSchema = z
+  .object({
+    id: z.string().min(1).max(64),
+    /** Optional tab name; defaults to the foreign session's own name. */
+    name: z.string().max(128).optional(),
+    /** Include docker locations in the re-resolve (must match the listing call). */
+    docker: z.boolean().optional(),
+    /** Include remote locations in the re-resolve. */
+    remote: z.boolean().optional(),
+    parentSessionId: z.string().max(64).optional(),
+  })
+  .strict();

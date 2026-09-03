@@ -166,7 +166,23 @@ export interface CaseInfo {
     container: string;
     image?: string;
     path: string;
+    /** Directory INSIDE the container (defaults to `path` when unset). */
+    containerWorkdir?: string;
+    /**
+     * False = an ADOPTED container the user built and runs. Only those may back
+     * several cases at once (classifyAdoptContainerConflict), so this is what lets
+     * the UI offer "duplicate for another directory" on exactly the right cases —
+     * an owned container's lifecycle belongs to its one case.
+     */
+    owned?: boolean;
     network?: string;
+    /**
+     * CLIs available INSIDE the container. A container case runs its agents in
+     * the container, so HOST CLI availability says nothing about what it can
+     * run. Absent = unknown (an owned container runs our base image, which ships
+     * every CLI), which the UI reads as "do not gate".
+     */
+    availableModes?: string[];
   };
 }
 

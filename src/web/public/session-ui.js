@@ -187,6 +187,13 @@ Object.assign(CodemanApp.prototype, {
     this.closeCasePicker();
     this.updateDirDisplayForCase(select.value);
     this.updateMobileCaseLabel(select.value);
+    // Warm the container's CLI list HERE rather than when the run menu opens.
+    // The probe is a `docker exec` round trip, so gating it on the menu meant the
+    // menu painted every mode first and only narrowed a moment later — which
+    // reads as "it shows all of them" and lets a mode be picked that the
+    // container does not have.
+    const picked = (this.cases || []).find((c) => c.name === select.value);
+    if (picked?.location === 'docker') void this._probeDockerCaseModes(picked, null);
     if (save) {
       this.saveLastUsedCase(select.value);
     }
@@ -477,10 +484,35 @@ Object.assign(CodemanApp.prototype, {
    * run modes like the rest, and neither `agy` nor `pi` is likely to be installed.
    */
   _refreshRunModeAvailability(menu) {
+    // A DOCKER case runs its agents INSIDE the container, so host CLI
+    // availability answers the wrong question: the host may have no claude at
+    // all while the container ships one, and gating on the host hides a mode
+    // that would have worked. Adoption records what the container really has
+    // (`availableModes`); an owned container runs our base image, which ships
+    // every CLI, so an absent list means "do not gate" rather than "nothing".
+    // Same source every run* path reads the selected case from.
+    const caseName = document.getElementById('quickStartCase')?.value;
+    const activeCase = caseName ? (this.cases || []).find((c) => c.name === caseName) : null;
+    const isDocker = activeCase?.location === 'docker';
+    // Prefer a LIVE probe over the value stored at attach time: a container's
+    // CLIs can be installed or removed long after the case was linked, and a
+    // case linked before that field existed has none at all.
+    const containerModes = isDocker
+      ? this._dockerCaseModes?.[caseName] || activeCase.docker?.availableModes || null
+      : null;
+    if (isDocker && !this._dockerCaseModes?.[caseName]) void this._probeDockerCaseModes(activeCase, menu);
+    // An unreachable container hides every agent mode and explains why, instead
+    // of silently offering modes that cannot start.
+    const probeError = isDocker ? this._dockerCaseProbeError?.[caseName] : null;
     for (const mode of ['claude', 'opencode', 'codex', 'gemini', 'antigravity', 'pi', 'grok', 'deepseek', 'omp']) {
       const btn = menu.querySelector(`.run-mode-option[data-mode="${mode}"]`);
-      if (btn) btn.style.display = this.isCliAvailable(mode) ? 'flex' : 'none';
+      if (!btn) continue;
+      let available;
+      if (isDocker) available = probeError ? false : containerModes ? containerModes.includes(mode) : true;
+      else available = this.isCliAvailable(mode);
+      btn.style.display = available ? 'flex' : 'none';
     }
+    this._renderRunModeNotice(menu, probeError);
     // DeepSeek is the one mode whose availability has two halves: `dsh` can be
     // perfectly installed while no pane-capable profile exists, because DeepSeek
     // ships no terminal front door. In that state the honest offer is "add one",
@@ -619,6 +651,74 @@ Object.assign(CodemanApp.prototype, {
       if (menu) this._refreshRunModeAvailability(menu);
     } catch (err) {
       this._reportSessionLaunchError(ownsLaunchTerminal, err.message);
+    }
+  },
+
+  /**
+   * One-line explanation at the top of the run menu. Only a container that could
+   * not be read produces one; everything else removes it, so a stale reason can
+   * never outlive the condition that caused it.
+   */
+  _renderRunModeNotice(menu, message) {
+    if (!menu) return;
+    let el = menu.querySelector('.run-mode-notice');
+    if (!message) {
+      el?.remove();
+      return;
+    }
+    if (!el) {
+      el = document.createElement('div');
+      el.className = 'run-mode-notice';
+      menu.prepend(el);
+    }
+    // Server-supplied text: set it, never parse it as markup.
+    el.textContent = message;
+  },
+
+  /**
+   * Ask the container which CLIs it actually has, and re-gate the menu once the
+   * answer lands. Cached per case for the page's lifetime: the menu re-opens
+   * often and the probe is a `docker exec` round trip.
+   *
+   * Best-effort by design — an unreachable daemon or a stopped container leaves
+   * the cache empty, which the caller reads as "unknown" and therefore does not
+   * gate. Hiding every mode because a probe failed would be worse than showing
+   * one that turns out to be missing, which the launch path already refuses with
+   * a specific message.
+   */
+  async _probeDockerCaseModes(activeCase, menu) {
+    const name = activeCase?.name;
+    const container = activeCase?.docker?.container;
+    const hostId = activeCase?.docker?.hostId;
+    if (!name || !container || !hostId) return;
+    this._dockerCaseModes = this._dockerCaseModes || {};
+    if (this._dockerModeProbeInFlight?.[name]) return;
+    this._dockerModeProbeInFlight = this._dockerModeProbeInFlight || {};
+    this._dockerModeProbeInFlight[name] = true;
+    try {
+      // ⚠️ _api serializes `body` and sets Content-Type itself. Passing an
+      // already-stringified body double-encodes it and the server rejects a
+      // JSON string where it expects an object (400 INVALID_INPUT).
+      const probe = await this._apiJson('/api/docker-cases/adopt-preflight', {
+        method: 'POST',
+        body: { hostId, container },
+      });
+      if (probe?.ok && Array.isArray(probe.availableModes)) {
+        this._dockerCaseModes[name] = probe.availableModes;
+        delete this._dockerCaseProbeError?.[name];
+      } else {
+        // A container that cannot be probed — recreated, stopped, engine down —
+        // must NOT fall through to "show everything". Offering claude on a
+        // container that is not running is a click that can only fail, with the
+        // reason visible nowhere. Record the reason and say it in the menu.
+        this._dockerCaseProbeError = this._dockerCaseProbeError || {};
+        this._dockerCaseProbeError[name] = probe?.error || `Could not read container "${container}".`;
+        delete this._dockerCaseModes[name];
+      }
+      // Only repaint while the menu the user opened is still on screen.
+      if (menu?.classList.contains('active')) this._refreshRunModeAvailability(menu);
+    } finally {
+      delete this._dockerModeProbeInFlight[name];
     }
   },
 
@@ -2366,6 +2466,9 @@ Object.assign(CodemanApp.prototype, {
       'remoteHostPort',
       'remoteHostCodexCommand',
       'remoteHostIdentityFile',
+      // ⚠️ Must be cleared with the rest: a password left in the field would be
+      // silently inherited by the NEXT host created from this form.
+      'remoteHostPassword',
       'remoteHostSocksProxy',
       'remoteHostJumpHost',
       'remoteHostExtraSshOptions',
@@ -2387,6 +2490,28 @@ Object.assign(CodemanApp.prototype, {
     modal.querySelectorAll('.set-rail-item').forEach(btn => {
       btn.onclick = () => this.switchCaseModalTab(btn.dataset.tab);
     });
+    // Adopt-an-existing-container toggle + its read-only preflight. Assigned (not
+    // addEventListener) so reopening the modal cannot stack duplicate handlers,
+    // matching the rail wiring right above.
+    const adoptToggle = document.getElementById('dockerAdoptExisting');
+    if (adoptToggle) adoptToggle.onchange = () => this._syncDockerAdoptMode();
+    const adoptCheck = document.getElementById('dockerAdoptCheckBtn');
+    if (adoptCheck) adoptCheck.onclick = () => this._dockerAdoptPreflight();
+    const adoptJump = document.getElementById('dockerAdoptJumpBtn');
+    if (adoptJump) adoptJump.onclick = () => this.jumpToDockerAdopt();
+    // Containers come from the host profile, so switching Host ID invalidates the
+    // suggestions. Dropping the marker (rather than refetching here) keeps the
+    // fetch lazy — it happens when adopt mode is actually on.
+    const hostIdInput = document.getElementById('dockerHostId');
+    if (hostIdInput) {
+      hostIdInput.onchange = () => {
+        delete document.getElementById('dockerContainerList')?.dataset.loadedFor;
+        if (document.getElementById('dockerAdoptExisting')?.checked) void this._loadDockerContainerOptions();
+      };
+    }
+    // A fresh open re-reads the engine: containers start and stop between visits.
+    delete document.getElementById('dockerContainerList')?.dataset.loadedFor;
+    this._syncDockerAdoptMode();
     // Scroll-into-view on focus for mobile keyboard visibility
     modal.querySelectorAll('input[type="text"]').forEach(input => {
       if (!input._mobileScrollWired) {
@@ -2862,6 +2987,61 @@ Object.assign(CodemanApp.prototype, {
     });
   },
 
+  /** HOST workspace directory — the same picker Link Existing uses. */
+  openDockerWorkspacePathPicker() {
+    const pathInput = document.getElementById('dockerWorkspacePath');
+    PathPicker.open({
+      title: 'Select Host Workspace Folder',
+      initialPath: pathInput.value.trim(),
+      directoriesOnly: true,
+      onSelect: (path) => {
+        pathInput.value = path;
+        const nameInput = document.getElementById('dockerCaseName');
+        if (nameInput && !nameInput.value.trim()) {
+          const folder = path.split('/').filter(Boolean).pop() || '';
+          if (/^[a-zA-Z0-9_-]+$/.test(folder)) nameInput.value = folder;
+        }
+      },
+    });
+  },
+
+  /**
+   * Container workdir. Browses INSIDE the container, because for an adopted
+   * container nothing is mounted at a matching host path — the host picker would
+   * be listing a different filesystem, and typing this field blind is exactly
+   * what makes the launch fail with an OCI chdir error.
+   */
+  openDockerWorkdirPicker() {
+    const pathInput = document.getElementById('dockerAdoptWorkdir');
+    const container = document.getElementById('dockerContainerName')?.value.trim();
+    const hostId = document.getElementById('dockerHostId')?.value.trim() || 'local';
+    if (!container) {
+      this.showToast('Enter the container name first', 'error');
+      return;
+    }
+    PathPicker.open({
+      title: `Select Folder Inside ${container}`,
+      initialPath: pathInput.value.trim() || '/',
+      directoriesOnly: true,
+      fetchListing: async (path) => {
+        const data = await this._apiJson('/api/docker-cases/browse', {
+          method: 'POST',
+          body: { hostId, container, path: path || '/' },
+        });
+        if (!data) return { success: false, error: `Could not read ${container}. Is it running?` };
+        if (data.error) return { success: false, error: data.error };
+        // Shape it like the host endpoint: one root, so Up/Location behave.
+        return {
+          success: true,
+          data: { ...data, root: '/', roots: [{ label: container, path: '/' }], truncated: false },
+        };
+      },
+      onSelect: (path) => {
+        pathInput.value = path;
+      },
+    });
+  },
+
   async linkRemoteCase() {
     const name = document.getElementById('remoteCaseName').value.trim();
     const remotePath = document.getElementById('remoteCasePath').value.trim();
@@ -2872,6 +3052,8 @@ Object.assign(CodemanApp.prototype, {
     // COD-107 — port + advanced SSH connection options.
     const portRaw = document.getElementById('remoteHostPort').value.trim();
     const identityFile = document.getElementById('remoteHostIdentityFile').value.trim();
+    // Deliberately NOT trimmed: leading/trailing spaces can be part of a password.
+    const password = document.getElementById('remoteHostPassword').value;
     const socksProxy = document.getElementById('remoteHostSocksProxy').value.trim();
     const jumpHost = document.getElementById('remoteHostJumpHost').value.trim();
     const extraSshOptions = document.getElementById('remoteHostExtraSshOptions').value
@@ -2908,6 +3090,7 @@ Object.assign(CodemanApp.prototype, {
         username,
         ...(port ? { port } : {}),
         ...(identityFile ? { identityFile } : {}),
+        ...(password ? { password } : {}),
         ...(socksProxy ? { socksProxy } : {}),
         ...(jumpHost ? { jumpHost } : {}),
         ...(extraSshOptions.length ? { extraSshOptions } : {}),
@@ -2943,10 +3126,224 @@ Object.assign(CodemanApp.prototype, {
     }
   },
 
+  /**
+   * Reflect the "attach to an existing container" checkbox onto the modal so CSS
+   * can swap which half of the Docker panel applies. An attribute rather than
+   * per-row inline styles: the panel is rebuilt by nothing, but the create-time
+   * rows are a SET (image, network, advanced block) and one attribute keeps them
+   * in lockstep with the container-name row.
+   */
+  _syncDockerAdoptMode() {
+    const modal = document.getElementById('createCaseModal');
+    if (!modal) return;
+    const adopting = document.getElementById('dockerAdoptExisting')?.checked;
+    if (adopting) modal.setAttribute('data-docker-adopt', '1');
+    else modal.removeAttribute('data-docker-adopt');
+    if (adopting) {
+      void this._loadDockerContainerOptions();
+      void this._loadDockerCloneOptions();
+    }
+  },
+
+  /**
+   * Fill the container-name `<datalist>`. A native datalist is deliberate: the
+   * field must accept a free-typed name (the engine may be remote, or the
+   * container may not exist yet when the form is filled), and datalist gives
+   * type-to-filter over the suggestions without a custom dropdown.
+   *
+   * Best-effort by design — the endpoint returns [] for an unreachable daemon,
+   * and an empty list simply leaves the field as plain text input.
+   */
+  /**
+   * Fill the "Duplicate an Existing Case" picker with the ADOPTED docker cases.
+   *
+   * One adopted container can back several cases, each pointing at a different
+   * directory inside it (classifyAdoptContainerConflict) — but re-typing the
+   * container, host and workspace by hand for every directory is exactly the
+   * friction that makes the capability go unused. Picking a case here fills those
+   * three and leaves only the two fields that MUST differ: the case name and the
+   * container workdir.
+   *
+   * ⚠️ Adopted cases only (`docker.owned === false`). An owned container's
+   * lifecycle belongs to its one case — a second case on it would be destroyed
+   * out from under itself by that case's recreate or delete — and the server
+   * refuses it, so offering it here would only produce a confusing error.
+   */
+  async _loadDockerCloneOptions() {
+    const select = document.getElementById('dockerAdoptCloneFrom');
+    const row = document.getElementById('dockerAdoptCloneRow');
+    if (!select || !row) return;
+    let cases = [];
+    try {
+      const res = await fetch('/api/cases');
+      const data = await res.json();
+      cases = (Array.isArray(data) ? data : data?.data || []).filter(
+        (c) => c?.docker && c.docker.owned === false
+      );
+    } catch {
+      cases = [];
+    }
+    select.textContent = '';
+    const blank = document.createElement('option');
+    blank.value = '';
+    blank.textContent = 'Start from scratch';
+    select.appendChild(blank);
+    for (const c of cases) {
+      const option = document.createElement('option');
+      option.value = c.name;
+      // Server-supplied strings: textContent, never markup.
+      option.textContent = `${c.name} — ${c.docker.container}:${c.docker.containerWorkdir || c.docker.path}`;
+      option.dataset.container = c.docker.container;
+      option.dataset.hostId = c.docker.hostId;
+      option.dataset.path = c.docker.path;
+      option.dataset.workdir = c.docker.containerWorkdir || c.docker.path;
+      select.appendChild(option);
+    }
+    // Nothing to duplicate yet: an empty picker is noise on the first adoption.
+    row.hidden = cases.length === 0;
+  },
+
+  /**
+   * Apply the picked case: carry over what STAYS the same, clear what must not.
+   *
+   * The two cleared fields are the point of the feature — a duplicate that kept
+   * the original's name would be rejected as an existing case, and one that kept
+   * its container workdir would be rejected as an exact twin (both by the server,
+   * with a clear message, but a form that pre-fills a value it knows will be
+   * refused is just a trap).
+   */
+  applyDockerCloneSource() {
+    const select = document.getElementById('dockerAdoptCloneFrom');
+    const option = select?.selectedOptions?.[0];
+    if (!option || !option.value) return;
+    const set = (id, value) => {
+      const el = document.getElementById(id);
+      if (el) el.value = value || '';
+    };
+    set('dockerContainerName', option.dataset.container);
+    set('dockerHostId', option.dataset.hostId);
+    set('dockerWorkspacePath', option.dataset.path);
+    // Pre-filled, NOT cleared: these two must differ from the source, but editing
+    // `/srv/app/api` into `/srv/app/web` beats retyping a long path, and the same
+    // goes for the name. What keeps a duplicate from being submitted unchanged is
+    // the guard below (dockerCloneGuard), which is a better trade than an empty
+    // field: the form stays a starting point instead of a blank form with three
+    // fields mysteriously filled in.
+    set('dockerCaseName', option.value);
+    set('dockerAdoptWorkdir', option.dataset.workdir);
+    // Remembered so the guard can tell "unchanged" from "happens to look similar".
+    select.dataset.appliedName = option.value;
+    select.dataset.appliedWorkdir = option.dataset.workdir || '';
+    const workdir = document.getElementById('dockerAdoptWorkdir');
+    workdir?.focus();
+    // Caret at the end: the tail is the part that changes.
+    if (workdir) workdir.setSelectionRange(workdir.value.length, workdir.value.length);
+  },
+
+  /**
+   * Refuse a duplicate that still carries the source case's name or directory.
+   *
+   * Both are pre-filled so they can be EDITED, which means both can also be left
+   * alone by accident. The server refuses either (an existing case name, or an
+   * exact same-container-same-directory twin) with a clear message, but a
+   * round-trip to be told "you forgot to change the field you were looking at" is
+   * worse than saying so here, next to the field, before anything is sent.
+   *
+   * Returns the offending element, or null when the form is fine.
+   */
+  dockerCloneGuard() {
+    const select = document.getElementById('dockerAdoptCloneFrom');
+    if (!select || !select.value) return null;
+    const name = document.getElementById('dockerCaseName');
+    const workdir = document.getElementById('dockerAdoptWorkdir');
+    if (name && name.value.trim() === (select.dataset.appliedName || '')) {
+      return { el: name, message: `"${name.value.trim()}" is the case you copied from — give this one a new name.` };
+    }
+    if (workdir && workdir.value.trim() === (select.dataset.appliedWorkdir || '')) {
+      return {
+        el: workdir,
+        message: 'Same container and same directory as the case you copied from — point this one at another directory.',
+      };
+    }
+    return null;
+  },
+
+  async _loadDockerContainerOptions() {
+    const list = document.getElementById('dockerContainerList');
+    if (!list) return;
+    const hostId = document.getElementById('dockerHostId')?.value.trim() || 'local';
+    if (list.dataset.loadedFor === hostId) return; // one fetch per host per open
+    const data = await this._apiJson(`/api/docker-hosts/${encodeURIComponent(hostId)}/containers`);
+    const containers = data?.containers || [];
+    list.textContent = '';
+    for (const c of containers) {
+      const option = document.createElement('option');
+      option.value = c.name;
+      // Engine-supplied strings: set as text, never as markup.
+      option.textContent = c.running ? `${c.image} · ${c.status}` : `${c.image} · ${c.status} (not running)`;
+      list.appendChild(option);
+    }
+    list.dataset.loadedFor = hostId;
+  },
+
+  /**
+   * Cross-link from the Create New tab's "Run in an isolated Docker container"
+   * row. Adoption lives on the Docker tab, but the place users actually look for
+   * anything container-shaped is that checkbox, so this jumps them there with the
+   * toggle already on rather than leaving the feature undiscoverable.
+   */
+  jumpToDockerAdopt() {
+    this.switchCaseModalTab('case-docker');
+    const toggle = document.getElementById('dockerAdoptExisting');
+    if (toggle) toggle.checked = true;
+    this._syncDockerAdoptMode();
+    document.getElementById('dockerContainerName')?.focus();
+  },
+
+  /**
+   * Read-only preflight against an existing container. It links nothing, so the
+   * user can find out "not running" / "no tmux" / "codex present, claude missing"
+   * before committing to a case name — the same reason the server refuses at link
+   * time rather than at session launch.
+   */
+  async _dockerAdoptPreflight() {
+    const statusEl = document.getElementById('dockerLinkStatus');
+    const container = document.getElementById('dockerContainerName')?.value.trim();
+    const containerWorkdir = document.getElementById('dockerAdoptWorkdir')?.value.trim();
+    const hostId = document.getElementById('dockerHostId').value.trim() || 'local';
+    if (!container) {
+      if (statusEl) statusEl.textContent = 'Enter a container name first.';
+      return;
+    }
+    if (statusEl) statusEl.textContent = 'Inspecting container...';
+    // _apiJson folds every failure to null, and a preflight's whole value is the
+    // reason it failed, so the envelope is unwrapped by hand here.
+    const probe = await this._apiJson('/api/docker-cases/adopt-preflight', {
+      method: 'POST',
+      body: { hostId, container, ...(containerWorkdir ? { containerWorkdir } : {}) },
+    });
+    if (!statusEl) return;
+    if (!probe) {
+      statusEl.textContent = 'Could not reach the docker host profile. Save a Host ID first.';
+      return;
+    }
+    if (!probe.ok) {
+      statusEl.textContent = probe.error || 'Container is not adoptable.';
+      return;
+    }
+    const modes = (probe.availableModes || []).filter((m) => m !== 'shell');
+    statusEl.textContent = modes.length
+      ? `Running (${probe.image || 'unknown image'}). Available: ${modes.join(', ')}.`
+      : `Running (${probe.image || 'unknown image'}), but no agent CLI found inside — only Shell will work.`;
+  },
+
   async linkDockerCase() {
     const name = document.getElementById('dockerCaseName').value.trim();
     const hostWorkspacePath = document.getElementById('dockerWorkspacePath').value.trim();
     const hostId = document.getElementById('dockerHostId').value.trim() || 'local';
+    const adopting = !!document.getElementById('dockerAdoptExisting')?.checked;
+    const container = document.getElementById('dockerContainerName')?.value.trim() || '';
+    const adoptWorkdir = document.getElementById('dockerAdoptWorkdir')?.value.trim() || '';
     const image = document.getElementById('dockerImage').value.trim() || 'codeman/agent:base';
     const network = document.getElementById('dockerNetwork').value;
     const memory = document.getElementById('dockerMemory').value.trim();
@@ -2967,9 +3364,26 @@ Object.assign(CodemanApp.prototype, {
       this.showToast('Workspace path must be absolute', 'error');
       return;
     }
+    if (adopting && !container) {
+      this.showToast('Enter the name of the running container to attach to', 'error');
+      return;
+    }
+    // A duplicate that still carries the source's name or directory: say so here,
+    // beside the field, rather than sending a request certain to come back refused.
+    const cloneIssue = adopting ? this.dockerCloneGuard() : null;
+    if (cloneIssue) {
+      this.showToast(cloneIssue.message, 'error');
+      const statusEl = document.getElementById('dockerLinkStatus');
+      if (statusEl) statusEl.textContent = cloneIssue.message;
+      cloneIssue.el.focus();
+      cloneIssue.el.select?.();
+      return;
+    }
 
     try {
-      if (statusEl) statusEl.textContent = 'Checking docker daemon + base image...';
+      if (statusEl) {
+        statusEl.textContent = adopting ? 'Inspecting the existing container...' : 'Checking docker daemon + base image...';
+      }
       // omitted optionals sent as UNDEFINED (never null — Zod .optional() rejects null)
       const resources = {};
       if (memory) resources.memory = memory;
@@ -3000,16 +3414,27 @@ Object.assign(CodemanApp.prototype, {
       }
       if (!hostData.success) throw new Error(hostData.error || 'Failed to save docker host');
 
-      const caseRes = await fetch('/api/cases/docker-link', {
+      // Adoption reuses this whole flow and differs only in the final call: a
+      // different endpoint (which never creates a container) plus the container
+      // name. The host upsert above still applies — it is what resolves the
+      // engine/context/daemon for the `docker exec`; its create-time fields are
+      // simply never read for an adopted case.
+      const caseRes = await fetch(adopting ? '/api/cases/docker-adopt' : '/api/cases/docker-link', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ name, hostId, hostWorkspacePath }),
+        body: JSON.stringify(
+          adopting
+            ? { name, hostId, hostWorkspacePath, container, ...(adoptWorkdir ? { containerWorkdir: adoptWorkdir } : {}) }
+            : { name, hostId, hostWorkspacePath }
+        ),
       });
       const caseData = await caseRes.json();
       if (caseData.success) {
         this.closeCreateCaseModal();
         const caps = caseData.data?.capsEnforced === false ? ' (resource caps are advisory on this engine)' : '';
-        this.showToast(`Docker case "${name}" linked${caps}`, 'success');
+        const modes = (caseData.data?.availableModes || []).filter((m) => m !== 'shell');
+        const found = adopting && modes.length ? ` — found ${modes.join(', ')}` : '';
+        this.showToast(`Docker case "${name}" ${adopting ? 'attached' : 'linked'}${caps}${found}`, 'success');
         await this.loadQuickStartCases(name);
         await this.saveLastUsedCase(name);
       } else {
@@ -3126,6 +3551,8 @@ Object.assign(CodemanApp.prototype, {
     const username = document.getElementById('remoteHostUsername').value.trim();
     const portRaw = document.getElementById('remoteHostPort').value.trim();
     const identityFile = document.getElementById('remoteHostIdentityFile').value.trim();
+    // Deliberately NOT trimmed: leading/trailing spaces can be part of a password.
+    const password = document.getElementById('remoteHostPassword').value;
     const socksProxy = document.getElementById('remoteHostSocksProxy').value.trim();
     const jumpHost = document.getElementById('remoteHostJumpHost').value.trim();
     const codexCommand = document.getElementById('remoteHostCodexCommand').value.trim();
@@ -3145,6 +3572,7 @@ Object.assign(CodemanApp.prototype, {
       username,
       ...(port ? { port } : {}),
       ...(identityFile ? { identityFile } : {}),
+      ...(password ? { password } : {}),
       ...(socksProxy ? { socksProxy } : {}),
       ...(jumpHost ? { jumpHost } : {}),
       ...(extraSshOptions.length ? { extraSshOptions } : {}),

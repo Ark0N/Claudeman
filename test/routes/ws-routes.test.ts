@@ -250,7 +250,10 @@ describe('ws-routes', () => {
 
         ws.send(JSON.stringify({ t: 'i', d: 'again\r', cid: 'c1', seq: 7 }));
 
-        expect(await nextMessage(ws)).toEqual({ t: 'ia', seq: 7 });
+        // The ACK now SAYS it was a duplicate and hands back the watermark: a bare
+        // ACK is indistinguishable from "applied", and that ambiguity left a client
+        // whose seq counter had rolled back silently unable to type at all.
+        expect(await nextMessage(ws)).toEqual({ t: 'ia', seq: 7, dup: true, last: 7 });
         expect(session.writeBuffer).not.toContain('again\r');
       } finally {
         ws.close();

@@ -146,6 +146,72 @@ describe('CJK input module', () => {
     expect(sent).toEqual(['中文', ...committed]);
   });
 
+  it('forwards Ctrl/Alt-modified navigation keys to the PTY, modifier intact', () => {
+    // claude prints "Jump to bottom (ctrl+End)" and the shortcut has to REACH it.
+    // PASSTHROUGH_KEYS carries only the plain forms, so Ctrl+End used to fail in
+    // both directions: with an empty field it went out as a bare `\x1b[F` (a
+    // plain End), and with any text in the field it was not forwarded at all —
+    // the browser default then moved the caret to the end of the composer, which
+    // is what the user sees as "the shortcut acts on the input box instead".
+    const { textarea, sent } = loadCjkHarness();
+    const preventDefault = vi.fn();
+    textarea.fire('keydown', {
+      key: 'End',
+      ctrlKey: true,
+      altKey: false,
+      shiftKey: false,
+      metaKey: false,
+      preventDefault,
+    });
+    expect(preventDefault).toHaveBeenCalled();
+    expect(sent).toEqual(['\x1b[1;5F']);
+  });
+
+  it('forwards a modified navigation key even when the composer has text', () => {
+    // The empty-field rule belongs to PLAIN navigation (which really is local
+    // editing); a Ctrl-modified one is a command for the CLI either way.
+    const { textarea, sent } = loadCjkHarness();
+    textarea.value = PHANTOM + '未发送的草稿';
+    textarea.fire('keydown', {
+      key: 'Home',
+      ctrlKey: true,
+      altKey: false,
+      shiftKey: false,
+      metaKey: false,
+      preventDefault: vi.fn(),
+    });
+    expect(sent).toEqual(['\x1b[1;5H']);
+  });
+
+  it('encodes the modifier bitmask, Shift included when it rides along', () => {
+    const { textarea, sent } = loadCjkHarness();
+    textarea.fire('keydown', {
+      key: 'ArrowUp',
+      ctrlKey: true,
+      shiftKey: true,
+      altKey: false,
+      metaKey: false,
+      preventDefault: vi.fn(),
+    });
+    expect(sent).toEqual(['\x1b[1;6A']); // 1 + shift(1) + ctrl(4)
+  });
+
+  it('leaves Shift-ALONE navigation local, so selecting in the composer still works', () => {
+    const { textarea, sent } = loadCjkHarness();
+    textarea.value = PHANTOM + '草稿';
+    const preventDefault = vi.fn();
+    textarea.fire('keydown', {
+      key: 'ArrowLeft',
+      shiftKey: true,
+      ctrlKey: false,
+      altKey: false,
+      metaKey: false,
+      preventDefault,
+    });
+    expect(sent).toEqual([]);
+    expect(preventDefault).not.toHaveBeenCalled();
+  });
+
   it('recovers committed text when compositionend never fires (stuck composition)', () => {
     const { textarea, sent } = loadCjkHarness();
 

@@ -180,13 +180,13 @@
   // global so both terminal-ui.js (main terminal) and panels-ui.js (teammate terminals,
   // a separate IIFE) can read the current skin's palette.
   const CODEMAN_XTERM_THEMES = {
-    og: { background: '#0d0d0d', foreground: '#e0e0e0', cursor: '#e0e0e0', cursorAccent: '#0d0d0d', selection: 'rgba(255,255,255,0.3)', black: '#0d0d0d', red: '#ff6b6b', green: '#51cf66', yellow: '#ffd43b', blue: '#339af0', magenta: '#cc5de8', cyan: '#22b8cf', white: '#e0e0e0', brightBlack: '#495057', brightRed: '#ff8787', brightGreen: '#69db7c', brightYellow: '#ffe066', brightBlue: '#5c7cfa', brightMagenta: '#da77f2', brightCyan: '#66d9e8', brightWhite: '#ffffff' },
-    'daylight-green': { background: '#161b23', foreground: '#dfe6ef', cursor: '#2fd3aa', cursorAccent: '#161b23', selection: 'rgba(47,211,170,0.22)', black: '#161b23', red: '#ff8585', green: '#34d8a0', yellow: '#f0c25a', blue: '#5cc6e8', magenta: '#c79af2', cyan: '#2bcbbb', white: '#dfe6ef', brightBlack: '#5b6675', brightRed: '#ffa0a0', brightGreen: '#5fe6b8', brightYellow: '#ffd884', brightBlue: '#82d4ee', brightMagenta: '#d6b3f7', brightCyan: '#5ee0d4', brightWhite: '#f3f6fa' },
-    'daylight-blue': { background: '#161b23', foreground: '#dfe6ef', cursor: '#38b6f0', cursorAccent: '#161b23', selection: 'rgba(56,182,240,0.22)', black: '#161b23', red: '#ff8585', green: '#34d8a0', yellow: '#f0c25a', blue: '#5cc6e8', magenta: '#c79af2', cyan: '#2bcbbb', white: '#dfe6ef', brightBlack: '#5b6675', brightRed: '#ffa0a0', brightGreen: '#5fe6b8', brightYellow: '#ffd884', brightBlue: '#82d4ee', brightMagenta: '#d6b3f7', brightCyan: '#5ee0d4', brightWhite: '#f3f6fa' },
-    'paper-gray': { background: '#f6f8fa', foreground: '#1f2328', cursor: '#0969da', cursorAccent: '#ffffff', selection: 'rgba(9,105,218,0.2)', black: '#24292f', red: '#cf222e', green: '#1a7f37', yellow: '#9a6700', blue: '#0969da', magenta: '#8250df', cyan: '#1b7c83', white: '#59636e', brightBlack: '#6e7781', brightRed: '#a40e26', brightGreen: '#116329', brightYellow: '#7d4e00', brightBlue: '#0550ae', brightMagenta: '#6639ba', brightCyan: '#116b75', brightWhite: '#1f2328' },
-    'solarized-light': { background: '#fdf6e3', foreground: '#586e75', cursor: '#147ba3', cursorAccent: '#fdf6e3', selection: 'rgba(38,139,210,0.2)', black: '#eee8d5', red: '#dc322f', green: '#758600', yellow: '#9b7800', blue: '#147ba3', magenta: '#d33682', cyan: '#2a9189', white: '#073642', brightBlack: '#93a1a1', brightRed: '#cb4b16', brightGreen: '#657b83', brightYellow: '#586e75', brightBlue: '#268bd2', brightMagenta: '#6c71c4', brightCyan: '#2aa198', brightWhite: '#002b36' },
-    'catppuccin-latte': { background: '#eff1f5', foreground: '#4c4f69', cursor: '#1e66f5', cursorAccent: '#ffffff', selection: 'rgba(30,102,245,0.18)', black: '#5c5f77', red: '#d20f39', green: '#3b8f2b', yellow: '#a86605', blue: '#1e66f5', magenta: '#8839ef', cyan: '#177f86', white: '#6c6f85', brightBlack: '#7c7f93', brightRed: '#b50930', brightGreen: '#2f7622', brightYellow: '#8b5604', brightBlue: '#174fbf', brightMagenta: '#6f2bc5', brightCyan: '#116b71', brightWhite: '#4c4f69' },
-    'rose-pine-dawn': { background: '#faf4ed', foreground: '#575279', cursor: '#286983', cursorAccent: '#fffaf3', selection: 'rgba(40,105,131,0.2)', black: '#575279', red: '#b4637a', green: '#286983', yellow: '#96681f', blue: '#477f91', magenta: '#907aa9', cyan: '#3f7f8b', white: '#6e6a86', brightBlack: '#797593', brightRed: '#984d66', brightGreen: '#1f5266', brightYellow: '#7d5417', brightBlue: '#386b7c', brightMagenta: '#765f90', brightCyan: '#326b76', brightWhite: '#575279' },
+    og: { background: '#0d0d0d', foreground: '#e0e0e0', cursor: '#e0e0e0', cursorAccent: '#0d0d0d', selectionBackground: 'rgba(255,255,255,0.3)', selectionInactiveBackground: 'rgba(255,255,255,0.165)', black: '#0d0d0d', red: '#ff6b6b', green: '#51cf66', yellow: '#ffd43b', blue: '#339af0', magenta: '#cc5de8', cyan: '#22b8cf', white: '#e0e0e0', brightBlack: '#495057', brightRed: '#ff8787', brightGreen: '#69db7c', brightYellow: '#ffe066', brightBlue: '#5c7cfa', brightMagenta: '#da77f2', brightCyan: '#66d9e8', brightWhite: '#ffffff' },
+    'daylight-green': { background: '#161b23', foreground: '#dfe6ef', cursor: '#2fd3aa', cursorAccent: '#161b23', selectionBackground: 'rgba(47,211,170,0.22)', selectionInactiveBackground: 'rgba(47,211,170,0.121)', black: '#161b23', red: '#ff8585', green: '#34d8a0', yellow: '#f0c25a', blue: '#5cc6e8', magenta: '#c79af2', cyan: '#2bcbbb', white: '#dfe6ef', brightBlack: '#5b6675', brightRed: '#ffa0a0', brightGreen: '#5fe6b8', brightYellow: '#ffd884', brightBlue: '#82d4ee', brightMagenta: '#d6b3f7', brightCyan: '#5ee0d4', brightWhite: '#f3f6fa' },
+    'daylight-blue': { background: '#161b23', foreground: '#dfe6ef', cursor: '#38b6f0', cursorAccent: '#161b23', selectionBackground: 'rgba(56,182,240,0.22)', selectionInactiveBackground: 'rgba(56,182,240,0.121)', black: '#161b23', red: '#ff8585', green: '#34d8a0', yellow: '#f0c25a', blue: '#5cc6e8', magenta: '#c79af2', cyan: '#2bcbbb', white: '#dfe6ef', brightBlack: '#5b6675', brightRed: '#ffa0a0', brightGreen: '#5fe6b8', brightYellow: '#ffd884', brightBlue: '#82d4ee', brightMagenta: '#d6b3f7', brightCyan: '#5ee0d4', brightWhite: '#f3f6fa' },
+    'paper-gray': { background: '#f6f8fa', foreground: '#1f2328', cursor: '#0969da', cursorAccent: '#ffffff', selectionBackground: 'rgba(9,105,218,0.2)', selectionInactiveBackground: 'rgba(9,105,218,0.11)', black: '#24292f', red: '#cf222e', green: '#1a7f37', yellow: '#9a6700', blue: '#0969da', magenta: '#8250df', cyan: '#1b7c83', white: '#59636e', brightBlack: '#6e7781', brightRed: '#a40e26', brightGreen: '#116329', brightYellow: '#7d4e00', brightBlue: '#0550ae', brightMagenta: '#6639ba', brightCyan: '#116b75', brightWhite: '#1f2328' },
+    'solarized-light': { background: '#fdf6e3', foreground: '#586e75', cursor: '#147ba3', cursorAccent: '#fdf6e3', selectionBackground: 'rgba(38,139,210,0.2)', selectionInactiveBackground: 'rgba(38,139,210,0.11)', black: '#eee8d5', red: '#dc322f', green: '#758600', yellow: '#9b7800', blue: '#147ba3', magenta: '#d33682', cyan: '#2a9189', white: '#073642', brightBlack: '#93a1a1', brightRed: '#cb4b16', brightGreen: '#657b83', brightYellow: '#586e75', brightBlue: '#268bd2', brightMagenta: '#6c71c4', brightCyan: '#2aa198', brightWhite: '#002b36' },
+    'catppuccin-latte': { background: '#eff1f5', foreground: '#4c4f69', cursor: '#1e66f5', cursorAccent: '#ffffff', selectionBackground: 'rgba(30,102,245,0.18)', selectionInactiveBackground: 'rgba(30,102,245,0.099)', black: '#5c5f77', red: '#d20f39', green: '#3b8f2b', yellow: '#a86605', blue: '#1e66f5', magenta: '#8839ef', cyan: '#177f86', white: '#6c6f85', brightBlack: '#7c7f93', brightRed: '#b50930', brightGreen: '#2f7622', brightYellow: '#8b5604', brightBlue: '#174fbf', brightMagenta: '#6f2bc5', brightCyan: '#116b71', brightWhite: '#4c4f69' },
+    'rose-pine-dawn': { background: '#faf4ed', foreground: '#575279', cursor: '#286983', cursorAccent: '#fffaf3', selectionBackground: 'rgba(40,105,131,0.2)', selectionInactiveBackground: 'rgba(40,105,131,0.11)', black: '#575279', red: '#b4637a', green: '#286983', yellow: '#96681f', blue: '#477f91', magenta: '#907aa9', cyan: '#3f7f8b', white: '#6e6a86', brightBlack: '#797593', brightRed: '#984d66', brightGreen: '#1f5266', brightYellow: '#7d5417', brightBlue: '#386b7c', brightMagenta: '#765f90', brightCyan: '#326b76', brightWhite: '#575279' },
   };
   const CODEMAN_LIGHT_SKINS = new Set(['paper-gray', 'solarized-light', 'catppuccin-latte', 'rose-pine-dawn']);
   function currentSkin() {
@@ -285,6 +285,7 @@ Object.assign(CodemanApp.prototype, {
     const container = document.getElementById('terminalContainer');
     this.terminal.open(container);
     this._installMobileTapMouseGuard();
+    this._installShiftDragSelection();
     this._installTouchSelectionFocusGuard();
 
     // Let xterm's CompositionHelper own IME key events. In particular, a
@@ -850,7 +851,25 @@ Object.assign(CodemanApp.prototype, {
       container.addEventListener('contextmenu', (ev) => {
         if (longPressTimer !== null || this._touchSelecting || this._touchSelectionActive) {
           ev.preventDefault();
+          return;
         }
+        // Right-click COPIES the selection, the mintty/PuTTY convention, because
+        // the browser's own menu structurally cannot offer it here: xterm paints
+        // glyphs into a canvas, so a terminal selection is not a DOM selection
+        // and the native "Copy" item has nothing to act on (it is absent or
+        // inert). This is the second half of the habit users bring from a native
+        // terminal running a mouse-tracking TUI — Shift+drag to select (see
+        // _installShiftDragSelection), right-click to copy — and without it that
+        // gesture dead-ends after the selection is made.
+        //
+        // With NOTHING selected the native menu is left alone: it still carries
+        // the browser-level items (reload, inspect) and suppressing it there
+        // would take them away to offer nothing in return.
+        if (!this.terminal?.hasSelection?.()) return;
+        const selection = this.terminal.getSelection();
+        if (!selection) return;
+        ev.preventDefault();
+        void this.copyTerminalSelection(selection);
       });
 
       container.addEventListener(
@@ -1985,6 +2004,9 @@ Object.assign(CodemanApp.prototype, {
       if (overlay) overlay.classList.remove('visible');
       this.hideHomeSessions?.();
       this.showMobileOverview();
+      // The phone overview hosts the same list in its own container.
+      this.wireForeignSessions?.();
+      this.startForeignPolling?.();
       this._updateCjkInputState?.();
       return;
     }
@@ -1999,6 +2021,10 @@ Object.assign(CodemanApp.prototype, {
       // Open tabs down the left gutter. Self-gating: a window too narrow to hold
       // the column without overlapping the content leaves it hidden.
       this.showHomeSessions?.();
+      // Sessions a human opened outside Codeman. Polls only while this screen is
+      // up (stopped in hideWelcome) — see foreign-sessions.js.
+      this.wireForeignSessions?.();
+      this.startForeignPolling?.();
     }
     // Home screen has no input target — hide the CJK textarea (activeSessionId
     // is null by the time we get here). Guarded: defined on the app object.
@@ -2008,6 +2034,7 @@ Object.assign(CodemanApp.prototype, {
   hideWelcome() {
     this.hideMobileOverview?.();
     this.hideHomeSessions?.();
+    this.stopForeignPolling?.();
     const overlay = document.getElementById('welcomeOverlay');
     if (overlay) {
       overlay.classList.remove('visible');
@@ -4719,6 +4746,51 @@ Object.assign(CodemanApp.prototype, {
     if (performance.now() <= (this._trustedTapMouseSuppressUntil || 0)) return;
     if (!ev.target?.closest?.('.xterm-screen')) return;
     this._sendSyntheticSgrTap(ev.clientX, ev.clientY);
+  },
+
+  /**
+   * Make Shift+drag START a selection instead of trying to extend one.
+   *
+   * In a native terminal running a mouse-tracking TUI (claude, codex), Shift is
+   * the "let me select text" modifier: it bypasses the app's mouse reporting so
+   * the emulator selects locally. Users bring that habit here, and here it did
+   * NOTHING — Shift+drag selected no text at all (measured).
+   *
+   * The reason is that the habit and xterm's Shift mean different things once
+   * the DECSETs are stripped. xterm reads Shift as "force selection" ONLY while
+   * the app actually has mouse tracking on; the server strips those DECSETs for
+   * claude/codex/gemini (isAltScreenStripMode), so xterm's mouseTrackingMode is
+   * permanently `none`, that branch is unreachable, and Shift instead falls into
+   * `_onIncrementalClick` — EXTEND an existing selection. Extending is a no-op
+   * when `selectionStart` is null, so the drag never anchors and no selection is
+   * ever built (this is why nothing gets cleared: there was nothing to clear).
+   *
+   * So plant the anchor xterm is missing. Runs in the CAPTURE phase on the
+   * `.xterm` root, an ancestor of the `.xterm-screen` element SelectionService
+   * binds to, so it lands before xterm's own mousedown; xterm's incremental
+   * handler then extends from our anchor and the drag behaves like a plain one.
+   * A Shift+drag with a selection ALREADY up is left alone — that is a genuine
+   * extend gesture and xterm already does it right.
+   */
+  _installShiftDragSelection() {
+    const el = this.terminal?.element;
+    if (!el || el._codemanShiftDragInstalled) return;
+    el._codemanShiftDragInstalled = true;
+    el.addEventListener(
+      'mousedown',
+      (ev) => {
+        if (!ev.isTrusted || ev.button !== 0 || !ev.shiftKey) return;
+        if (ev.altKey || ev.ctrlKey || ev.metaKey) return;
+        if (this.terminal?.hasSelection?.()) return;
+        const pos = this._clientPointToCell(ev.clientX, ev.clientY);
+        if (!pos) return;
+        // _clientPointToCell is 1-based and viewport-relative; select() takes a
+        // 0-based column and an ABSOLUTE buffer row.
+        const viewportY = this.terminal.buffer?.active?.viewportY ?? 0;
+        this.terminal.select(pos.col - 1, pos.row - 1 + viewportY, 0);
+      },
+      true
+    );
   },
 
   _installMobileTapMouseGuard() {

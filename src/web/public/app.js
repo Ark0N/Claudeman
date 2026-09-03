@@ -2794,7 +2794,7 @@ class CodemanApp {
         } else if (msg.t === 'ia') {
           // Input ACK — the server applied (or deduped) this seq; drop it from
           // the durable queue so it can never be re-delivered/lost.
-          this._onWsInputAck(msg.seq);
+          this._onWsInputAck(msg.seq, msg);
         }
       } catch {
         // Ignore malformed messages
@@ -2972,7 +2972,11 @@ class CodemanApp {
       this._pendingDeliveries.set(sessionId, list);
     }
     list.push(rec);
-    this._persistReliableState();
+    // ⚠️ SYNCHRONOUS, not the debounced writer: the seq counter is precisely the
+    // thing that must survive a crash, and a debounce puts it on the path most
+    // likely to be lost. A counter that comes back BELOW the server's watermark
+    // makes every later keystroke a silently-dropped duplicate (see _onWsInputAck).
+    this._persistReliableNow();
     this._updateConnectionIndicator();
     this._drainSession(sessionId);
   }
@@ -3078,9 +3082,40 @@ class CodemanApp {
     this.markIdleAlertSeen?.(sessionId);
   }
 
-  /** Server input-ACK frame ({t:'ia',seq}) over the WebSocket. */
-  _onWsInputAck(seq) {
-    if (this._wsSessionId && Number.isInteger(seq)) this._ackDelivery(this._wsSessionId, seq);
+  /**
+   * Server input-ACK frame ({t:'ia',seq}) over the WebSocket.
+   *
+   * `dup:true` means the server REJECTED the frame as already-seen rather than
+   * applying it, and `last` is its watermark for this clientId. That combination
+   * is the escape hatch from a rolled-back counter: our seqs persist on a
+   * debounced write, so a tab killed between a send and that write comes back
+   * counting from BELOW the server's watermark, and from then on every keystroke
+   * is dropped-but-ACKed — a silently dead terminal that a reload cannot fix,
+   * because the stale counter is restored from localStorage too.
+   *
+   * ⚠️ Only a FIRST-attempt record is re-queued. A retry (`tries > 1`) being
+   * called a duplicate is the mechanism working as designed — the original did
+   * land — and re-sending it would type the same thing twice.
+   */
+  _onWsInputAck(seq, msg) {
+    const sessionId = this._wsSessionId;
+    if (!sessionId || !Number.isInteger(seq)) return;
+    if (msg && msg.dup) {
+      const list = this._pendingDeliveries.get(sessionId);
+      const rec = list && list.find((r) => r.seq === seq);
+      const watermark = Number.isInteger(msg.last) ? msg.last : seq;
+      // Lift the counter clear of the server's watermark before anything else, so
+      // the re-queue below (and every later keystroke) gets an acceptable seq.
+      if ((this._seqCounters.get(sessionId) || 0) <= watermark) {
+        this._seqCounters.set(sessionId, watermark);
+        this._persistReliableNow();
+      }
+      const lost = rec && rec.tries <= 1 ? rec.data : null;
+      this._ackDelivery(sessionId, seq);
+      if (lost !== null) this._reliableSend(sessionId, lost, rec.useMux);
+      return;
+    }
+    this._ackDelivery(sessionId, seq);
   }
 
   /** Called from ws.onopen — flush everything pending over the fresh socket. */
@@ -3500,13 +3535,20 @@ class CodemanApp {
    * Reset all app state maps, timers, and handlers to a clean baseline.
    * Called by handleInit() on SSE reconnect / page reload to prevent
    * memory leaks and stale data.
+   *
+   * @param {boolean} [preserveTerminal] Keep the terminal caches. Set when an SSE
+   *   RECONNECT lands back on the session already on screen: the buffers still
+   *   describe that session, and dropping them forces a full refetch + xterm
+   *   reset that throws away the user's scroll position (see handleInit).
    */
-  _resetAllAppState() {
+  _resetAllAppState(preserveTerminal = false) {
     this.sessions.clear();
     this.ralphStates.clear();
-    this.terminalBuffers.clear();
-    this.terminalBufferCache.clear();
-    this._xtermSnapshots?.clear();
+    if (!preserveTerminal) {
+      this.terminalBuffers.clear();
+      this.terminalBufferCache.clear();
+      this._xtermSnapshots?.clear();
+    }
     this.projectInsights.clear();
     this.teams.clear();
     this.teamTasks.clear();
@@ -3633,7 +3675,23 @@ class CodemanApp {
     // Stop any active voice recording on reconnect
     VoiceInput.cleanup();
 
-    this._resetAllAppState();
+    // A RECONNECT that lands back on the same session must not become a full
+    // reload. This used to clear the terminal caches and re-run selectSession()
+    // unconditionally, so every SSE reconnect refetched the buffer (up to 1 MiB)
+    // and reset+rewrote xterm. On a link that drops a connection about once a
+    // minute that reads as the page refreshing itself and losing your place.
+    // Keep the caches and the active id here; the restore block below resyncs
+    // through _onSessionNeedsRefresh(), which still reloads the buffer (so
+    // output produced during the outage is not lost) but preserves the reading
+    // position.
+    const activeBefore = this.activeSessionId;
+    const keepTerminal =
+      gen > 1 &&
+      !!activeBefore &&
+      Array.isArray(data.sessions) &&
+      data.sessions.some((s) => s.id === activeBefore);
+
+    this._resetAllAppState(keepTerminal);
 
     data.sessions.forEach(s => {
       this.sessions.set(s.id, s);
@@ -3763,20 +3821,32 @@ class CodemanApp {
     }
 
     const previousActiveId = this.activeSessionId;
-    this.activeSessionId = null;
-    if (this.sessionOrder.length > 0) {
+    if (this.sessionOrder.length === 0) {
+      this.activeSessionId = null;
+    } else {
       // Priority: current active > localStorage > first session
       let restoreId = previousActiveId;
       if (!restoreId || !this.sessions.has(restoreId)) {
         try { restoreId = localStorage.getItem('codeman-active-session'); } catch {}
       }
-      // `auto`: the app is restoring a session on load, not a human opening
-      // one, so a pending idle alert on that tab stays armed until it is
-      // actually tapped (see the userInitiated note in selectSession).
-      if (restoreId && this.sessions.has(restoreId)) {
-        this.selectSession(restoreId, { auto: true });
+      if (keepTerminal && restoreId === previousActiveId && this.sessions.has(restoreId)) {
+        // Reconnect onto the session already on screen. renderSessionTabs() ran
+        // above and activeSessionId never changed, so the tab strip is already
+        // correct; only the buffer needs to catch up. The WS has its own
+        // backoff reconnect, but if it is not on this session (dead socket, or
+        // a give-up) nothing else would re-establish it from here.
+        if (this._wsSessionId !== restoreId) this._connectWs(restoreId);
+        void this._onSessionNeedsRefresh({ id: restoreId });
       } else {
-        this.selectSession(this.sessionOrder[0], { auto: true });
+        this.activeSessionId = null;
+        // `auto`: the app is restoring a session on load, not a human opening
+        // one, so a pending idle alert on that tab stays armed until it is
+        // actually tapped (see the userInitiated note in selectSession).
+        if (restoreId && this.sessions.has(restoreId)) {
+          this.selectSession(restoreId, { auto: true });
+        } else {
+          this.selectSession(this.sessionOrder[0], { auto: true });
+        }
       }
     }
   }
@@ -6352,6 +6422,25 @@ class CodemanApp {
     const sessionNameEl = document.getElementById('closeConfirmSessionName');
     sessionNameEl.textContent = name;
 
+    // ⚠️ An ADOPTED session has no "kill" outcome to offer. Its wrapper is the
+    // only thing Codeman owns; the server's killSession refuses to reach the
+    // foreign server at all (see the adopted early return in tmux-manager). So
+    // the red "Terminate the session completely" option is not merely redundant
+    // here, it is a false promise about someone else's live work — and the kind
+    // of false promise that stops a user closing the tab at all. Hide it, and say
+    // what actually happens instead.
+    const killBtn = document.getElementById('closeConfirmKillBtn');
+    const keepTitle = document.getElementById('closeConfirmKeepTitle');
+    const keepDesc = document.getElementById('closeConfirmKeepDesc');
+    const adopted = !!session.adopt;
+    if (killBtn) killBtn.style.display = adopted ? 'none' : '';
+    if (keepTitle) keepTitle.textContent = adopted ? 'Close Tab' : 'Remove Tab';
+    if (keepDesc) {
+      keepDesc.textContent = adopted
+        ? `Detaches only — "${session.adopt.targetSession}" keeps running for whoever started it`
+        : 'Tmux session keeps running in background';
+    }
+
     // Update kill button text based on session mode
     const killTitle = document.getElementById('closeConfirmKillTitle');
     if (killTitle) {
@@ -6386,9 +6475,20 @@ class CodemanApp {
     const sessionId = this.pendingCloseSessionId;
     this.cancelCloseSession();
 
-    if (sessionId) {
-      await this.closeSession(sessionId, killMux);
-    }
+    if (!sessionId) return;
+
+    // ⚠️ For an ADOPTED session `killMux` does not mean what it means everywhere
+    // else. There is no agent of ours to terminate: the only thing it can reach
+    // is the WRAPPER we created, and the server's adopted branch in
+    // `killSession` tears that down without ever touching the foreign server.
+    // So "keep the tmux session running" has no useful meaning here — taking it
+    // literally leaves our wrapper AND its grouped view session parked on the
+    // user's own socket forever, one pair per tab they ever closed (measured:
+    // `codeman-view-*` survived every close and the row stayed "Go to tab" with
+    // no tab behind it). Always tear the wrapper down; the foreign session is
+    // structurally out of reach either way.
+    const adopted = !!this.sessions.get(sessionId)?.adopt;
+    await this.closeSession(sessionId, adopted ? true : killMux);
   }
 
   nextSession() {

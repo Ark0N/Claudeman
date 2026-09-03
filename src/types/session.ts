@@ -88,6 +88,17 @@ export interface RemoteSshOptions {
   jumpHost?: string;
   /** Arbitrary additional `-o KEY=VALUE` options (escape hatch). Each `KEY=VALUE`. */
   extraSshOptions?: string[];
+  /**
+   * SSH password, for hosts that accept no key. OPTIONAL and opt-in: storing it
+   * is a user choice, and a host without it keeps the key-only path unchanged.
+   *
+   * ⚠️ This is the one secret in remote-hosts.json, which is why that file is
+   * written 0600. It is never returned by the API (see redactRemoteHost) and
+   * never reaches a command line — it goes to ssh through `sshpass -e`, which
+   * reads the SSHPASS environment variable, and that variable is injected into
+   * the pane with socket-scoped `tmux setenv` like every other secret here.
+   */
+  password?: string;
 }
 
 export interface RemoteHost extends RemoteSshOptions {
@@ -244,6 +255,33 @@ export interface DockerCase {
   containerWorkdir?: string;
   /** Container name (default codeman-case-<slug>). */
   container?: string;
+  /**
+   * Whether THIS Codeman created the container (mirror of `SessionRemote.owned`).
+   *
+   * - `true` (default for cases Codeman linked/quick-created): we own the
+   *   container; drift may recreate it, case-delete may `docker rm -f` it, and
+   *   the launch chain may create + start it.
+   * - `false` (ADOPTED: an already-running container the user built and runs
+   *   themselves): Codeman must never create, start, stop, restart or remove it.
+   *   The launch chain fails closed when the container is missing or not running
+   *   instead of touching its lifecycle, drift is not evaluated (there is no
+   *   `codeman.confighash` label to compare), and no credential seed is copied
+   *   into its HOME. Only the in-container tmux session is ever created or
+   *   killed — exactly the `owned:false` remote-SSH contract.
+   *
+   * Absent is treated as owned (cases persisted before this field existed were
+   * all created by us).
+   */
+  owned?: boolean;
+  /**
+   * CLIs found INSIDE the container by the adoption preflight. A container case
+   * runs its agents in the container, so host CLI availability says nothing about
+   * what this case can run — the base image ships every CLI, and an adopted
+   * container ships whatever its owner installed. Absent = unknown (owned cases,
+   * or a case linked before this field existed), which callers read as "do not
+   * gate".
+   */
+  availableModes?: SessionMode[];
   /** Last captured Claude conversation id, replayed via --resume on a fresh launch. */
   lastClaudeSessionId?: string;
 }
@@ -276,6 +314,87 @@ export interface SessionDocker {
   extraExecArgs?: string[];
   /** Stable hash of the drift-relevant create args (recreate-on-drift detection). */
   configHash?: string;
+  /**
+   * Whether the container's exec user is root. Claude Code REFUSES
+   * `--dangerously-skip-permissions` as root, and an adopted container's user
+   * belongs to its owner, so the flag is omitted rather than letting the pane
+   * die with a message only visible inside the container.
+   */
+  runsAsRoot?: boolean;
+  /**
+   * Mirror of `DockerCase.owned`, flattened onto the live session so every
+   * lifecycle decision (launch chain, drift, stop, remove) can see it without
+   * re-reading docker-cases.json. Absent = owned. See `DockerCase.owned`.
+   */
+  owned?: boolean;
+}
+
+/**
+ * Connection facts needed to reach an adopted foreign tmux server. Deliberately
+ * the exact `Pick`s that `buildSshConnectionArgs` / `buildDockerBaseArgs` consume,
+ * so an adopted session can rebuild its command after a server restart without
+ * re-reading a registry that may have been edited in the meantime.
+ */
+export interface AdoptRemoteConnection extends RemoteSshOptions {
+  hostId: string;
+  label: string;
+  host: string;
+  username: string;
+  port?: number;
+}
+
+export interface AdoptDockerConnection {
+  hostId: string;
+  label: string;
+  engine: DockerEngine;
+  containerName: string;
+  daemonHost?: string;
+  context?: string;
+}
+
+/**
+ * ADOPTION overlay — a tmux session a HUMAN started, that Codeman attached to.
+ *
+ * This is the FOURTH location overlay, alongside remote-SSH and Docker, and it
+ * obeys the same rule they do: it is **not** a `SessionMode`. The mode is still
+ * claude / codex / shell / …, decided by the process-tree probe rather than by
+ * the user.
+ *
+ * Shape of an adopted session: Codeman creates a NORMAL wrapper session on its
+ * OWN socket (`codeman-<8hex>`, so `isValidMuxName` and every capture/input/
+ * recovery path is untouched) whose single pane runs a command that attaches to
+ * the foreign target. Killing the tab kills only the wrapper — the foreign
+ * session is structurally out of reach, exactly like a non-owned remote session.
+ *
+ * ⚠️ There is no `owned` field here, unlike `SessionRemote`/`SessionDocker`: an
+ * adopted session is *by definition* someone else's. A field that could be true
+ * would invite a code path that kills it.
+ */
+export interface SessionAdopt {
+  /** Where the foreign tmux server lives. */
+  location: 'local' | 'docker' | 'remote';
+  /** Absolute socket path as seen FROM that location (passed to `tmux -S`). */
+  socketPath: string;
+  /** The foreign session we attach to. Never Codeman-named, never name-validated. */
+  targetSession: string;
+  /**
+   * Our own grouped VIEW session on the foreign server. Grouping (rather than a
+   * bare `attach`) is what keeps the human's own terminal from being resized to
+   * our viewport: tmux sizes a window to its SMALLEST attached client, and a
+   * grouped session gets an independent size. Created with
+   * `destroy-unattached on` so it evaporates with our pane.
+   */
+  viewSession: string;
+  /**
+   * True when the foreign tmux was too old to group and we fell back to a
+   * READ-ONLY attach. Surfaced in the UI — the fallback must never silently be
+   * a writable bare attach, which would resize the owner's terminal.
+   */
+  readOnly?: boolean;
+  /** The pane cwd at adoption time. Informational: an adopted pane is never `cd`'d. */
+  paneCurrentPath?: string;
+  remote?: AdoptRemoteConnection;
+  docker?: AdoptDockerConnection;
 }
 
 /**
@@ -531,6 +650,12 @@ export interface SessionState {
   remote?: SessionRemote;
   /** Docker execution metadata, present when this session runs inside a container via local tmux + docker exec */
   docker?: SessionDocker;
+  /**
+   * Adoption metadata, present when this session is a wrapper around a tmux
+   * session a human started outside Codeman. Its presence is what disables
+   * respawn/Ralph/orchestrator and hook-backed waits for the session.
+   */
+  adopt?: SessionAdopt;
   /** Owning username in multi-user mode; undefined in single-user (ignored when the flag is off) */
   owner?: string;
   /**

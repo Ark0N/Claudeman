@@ -55,6 +55,31 @@ export const DEFAULT_AGENT_IMAGE = 'codeman/agent:base';
 /** HOME inside the base image (the `agent` user). Cred mounts + hook-secret land under it. */
 export const CONTAINER_HOME = '/home/agent';
 
+/**
+ * Modes the adoption preflight probes for inside an existing container. `shell`
+ * is omitted deliberately: it needs no CLI binary and is always available, so it
+ * is reported as available without a `command -v` lookup.
+ */
+export const DOCKER_ADOPT_PROBE_MODES = [
+  'claude',
+  'codex',
+  'opencode',
+  'gemini',
+  'antigravity',
+  'pi',
+  'grok',
+  'deepseek',
+  'shell',
+] as const satisfies readonly SessionMode[];
+
+/**
+ * The BINARY a mode looks for inside a container. Not always the mode name:
+ * `antigravity` ships as `agy` and `deepseek` as `dsh`, so probing by mode name
+ * would report those two as missing on a container that has them. Single source
+ * with `defaultDockerCommandForMode`, which launches the same binaries.
+ */
+const MODE_BINARIES: Partial<Record<SessionMode, string>> = { antigravity: 'agy', deepseek: 'dsh' };
+
 /** Per-case container name prefix. The `case` letters deliberately do NOT matter to
  * tmux; this is a DOCKER name (`^[a-zA-Z0-9][a-zA-Z0-9_.-]+$`), and case names are
  * already validated `^[a-zA-Z0-9_-]+$`, so `codeman-case-<name>` is always valid. */
@@ -135,11 +160,16 @@ export function dockerContainerName(caseName: string): string {
 }
 
 /** Default pane command per CLI mode (mirror of defaultRemoteCommandForMode). */
-export function defaultDockerCommandForMode(mode: SessionMode): string {
+export function defaultDockerCommandForMode(mode: SessionMode, runsAsRoot = false): string {
   const commands: Record<DockerCommandMode, string> = {
     shell: 'exec bash -l',
-    // Mirror the LOCAL claude default so the in-container agent runs non-interactively.
-    claude: 'exec claude --dangerously-skip-permissions',
+    // Mirror the LOCAL claude default so the in-container agent runs
+    // non-interactively — EXCEPT as root, where Claude Code refuses the flag
+    // outright ("cannot be used with root/sudo privileges"). Our base image runs
+    // a non-root user so an owned container never hits this; an adopted
+    // container's user belongs to its owner and is frequently root, and keeping
+    // the flag there kills the pane with a message only visible inside it.
+    claude: runsAsRoot ? 'exec claude' : 'exec claude --dangerously-skip-permissions',
     opencode: 'exec opencode',
     codex: 'exec codex',
     gemini: 'exec gemini',
@@ -252,7 +282,80 @@ export function toSessionDocker(host: DockerHost, dockerCase: DockerCase): Sessi
     extraCreateArgs: host.extraCreateArgs,
     extraExecArgs: host.extraExecArgs,
   };
-  return { ...base, configHash: dockerConfigHash(base) };
+  // `owned` is deliberately applied AFTER the hash: dockerConfigHash() picks an
+  // explicit field list, so ownership can never shift an existing case's hash and
+  // mass-trip the drift gate.
+  const session: SessionDocker = { ...base, configHash: dockerConfigHash(base) };
+  if (dockerCase.owned === false) session.owned = false;
+  return session;
+}
+
+/**
+ * Which existing case, if any, blocks adopting `container` at `containerWorkdir`.
+ *
+ * One container may back SEVERAL adopted cases, each pointing at a different
+ * directory inside it — that is the whole reason to adopt the same container
+ * twice, and it is safe because the in-container tmux session is named per
+ * SESSION (`dockerTmuxSessionName`, `codeman-dkr-<id8>`) and not per case, so a
+ * session teardown kills exactly one session and its siblings on the shared
+ * in-container tmux server are untouched. Nothing else reaches an adopted
+ * container's lifecycle either: stop/remove throw at the builder, recreate
+ * refuses `owned === false`, and the orphan reaper filters on the
+ * `codeman.managed=1` label that only Codeman-created containers carry.
+ *
+ * So the conflicts that remain are NOT about the tmux server:
+ *  - `owned-case`  the container backs a case Codeman CREATED, whose lifecycle
+ *                  it owns; a recreate or delete there would destroy the
+ *                  adopted case's container out from under it.
+ *  - `other-owner` already adopted by a different user. Adoption hands out a
+ *                  shell inside someone else's container, so it stays scoped.
+ *  - `duplicate`   same container AND same directory: the second case would
+ *                  behave identically to the first, so name the first instead
+ *                  of silently creating a twin. A DIFFERENT directory is the
+ *                  supported case and returns null.
+ */
+export type AdoptContainerConflict =
+  | { kind: 'owned-case'; caseName: string }
+  | { kind: 'other-owner'; caseName: string }
+  | { kind: 'duplicate'; caseName: string }
+  | null;
+
+export function classifyAdoptContainerConflict(params: {
+  container: string;
+  /** Directory inside the container this adoption targets (already defaulted). */
+  containerWorkdir: string;
+  existing: ReadonlyArray<
+    Pick<DockerCase, 'name' | 'container' | 'containerWorkdir' | 'hostWorkspacePath' | 'owned' | 'owner'>
+  >;
+  /** Owner visibility test (canAccessOwned bound to the caller). */
+  canAccess: (owner?: string) => boolean;
+}): AdoptContainerConflict {
+  const { container, containerWorkdir, existing, canAccess } = params;
+  const sharing = existing.filter((item) => (item.container ?? dockerContainerName(item.name)) === container);
+  if (sharing.length === 0) return null;
+
+  // `owned` is optional and an ABSENT flag means owned (legacy cases predate the
+  // field), so this must test `!== false` rather than truthiness.
+  const owned = sharing.find((item) => item.owned !== false);
+  if (owned) return { kind: 'owned-case', caseName: owned.name };
+
+  const foreign = sharing.find((item) => !canAccess(item.owner));
+  if (foreign) return { kind: 'other-owner', caseName: foreign.name };
+
+  const twin = sharing.find((item) => (item.containerWorkdir ?? item.hostWorkspacePath) === containerWorkdir);
+  if (twin) return { kind: 'duplicate', caseName: twin.name };
+
+  return null;
+}
+
+/**
+ * An ADOPTED container is one the user built and runs themselves. Codeman may
+ * only exec into it; it must never create, start, stop, restart or remove it.
+ * Every lifecycle branch routes through this one predicate so a new call site
+ * cannot silently opt out.
+ */
+export function isAdoptedContainer(docker: Pick<SessionDocker, 'owned'>): boolean {
+  return docker.owned === false;
 }
 
 // ========== Shell escaping ==========
@@ -753,9 +856,15 @@ export interface DockerDriftStatus {
  * daemon down) means there is nothing to drift. No-op under VITEST.
  */
 export async function checkDockerConfigDrift(
-  docker: Pick<SessionDocker, 'engine' | 'context' | 'daemonHost' | 'containerName' | 'configHash'>
+  docker: Pick<SessionDocker, 'engine' | 'context' | 'daemonHost' | 'containerName' | 'configHash' | 'owned'>
 ): Promise<DockerDriftStatus> {
   if (IS_TEST_MODE) return { exists: false, running: false, drifted: false };
+  // An ADOPTED container carries no `codeman.confighash` label — it was never
+  // created from our config — so every comparison would report drift and the
+  // launch gate would demand a recreate we are not allowed to perform. Ownership
+  // of its configuration belongs to the user; report "no drift" and never offer
+  // to rebuild it.
+  if (isAdoptedContainer(docker)) return { exists: true, running: false, drifted: false };
   const argv = dockerEngineArgv(docker);
   try {
     const { stdout } = await execFileAsync(
@@ -783,8 +892,15 @@ export async function checkDockerConfigDrift(
  * case's lastClaudeSessionId. No-op under VITEST.
  */
 export async function removeDockerContainer(
-  docker: Pick<SessionDocker, 'engine' | 'context' | 'daemonHost' | 'containerName'>
+  docker: Pick<SessionDocker, 'engine' | 'context' | 'daemonHost' | 'containerName' | 'owned'>
 ): Promise<void> {
+  // Fail CLOSED at the lowest layer: an adopted container is the user's, and no
+  // caller — recreate-on-drift, case delete, a future teardown — may remove it.
+  if (isAdoptedContainer(docker)) {
+    throw new Error(
+      `Refusing to remove adopted container "${docker.containerName}": Codeman does not own its lifecycle.`
+    );
+  }
   if (IS_TEST_MODE) return;
   const argv = dockerEngineArgv(docker);
   await execFileAsync(argv[0], [...argv.slice(1), 'rm', '-f', docker.containerName], { timeout: 30_000 });
@@ -1030,6 +1146,251 @@ export async function checkDockerTmuxAvailable(
   }
 }
 
+/** Preflight facts about an ALREADY-RUNNING container the user wants to adopt. */
+export interface AdoptedContainerProbe {
+  ok: boolean;
+  exists: boolean;
+  running: boolean;
+  /** The container's own image ref (informational — we never enforce ours on it). */
+  image?: string;
+  /** `command -v tmux` inside the container; required for durable sessions. */
+  tmuxPath?: string;
+  /** Modes whose CLI resolved inside the container (`command -v <mode>`). */
+  availableModes?: SessionMode[];
+  /** Whether the requested working directory exists INSIDE the container. */
+  workdirExists?: boolean;
+  /** Whether the container's exec user is root (uid 0). */
+  runsAsRoot?: boolean;
+  error?: string;
+}
+
+/** One container on the engine, as offered to the adoption picker. */
+export interface DockerContainerInfo {
+  name: string;
+  image: string;
+  running: boolean;
+  /** Engine's own status string, e.g. "Up 3 hours" / "Exited (0) 2 days ago". */
+  status: string;
+}
+
+/**
+ * List the engine's containers for the adoption picker (mirror of
+ * `listRemoteCodemanSessions`). Read-only and NEVER throws: an unreachable
+ * daemon, a missing engine or zero containers all return `[]`, because this
+ * feeds a convenience picker whose input the user can always type by hand.
+ *
+ * Stopped containers ARE included, sorted after running ones and carrying their
+ * status: adoption requires a running container, but hiding a stopped one turns
+ * "my container is not in the list" into a dead end with no explanation, while
+ * showing `my-box (Exited (0) 2 days ago)` says exactly what to fix.
+ */
+export async function listDockerContainers(
+  docker: Pick<SessionDocker, 'engine' | 'context' | 'daemonHost'>
+): Promise<DockerContainerInfo[]> {
+  if (IS_TEST_MODE) return [];
+  const argv = dockerEngineArgv(docker);
+  try {
+    const { stdout } = await execFileAsync(
+      argv[0],
+      [...argv.slice(1), 'ps', '-a', '--format', '{{.Names}}\t{{.Image}}\t{{.State}}\t{{.Status}}'],
+      { timeout: DOCKER_PROBE_TIMEOUT_MS }
+    );
+    const rows = stdout
+      .split('\n')
+      .map((line) => line.split('\t'))
+      .filter((parts) => parts.length >= 4 && parts[0])
+      .map(([name, image, state, status]) => ({
+        name,
+        image: image || '',
+        running: state === 'running',
+        status: status || '',
+      }));
+    // Running first, then by name, so the containers a user can actually adopt
+    // are the ones at the top of the list.
+    return rows.sort((a, b) => Number(b.running) - Number(a.running) || a.name.localeCompare(b.name));
+  } catch {
+    return [];
+  }
+}
+
+/**
+ * Preflight an EXISTING container for adoption. Read-only by construction: it
+ * runs `inspect` plus one `exec` of `command -v`, and never creates, starts or
+ * modifies anything. Refusing here is what keeps the failure at link time — a
+ * clear message — instead of at session launch, where the only alternatives
+ * would be a dead pane or starting a container we do not own.
+ *
+ * `--pull=never` is irrelevant here: adoption never touches images. The image
+ * ref is reported only so the UI can show what the user is attaching to.
+ */
+export async function probeAdoptableContainer(
+  docker: Pick<SessionDocker, 'engine' | 'context' | 'daemonHost' | 'containerName'>,
+  modes: SessionMode[] = [],
+  containerWorkdir?: string
+): Promise<AdoptedContainerProbe> {
+  if (IS_TEST_MODE) {
+    return {
+      ok: true,
+      exists: true,
+      running: true,
+      tmuxPath: '/usr/bin/tmux',
+      availableModes: modes,
+      workdirExists: true,
+    };
+  }
+  const argv = dockerEngineArgv(docker);
+  let running = false;
+  let image: string | undefined;
+  try {
+    const { stdout } = await execFileAsync(
+      argv[0],
+      [...argv.slice(1), 'inspect', '-f', '{{.State.Running}}\t{{.Config.Image}}', docker.containerName],
+      { timeout: DOCKER_PROBE_TIMEOUT_MS }
+    );
+    const [state = '', img = ''] = stdout.trim().split('\t');
+    running = state === 'true';
+    image = img || undefined;
+  } catch {
+    return {
+      ok: false,
+      exists: false,
+      running: false,
+      error: `container "${docker.containerName}" not found (adoption never creates a container — start it yourself first)`,
+    };
+  }
+  if (!running) {
+    return {
+      ok: false,
+      exists: true,
+      running: false,
+      image,
+      error: `container "${docker.containerName}" exists but is not running (Codeman never starts a container it does not own — start it yourself, then retry)`,
+    };
+  }
+  // One exec resolves tmux plus every requested CLI, so adoption costs a single
+  // round trip. Binaries are fixed mode names, never user input.
+  const wanted = modes.filter((m) => m !== 'shell');
+  const binaryFor = (mode: SessionMode) => MODE_BINARIES[mode] ?? mode;
+  const probes = ['tmux', ...wanted.map(binaryFor)];
+  // `; exit 0` is load-bearing: the script's status is its LAST command's, so a
+  // missing final CLI made the whole `sh -lc` exit 1 and the probe reported
+  // "could not exec into the container" for a container that was perfectly fine.
+  // Absence of a CLI is data here, not failure — only a real exec error is.
+  const steps = probes.map((bin) => `command -v ${bin} >/dev/null 2>&1 && echo ${bin}`);
+  // The workdir is checked INSIDE the container, and that is a fact independent
+  // of hostWorkspacePath: an owned container gets the host dir bind-mounted at the
+  // same absolute path at create time, but adoption mounts nothing, so the two
+  // paths only coincide if the user mounted it there themselves. `docker exec
+  // --workdir <missing>` fails with an OCI chdir error the pane surfaces as a bare
+  // "execvp failed", so it is resolved here into an actionable message.
+  if (containerWorkdir) steps.push(`[ -d ${shellescape(containerWorkdir)} ] && echo __workdir__`);
+  // Claude Code REFUSES --dangerously-skip-permissions as root. Our own base
+  // image runs a non-root user so an owned container never hits it; an adopted
+  // container's user belongs to its owner and is frequently root.
+  steps.push(`[ "$(id -u)" = 0 ] && echo __root__`);
+  const script = `${steps.join('; ')}; exit 0`;
+  try {
+    const { stdout } = await execFileAsync(
+      argv[0],
+      [...argv.slice(1), 'exec', docker.containerName, 'sh', '-lc', script],
+      { timeout: DOCKER_PROBE_TIMEOUT_MS }
+    );
+    const found = new Set(
+      stdout
+        .split('\n')
+        .map((line) => line.trim())
+        .filter(Boolean)
+    );
+    if (!found.has('tmux')) {
+      return {
+        ok: false,
+        exists: true,
+        running: true,
+        image,
+        error: `container "${docker.containerName}" has no tmux (required for durable sessions; install it inside the container)`,
+      };
+    }
+    const workdirExists = containerWorkdir ? found.has('__workdir__') : undefined;
+    if (containerWorkdir && !workdirExists) {
+      return {
+        ok: false,
+        exists: true,
+        running: true,
+        image,
+        workdirExists: false,
+        error: `"${containerWorkdir}" does not exist inside container "${docker.containerName}". Adoption mounts nothing, so the container workdir must already exist there — set it to a path inside the container (it need not match the host workspace path).`,
+      };
+    }
+    return {
+      ok: true,
+      exists: true,
+      running: true,
+      image,
+      tmuxPath: 'tmux',
+      availableModes: modes.filter((m) => m === 'shell' || found.has(binaryFor(m))),
+      workdirExists,
+      runsAsRoot: found.has('__root__'),
+    };
+  } catch (err) {
+    const msg = err instanceof Error ? err.message : String(err);
+    return { ok: false, exists: true, running: true, image, error: `could not exec into the container: ${msg}` };
+  }
+}
+
+/** One directory listing from INSIDE a container, shaped like the host picker's. */
+export interface DockerBrowseResult {
+  path: string;
+  parent: string | null;
+  entries: Array<{ name: string; path: string; type: 'directory' | 'file' }>;
+  error?: string;
+}
+
+/**
+ * List a directory INSIDE a container, for the adoption form's container-workdir
+ * picker. The host filesystem picker cannot serve this: the path lives in the
+ * container, and for an adopted container nothing is mounted at a matching host
+ * location, so the user would otherwise be typing a path blind.
+ *
+ * Read-only: one `ls` through `docker exec`, no writes, no lifecycle. The path
+ * is shell-escaped like every other value this module interpolates, and output
+ * is parsed as NUL-free lines with a leading type marker so a filename with
+ * spaces survives.
+ */
+export async function browseInContainer(
+  docker: Pick<SessionDocker, 'engine' | 'context' | 'daemonHost' | 'containerName'>,
+  path: string
+): Promise<DockerBrowseResult> {
+  const target = path && path.startsWith('/') ? path : '/';
+  const parent = target === '/' ? null : target.replace(/\/+$/, '').split('/').slice(0, -1).join('/') || '/';
+  if (IS_TEST_MODE) return { path: target, parent, entries: [] };
+  const argv = dockerEngineArgv(docker);
+  // `-p` marks directories with a trailing slash; `-A` shows dotfiles but not
+  // the . and .. entries the picker navigates with its own Up control.
+  const script = `cd ${shellescape(target)} 2>/dev/null && ls -Ap 2>/dev/null || echo __ERR__`;
+  try {
+    const { stdout } = await execFileAsync(
+      argv[0],
+      [...argv.slice(1), 'exec', docker.containerName, 'sh', '-lc', script],
+      { timeout: DOCKER_PROBE_TIMEOUT_MS, maxBuffer: 4 * 1024 * 1024 }
+    );
+    if (stdout.includes('__ERR__')) return { path: target, parent, entries: [], error: 'Not a readable directory' };
+    const base = target.endsWith('/') ? target : `${target}/`;
+    const entries = stdout
+      .split('\n')
+      .map((line) => line.trim())
+      .filter(Boolean)
+      .map((name) => {
+        const isDir = name.endsWith('/');
+        const clean = isDir ? name.slice(0, -1) : name;
+        return { name: clean, path: `${base}${clean}`, type: (isDir ? 'directory' : 'file') as 'directory' | 'file' };
+      })
+      .sort((a, b) => Number(b.type === 'directory') - Number(a.type === 'directory') || a.name.localeCompare(b.name));
+    return { path: target, parent, entries };
+  } catch (err) {
+    return { path: target, parent, entries: [], error: err instanceof Error ? err.message : String(err) };
+  }
+}
+
 /**
  * Resolve the host's IP on the default docker bridge (the address a container
  * reaches as `host.docker.internal`), so the server can bind a hooks-only listener
@@ -1092,9 +1453,18 @@ export async function reapOrphanedDockerContainers(
   }
   const cases = await readDockerCases(configDir);
   const expected = new Set(cases.map((c) => c.container ?? dockerContainerName(c.name)));
+  // ADOPTED containers are never reapable, and this guard is deliberately
+  // independent of the two conditions that already cover them (we never applied
+  // the `codeman.managed=1` label filtered on above, and they are referenced by a
+  // live case so they are in `expected`). An adopted container is the user's
+  // property; it must survive even if a future edit narrows either condition.
+  const adopted = new Set(
+    cases.filter((item) => item.owned === false).map((item) => item.container ?? dockerContainerName(item.name))
+  );
   const reaped: string[] = [];
   for (const { name, inst } of rows) {
     if (inst !== instance) continue; // only THIS instance's containers
+    if (adopted.has(name)) continue; // never reap a container we do not own
     if (expected.has(name)) continue; // still referenced by a live case
     try {
       await execFileAsync(bin, ['rm', '-f', name], { timeout: DOCKER_PROBE_TIMEOUT_MS });

@@ -524,6 +524,12 @@
             </div>
             <div class="history-list" id="historyList"></div>
           </div>
+          <!-- Sessions a human started outside Codeman (foreign-sessions.js).
+               Hidden until a scan finds one; never rendered empty on a fresh
+               install, where an empty block reads as a broken feature. -->
+          <div class="welcome-foreign">
+            <div class="foreign-sessions" id="foreignSessions" hidden></div>
+          </div>
           <p class="welcome-hint">Or click Run to start</p>
           <button class="welcome-ralph-link" onclick="app.showRalphWizard()">Start Ralph Loop &rarr;</button>
         </div>
@@ -1519,11 +1525,11 @@
           <p class="modal-session-name" id="closeConfirmSessionName"></p>
         </div>
         <div class="close-options">
-          <button class="close-option" onclick="app.confirmCloseSession(false)">
-            <span class="close-option-title">Remove Tab</span>
-            <span class="close-option-desc">Tmux session keeps running in background</span>
+          <button class="close-option" onclick="app.confirmCloseSession(false)" id="closeConfirmKeepBtn">
+            <span class="close-option-title" id="closeConfirmKeepTitle">Remove Tab</span>
+            <span class="close-option-desc" id="closeConfirmKeepDesc">Tmux session keeps running in background</span>
           </button>
-          <button class="close-option close-option-danger" onclick="app.confirmCloseSession(true)">
+          <button class="close-option close-option-danger" onclick="app.confirmCloseSession(true)" id="closeConfirmKillBtn">
             <span class="close-option-title" id="closeConfirmKillTitle">Kill Tmux & Claude Code</span>
             <span class="close-option-desc">Terminate the session completely</span>
           </button>
@@ -2644,6 +2650,7 @@
             <div class="form-row docker-quick-row">
               <label class="checkbox-row"><input type="checkbox" id="newCaseDocker"> 🐳 Run in an isolated Docker container</label>
               <span class="form-hint">Runs this case in a hardened, isolated container. The base image is built automatically on first use. Docker/Podman must be installed.</span>
+              <span class="form-hint">Already have a container running? <button type="button" class="btn-inline-check" id="dockerAdoptJumpBtn">Attach to it instead</button> Codeman only runs docker exec into it and never touches its lifecycle.</span>
             </div>
             <details class="advanced-options docker-quick-settings" id="dockerQuickSettings">
               <summary><svg class="set-adv-chev" width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.4" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M6 9l6 6 6-6"/></svg><span>Container settings (optional, sensible defaults)</span></summary>
@@ -2812,6 +2819,11 @@
                   <span class="form-hint">Optional. Path to a private key on this machine (passed to ssh -i). Never the key contents.</span>
                 </div>
                 <div class="form-row">
+                  <label>Password</label>
+                  <input type="password" id="remoteHostPassword" placeholder="leave blank to use a key" autocomplete="new-password" autocapitalize="off" autocorrect="off" spellcheck="false">
+                  <span class="form-hint">Optional, for hosts that accept no key. Stored on this machine only (<code>remote-hosts.json</code>, mode 0600), never sent back to the browser, and handed to ssh through <code>sshpass</code>&#39;s SSHPASS variable rather than the command line. Needs <code>sshpass</code> installed here. Prefer a key when the host allows one.</span>
+                </div>
+                <div class="form-row">
                   <label>SOCKS Proxy</label>
                   <input type="text" id="remoteHostSocksProxy" placeholder="127.0.0.1:1080" autocomplete="off" autocapitalize="off" spellcheck="false">
                   <span class="form-hint">Optional. host:port of a SOCKS5 proxy (e.g. cloudflared). Routes ssh through it via a ProxyCommand.</span>
@@ -2848,13 +2860,41 @@
             </div>
             <p class="set-section-blurb">Run the case inside a container: one per case, shared by all its sessions.</p>
             <div class="form-row">
+              <label class="checkbox-row"><input type="checkbox" id="dockerAdoptExisting"> Attach to an existing container</label>
+              <span class="form-hint">On: Codeman only runs docker exec into a container you already built and run — it never creates, starts, stops or removes it. The CLIs must already be installed and logged in inside it.</span>
+            </div>
+            <div class="form-row docker-adopt-only" id="dockerAdoptCloneRow" hidden>
+              <label>Duplicate an Existing Case</label>
+              <select id="dockerAdoptCloneFrom" onchange="app.applyDockerCloneSource()">
+                <option value="">Start from scratch</option>
+              </select>
+              <span class="form-hint">Same container, another directory inside it. Picks up the container, host and workspace below &mdash; you only set a new name and container workdir. Adopted containers only: an owned container&#39;s lifecycle belongs to its one case.</span>
+            </div>
+            <div class="form-row docker-adopt-only">
+              <label>Container Name</label>
+              <input type="text" id="dockerContainerName" list="dockerContainerList" placeholder="my-dev-box" pattern="[a-zA-Z0-9][a-zA-Z0-9_.-]+" autocomplete="off" autocapitalize="off" spellcheck="false">
+              <datalist id="dockerContainerList"></datalist>
+              <span class="form-hint">Pick from the running containers or type a name. <button type="button" class="btn-inline-check" id="dockerAdoptCheckBtn">Check container</button></span>
+            </div>
+            <div class="form-row docker-adopt-only">
+              <label>Container Workdir</label>
+              <div class="path-input-group">
+                <input type="text" id="dockerAdoptWorkdir" placeholder="/workspace" autocomplete="off" autocapitalize="off" autocorrect="off" spellcheck="false">
+                <button type="button" class="btn path-input-browse" onclick="app.openDockerWorkdirPicker()">Browse&hellip;</button>
+              </div>
+              <span class="form-hint">A path that already exists inside the container. Adoption mounts nothing, so this need not match the host workspace path.</span>
+            </div>
+            <div class="form-row">
               <label>Case Name</label>
               <input type="text" id="dockerCaseName" placeholder="sandbox" pattern="[a-zA-Z0-9_-]+" autocomplete="off" autocapitalize="off" spellcheck="false">
               <span class="form-hint">Runs inside an isolated container. Multiple sessions can share the same container.</span>
             </div>
             <div class="form-row">
               <label>Workspace Path</label>
-              <input type="text" id="dockerWorkspacePath" placeholder="/home/user/projects/sandbox" autocomplete="off" autocapitalize="off" autocorrect="off" spellcheck="false">
+              <div class="path-input-group">
+                <input type="text" id="dockerWorkspacePath" placeholder="/home/user/projects/sandbox" autocomplete="off" autocapitalize="off" autocorrect="off" spellcheck="false">
+                <button type="button" class="btn path-input-browse" onclick="app.openDockerWorkspacePathPicker()">Browse&hellip;</button>
+              </div>
               <span class="form-hint">Absolute HOST directory, bind-mounted into the container. Codeman scaffolds CLAUDE.md + hooks into it.</span>
             </div>
             <div class="form-row">
@@ -2862,12 +2902,12 @@
               <input type="text" id="dockerHostId" placeholder="local" pattern="[a-zA-Z0-9_-]+" autocomplete="off" autocapitalize="off" spellcheck="false">
               <span class="form-hint">A reusable docker host profile. Reuse the same ID across cases to share settings.</span>
             </div>
-            <div class="form-row">
+            <div class="form-row docker-create-only">
               <label>Image</label>
               <input type="text" id="dockerImage" placeholder="codeman/agent:base" autocomplete="off" autocapitalize="off" spellcheck="false">
               <span class="form-hint">Build it once with <code>node scripts/build-agent-image.mjs</code>. Contains node + claude/codex/gemini/opencode/agy/pi/grok/dsh + tmux.</span>
             </div>
-            <div class="form-row">
+            <div class="form-row docker-create-only">
               <label>Network</label>
               <select id="dockerNetwork">
                 <option value="bridge">bridge (internet on, default)</option>
@@ -2875,7 +2915,7 @@
                 <option value="custom">custom bridge</option>
               </select>
             </div>
-            <details class="advanced-options">
+            <details class="advanced-options docker-create-only">
               <summary><svg class="set-adv-chev" width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.4" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M6 9l6 6 6-6"/></svg><span>Advanced container settings</span></summary>
               <div class="advanced-options-content">
                 <div class="form-row">
@@ -3448,6 +3488,7 @@
   <script defer src="webview-tabs.js"></script>
   <script defer src="mobile-overview.js"></script>
   <script defer src="home-sessions.js"></script>
+  <script defer src="foreign-sessions.js"></script>
   <script defer src="entrance-animations.js"></script>
   <script defer src="ralph-wizard.js"></script>
   <script defer src="api-client.js"></script>

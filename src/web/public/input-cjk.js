@@ -120,6 +120,41 @@ const CjkInput = (() => {
     c: '\x03', d: '\x04', l: '\x0c', z: '\x1a', a: '\x01', e: '\x05',
   };
 
+  /** CSI final byte per navigation key, for the modifier-carrying forms below. */
+  const CSI_NAV_FINAL = {
+    ArrowUp: 'A',
+    ArrowDown: 'B',
+    ArrowRight: 'C',
+    ArrowLeft: 'D',
+    End: 'F',
+    Home: 'H',
+  };
+
+  /**
+   * The `CSI 1 ; <mod> <final>` form for a Ctrl/Alt-modified navigation key, or
+   * null when this key is not one.
+   *
+   * A modified navigation key is a terminal COMMAND, not text editing — claude's
+   * own "Jump to bottom (ctrl+End)" is one. PASSTHROUGH_KEYS carries only the
+   * plain forms, so Ctrl+End used to fail in BOTH directions: with an empty
+   * field it was sent as a bare `\x1b[F` (the modifier silently dropped, so the
+   * CLI saw a plain End), and with any text in the field it was not forwarded at
+   * all and the browser's default moved the caret to the end of the composer,
+   * which is what the user sees as "the shortcut does something to the input box
+   * instead".
+   *
+   * ⚠️ Shift ALONE is deliberately excluded: Shift+arrow selects text inside the
+   * composer, which is a real editing gesture worth keeping local. Shift is still
+   * encoded when it accompanies Ctrl or Alt.
+   */
+  function _modifiedNavSequence(e) {
+    const final = CSI_NAV_FINAL[e.key];
+    if (!final) return null;
+    if (!e.ctrlKey && !e.altKey) return null;
+    const mod = 1 + (e.shiftKey ? 1 : 0) + (e.altKey ? 2 : 0) + (e.ctrlKey ? 4 : 0);
+    return `\x1b[1;${mod}${final}`;
+  }
+
   function _strip(str) {
     return str.replace(/​/g, '');
   }
@@ -318,6 +353,17 @@ const CjkInput = (() => {
           e.preventDefault();
           _send('\x7f');
           _resetToPhantom();
+          return;
+        }
+
+        // Ctrl/Alt-modified navigation keys go to the PTY REGARDLESS of whether
+        // the field has text: they are commands for the CLI, and the composer has
+        // no editing behaviour for them worth preserving (plain Home/End still
+        // edit locally through the table below).
+        const modNav = _modifiedNavSequence(e);
+        if (modNav) {
+          e.preventDefault();
+          _send(modNav);
           return;
         }
 

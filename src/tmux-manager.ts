@@ -23,6 +23,13 @@
 
 import { EventEmitter } from 'node:events';
 import { collectDescendants } from './proc-tree.js';
+import {
+  foreignViewSessionName,
+  buildForeignDockerViewKillCommand,
+  buildForeignAttachCommand,
+  buildForeignDockerAttachCommand,
+  buildForeignRemoteAttachCommand,
+} from './foreign-tmux.js';
 import { execSync, exec, execFile } from 'node:child_process';
 import { promisify } from 'node:util';
 
@@ -57,6 +64,7 @@ import {
   type OmpConfig,
   type SessionRemote,
   type SessionDocker,
+  type SessionAdopt,
   type DockerCommandMode,
 } from './types.js';
 import { buildEffortCliArgs, buildNameCliArgs } from './session-cli-builder.js';
@@ -1311,14 +1319,23 @@ export interface DockerLaunchOptions {
 export function buildDockerLaunchCommand(opts: DockerLaunchOptions): string {
   const { mode, docker, sessionId, resumeSessionId, createContext, execEnv, execEnvNames, seedCopies } = opts;
   const base = buildDockerBaseArgs(docker).join(' ');
-  const createArgs = buildDockerCreateArgs(createContext).join(' ');
+  // ADOPTED container (docker.owned === false): the user built it and runs it, so
+  // this chain may only LOOK and then exec. No image check (the image is theirs),
+  // no create, and above all no `start` — starting a container we do not own is
+  // exactly the lifecycle mutation adoption promises never to perform. A missing
+  // or stopped container fails closed with an actionable message instead.
+  const adopted = docker.owned === false;
+  // Built lazily: an adopted case has no meaningful create-config, so computing
+  // create args for it would demand a context the adopt path never assembles.
+  const createArgs = adopted ? '' : buildDockerCreateArgs(createContext).join(' ');
   const name = shellescape(docker.containerName);
   const workdir = shellescape(docker.containerWorkdir);
   const image = shellescape(docker.image);
   const dkrName = dockerTmuxSessionName(sessionId);
   const sid = sessionId.slice(0, 8);
 
-  let modeCommand = docker.commands?.[mode as DockerCommandMode] || defaultDockerCommandForMode(mode);
+  let modeCommand =
+    docker.commands?.[mode as DockerCommandMode] || defaultDockerCommandForMode(mode, !!docker.runsAsRoot);
   if (mode === 'claude') {
     modeCommand = claudeDockerPaneCommand(modeCommand, sessionId, resumeSessionId);
   } else if (resumeSessionId) {
@@ -1354,7 +1371,16 @@ export function buildDockerLaunchCommand(opts: DockerLaunchOptions): string {
   );
   const startFailMsg = shellescape(`Codeman: container ${docker.containerName} failed to start (docker daemon down?)`);
 
-  const imageCheck = `${base} image inspect ${image} >/dev/null 2>&1 || { echo ${imageMissingMsg}; exit 1; }`;
+  const notFoundMsg = shellescape(
+    `Codeman: container ${docker.containerName} not found. Adopted containers are never created by Codeman - start it yourself, then reopen this session.`
+  );
+  const notRunningMsg = shellescape(
+    `Codeman: container ${docker.containerName} is not running. Codeman never starts a container it does not own - start it yourself, then reopen this session.`
+  );
+
+  const imageCheck = adopted
+    ? ''
+    : `${base} image inspect ${image} >/dev/null 2>&1 || { echo ${imageMissingMsg}; exit 1; }`;
   // create-if-missing (idempotent): reconnect / boot recovery re-runs this exact
   // chain. A daemon without swap accounting warns whenever --memory is present,
   // even when --memory-swap is omitted. In compatibility mode, retain the memory
@@ -1371,14 +1397,30 @@ export function buildDockerLaunchCommand(opts: DockerLaunchOptions): string {
       `elif ${base} inspect ${name} >/dev/null 2>&1; then ${removeCreateOutput}; ` +
       `else ${filteredCreateOutput} >&2; ${removeCreateOutput}; false; fi; }`
     : `${base} ${createArgs}`;
-  const ensure = `${base} inspect ${name} >/dev/null 2>&1 || ${createCommand}`;
-  const start = `${base} start ${name} >/dev/null 2>&1 || { echo ${startFailMsg}; exit 1; }`;
+  // An ADOPTED container is never created and never started by Codeman: it
+  // belongs to the user, so a missing or stopped one is an error to report, not
+  // a state to fix.
+  const ensure = adopted
+    ? `${base} inspect ${name} >/dev/null 2>&1 || { echo ${notFoundMsg}; exit 1; }`
+    : `${base} inspect ${name} >/dev/null 2>&1 || ${createCommand}`;
+  // ⚠️ No double quotes and no `$(…)` here. This whole chain is embedded in an
+  // outer `bash -c "…"`, so an unescaped `"` closes that string early, the rest
+  // is re-tokenized, and tmux fails to exec with a bare `execvp(3) failed`. A
+  // `grep -qx` pipeline reads the same answer using only the single-quoted form
+  // every other line in this builder already uses.
+  const start = adopted
+    ? `${base} inspect -f ${shellescape('{{.State.Running}}')} ${name} 2>/dev/null | grep -qx true || { echo ${notRunningMsg}; exit 1; }`
+    : `${base} start ${name} >/dev/null 2>&1 || { echo ${startFailMsg}; exit 1; }`;
   // Seed writable credential config from read-only host mounts ONCE per container
   // (guarded by [ -e ] so reconnects never clobber in-container config; `cp -a` for
   // whole-dir credential seeds). mkdir -p the parent so a file seed works even when
   // no sibling share-mount pre-created the dir. Paths are fixed CONTAINER_HOME
   // constants (no shell metachars), so the whole inner command is shell-quoted once.
-  const seedSteps = (seedCopies ?? []).map((s) => {
+  // An ADOPTED container gets NO seed copies: those read from create-time
+  // read-only mounts that do not exist here, and writing host credentials into a
+  // container the user owns is a mutation adoption does not permit. Its CLIs must
+  // already be authenticated inside it.
+  const seedSteps = (adopted ? [] : (seedCopies ?? [])).map((s) => {
     const cp = s.recursive ? 'cp -a' : 'cp';
     const parent = s.to.slice(0, s.to.lastIndexOf('/'));
     return `mkdir -p ${parent} 2>/dev/null; [ -e ${s.to} ] || ${cp} ${s.from} ${s.to} 2>/dev/null || true`;
@@ -1386,7 +1428,7 @@ export function buildDockerLaunchCommand(opts: DockerLaunchOptions): string {
   const innerCmd = seedSteps.length ? `${seedSteps.join(' ; ')} ; ${tmuxInvocation}` : tmuxInvocation;
   const execCmd = `exec ${base} exec -it --workdir ${workdir} ${execEnvFlags.join(' ')} ${name} sh -lc ${shellescape(innerCmd)}`;
 
-  return [imageCheck, ensure, start, execCmd].join(' ; ');
+  return [imageCheck, ensure, start, execCmd].filter(Boolean).join(' ; ');
 }
 
 /**
@@ -1402,13 +1444,29 @@ export function buildDockerKillCommand(options: { docker: SessionDocker; session
   return `${base} exec ${shellescape(docker.containerName)} tmux -L ${DOCKER_TMUX_SOCKET} kill-session -t ${shellescape(dkrName)}`;
 }
 
+/**
+ * Guard for the two builders that mutate CONTAINER lifecycle. They are pure
+ * string builders, so refusing here means an adopted container cannot even have
+ * a stop/remove command constructed for it — there is no shape of caller bug
+ * that turns into a `docker stop`/`rm` on something we do not own.
+ */
+function assertOwnedContainer(docker: SessionDocker, action: string): void {
+  if (docker.owned === false) {
+    throw new Error(
+      `Refusing to ${action} adopted container "${docker.containerName}": Codeman does not own its lifecycle.`
+    );
+  }
+}
+
 /** Explicit container stop (frees RAM/CPU; conversation resumes on next launch via --resume). */
 export function buildDockerStopCommand(docker: SessionDocker): string {
+  assertOwnedContainer(docker, 'stop');
   return `${buildDockerBaseArgs(docker).join(' ')} stop -t 10 ${shellescape(docker.containerName)}`;
 }
 
 /** Explicit container removal (case-delete). Destroys in-image state; bind mounts survive. */
 export function buildDockerRemoveCommand(docker: SessionDocker): string {
+  assertOwnedContainer(docker, 'remove');
   return `${buildDockerBaseArgs(docker).join(' ')} rm -f ${shellescape(docker.containerName)}`;
 }
 
@@ -1567,6 +1625,45 @@ function buildRemoteSessionCommand(options: {
     return buildRemoteAttachCommand(remote, target);
   }
   return buildRemoteLaunchCommand(options);
+}
+
+/**
+ * ADOPTION — the pane command for a wrapper session around a tmux session a
+ * human started. Sibling of `buildRemoteSessionCommand` and
+ * `buildDockerLaunchCommand`, and the same shape of decision: the wrapper is an
+ * ordinary `codeman-<8hex>` session on OUR socket, and only what runs INSIDE its
+ * pane differs per location.
+ *
+ * That indirection is what makes adoption safe by construction rather than by
+ * discipline: `killSession` only ever kills the wrapper on our own socket, so
+ * there is no shape of caller bug that reaches the foreign server with a
+ * `kill-session`. It is the same reasoning that keeps a non-owned REMOTE session
+ * safe (see the detach-not-kill early return in `killSession`).
+ */
+function buildAdoptSessionCommand(adopt: SessionAdopt, sessionId: string): string {
+  const target = {
+    socketPath: adopt.socketPath,
+    targetSession: adopt.targetSession,
+    // Derived rather than required: the view name is a function of the Codeman
+    // session id, so a record that predates it (or one whose creator filled it in
+    // after construction) still produces the right name instead of an empty `-s`.
+    viewSession: adopt.viewSession || foreignViewSessionName(sessionId),
+  };
+  if (adopt.location === 'docker' && adopt.docker) {
+    return buildForeignDockerAttachCommand({
+      ...target,
+      dockerBase: buildDockerBaseArgs(adopt.docker).join(' '),
+      containerName: adopt.docker.containerName,
+    });
+  }
+  if (adopt.location === 'remote' && adopt.remote) {
+    return buildForeignRemoteAttachCommand({
+      ...target,
+      sshArgs: buildSshConnectionArgs(adopt.remote),
+      sshTarget: remoteSshTarget(adopt.remote),
+    });
+  }
+  return buildForeignAttachCommand(target);
 }
 
 /**
@@ -2013,6 +2110,30 @@ export class TmuxManager extends EventEmitter implements TerminalMultiplexer {
   /**
    * Configure Gemini-specific environment on a tmux session.
    */
+  /**
+   * Hand a remote host's stored SSH password to the pane as `SSHPASS`.
+   *
+   * `buildSshConnectionArgs` launches such a host through `sshpass -e`, which
+   * reads exactly this variable. Injected with socket-scoped `tmux setenv` so the
+   * secret never appears in `ps` — the same discipline the CLI API keys follow —
+   * and inherited by `respawn-pane`, so a respawned wrapper reconnects without the
+   * server having to re-send anything.
+   *
+   * ⚠️ A user's own `envOverrides` cannot reach this variable: `SSHPASS` matches
+   * no entry in ALLOWED_ENV_PREFIXES / ALLOWED_ENV_KEYS, so unlike the DeepSeek
+   * case there is no later `applyEnvOverrides` pass that could override it.
+   */
+  private _configureSshPassword(muxName: string, remote?: SessionRemote): void {
+    if (!remote?.password) return;
+    try {
+      execSync(`${this.tmux()} setenv -t "${muxName}" SSHPASS ${shellescape(remote.password)}`, { stdio: 'ignore' });
+    } catch {
+      // Best-effort like the sibling _configure* helpers: a failed setenv surfaces
+      // as an auth failure in the pane, which is visible, rather than as a thrown
+      // session-create that hides the real cause.
+    }
+  }
+
   private _configureGemini(muxName: string): void {
     setGeminiEnvVars(this.tmux(), muxName);
   }
@@ -2104,6 +2225,7 @@ export class TmuxManager extends EventEmitter implements TerminalMultiplexer {
       historyLimit = DEFAULT_TMUX_HISTORY_LIMIT,
       remote,
       docker,
+      adopt,
       owner,
     } = options;
     const muxName = `codeman-${sessionId.slice(0, 8)}`;
@@ -2125,6 +2247,7 @@ export class TmuxManager extends EventEmitter implements TerminalMultiplexer {
         workingDir,
         remote,
         docker,
+        adopt,
         owner,
         mode,
         attached: false,
@@ -2139,32 +2262,45 @@ export class TmuxManager extends EventEmitter implements TerminalMultiplexer {
     // from the resolvers (formatCliNotFoundMessage) so the error names WHERE it
     // looked — server PATH, login shell, checked directories — instead of just
     // asserting the CLI is missing (the classic systemd/launchd PATH trap).
+    //
+    // ⚠️ A DOCKER session runs its CLI INSIDE the container, so the host does not
+    // need it at all. Demanding it here threw for a host without the binary, the
+    // catch fell back to a direct PTY, and that PTY tried to exec the CLI on the
+    // HOST — surfacing as a bare `execvp(3) failed: No such file or directory`
+    // with nothing pointing at the real cause. The container's own CLIs are
+    // verified by the adoption preflight / image gate before launch instead.
     const { pathExport, dir: cliDir } = this.buildPathExport(mode);
-    if (mode === 'claude' && !cliDir) {
+    // ⚠️ An ADOPTED session's CLI was started by a human in a process we did not
+    // spawn — our pane only runs `tmux attach`. Requiring the binary here would
+    // reject adopting a claude that lives in a container or on an ssh host, and
+    // (worse) reject a LOCAL adoption whenever the agent is outside the server
+    // process's PATH, which is the usual systemd/launchd situation.
+    const cliRunsInContainer = !!docker || !!adopt;
+    if (!cliRunsInContainer && mode === 'claude' && !cliDir) {
       throw new Error(getClaudeNotFoundMessage());
     }
-    if (mode === 'opencode' && !cliDir) {
+    if (!cliRunsInContainer && mode === 'opencode' && !cliDir) {
       throw new Error(getOpenCodeNotFoundMessage());
     }
-    if (mode === 'codex' && !cliDir) {
+    if (!cliRunsInContainer && mode === 'codex' && !cliDir) {
       throw new Error(getCodexNotFoundMessage());
     }
-    if (mode === 'gemini' && !cliDir) {
+    if (!cliRunsInContainer && mode === 'gemini' && !cliDir) {
       throw new Error(getGeminiNotFoundMessage());
     }
-    if (mode === 'antigravity' && !cliDir) {
+    if (!cliRunsInContainer && mode === 'antigravity' && !cliDir) {
       throw new Error(getAntigravityNotFoundMessage());
     }
-    if (mode === 'pi' && !cliDir) {
+    if (!cliRunsInContainer && mode === 'pi' && !cliDir) {
       throw new Error(getPiNotFoundMessage());
     }
-    if (mode === 'deepseek' && !cliDir) {
+    if (!cliRunsInContainer && mode === 'deepseek' && !cliDir) {
       throw new Error(getDeepSeekNotFoundMessage());
     }
-    if (mode === 'grok' && !cliDir) {
+    if (!cliRunsInContainer && mode === 'grok' && !cliDir) {
       throw new Error(getGrokNotFoundMessage());
     }
-    if (mode === 'omp' && !cliDir) {
+    if (!cliRunsInContainer && mode === 'omp' && !cliDir) {
       throw new Error(getOmpNotFoundMessage());
     }
 
@@ -2195,11 +2331,13 @@ export class TmuxManager extends EventEmitter implements TerminalMultiplexer {
     try {
       // Build the full command to run inside tmux
       const localFullCmd = `${buildNofileLimitCommand()} && ${pathExport}${envExportsStr} && ${cmd}`;
-      const fullCmd = docker
-        ? buildDockerLaunchCommand(resolveDockerLaunchOptions(mode, docker, sessionId, resumeSessionId))
-        : remote
-          ? buildRemoteSessionCommand({ mode, remote, sessionId, claudeMode, allowedTools })
-          : localFullCmd;
+      const fullCmd = adopt
+        ? buildAdoptSessionCommand(adopt, sessionId)
+        : docker
+          ? buildDockerLaunchCommand(resolveDockerLaunchOptions(mode, docker, sessionId, resumeSessionId))
+          : remote
+            ? buildRemoteSessionCommand({ mode, remote, sessionId, claudeMode, allowedTools })
+            : localFullCmd;
 
       // Create tmux session in three steps to handle cold-start (no server running)
       // and avoid the race where the command exits before remain-on-exit is set:
@@ -2259,11 +2397,18 @@ export class TmuxManager extends EventEmitter implements TerminalMultiplexer {
 
       // Apply user-supplied env overrides (e.g., CLAUDE_CODE_EFFORT_LEVEL) via tmux setenv
       // so secret values stay off the bash command line. Must run before respawn-pane.
+      // A password-authenticated remote host needs SSHPASS in the pane (see
+      // _configureSshPassword); a no-op for key auth and every non-remote session.
+      this._configureSshPassword(muxName, remote);
+
       this.applyEnvOverrides(muxName, envOverrides);
 
       // Replace the shell with the actual command (no echo in terminal). Keep
       // pane launch in /tmp, then cd inside bash against the current mount table.
-      const launchCmd = remote || docker ? fullCmd : `cd ${JSON.stringify(workingDir)} && ${fullCmd}`;
+      // ⚠️ An adopted pane must NOT be `cd`'d: it only attaches, and its
+      // `workingDir` is the FOREIGN pane's cwd observed at adopt time — a path
+      // that need not exist on this host at all (a container path, a remote path).
+      const launchCmd = remote || docker || adopt ? fullCmd : `cd ${JSON.stringify(workingDir)} && ${fullCmd}`;
       execSync(
         `${this.tmux()} respawn-pane -k -c ${TMUX_LAUNCH_CWD} -t "${muxName}" bash -c ${JSON.stringify(launchCmd)}`,
         {
@@ -2329,6 +2474,7 @@ export class TmuxManager extends EventEmitter implements TerminalMultiplexer {
         workingDir,
         remote,
         docker,
+        adopt,
         owner,
         mode,
         attached: false,
@@ -2424,6 +2570,11 @@ export class TmuxManager extends EventEmitter implements TerminalMultiplexer {
     } = options;
     const session = this.sessions.get(sessionId);
     if (!session) return null;
+    // Adoption metadata comes from the tracked session, not the caller: a respawn
+    // of an adopted wrapper RE-ATTACHES to the same foreign target. It must never
+    // be able to become "launch a fresh agent here" because a caller forgot to
+    // pass the field through.
+    const adopt = options.adopt ?? session.adopt;
     const muxName = session.muxName;
 
     if (!isValidMuxName(muxName) || !isValidPath(workingDir)) return null;
@@ -2454,11 +2605,13 @@ export class TmuxManager extends EventEmitter implements TerminalMultiplexer {
     const config = niceConfig || DEFAULT_NICE_CONFIG;
     const cmd = wrapWithNice(baseCmd, config);
     const localFullCmd = `${buildNofileLimitCommand()} && ${pathExport}${envExportsStr} && ${cmd}`;
-    const fullCmd = docker
-      ? buildDockerLaunchCommand(resolveDockerLaunchOptions(mode, docker, sessionId, resumeSessionId))
-      : remote
-        ? buildRemoteSessionCommand({ mode, remote, sessionId, claudeMode, allowedTools })
-        : localFullCmd;
+    const fullCmd = adopt
+      ? buildAdoptSessionCommand(adopt, sessionId)
+      : docker
+        ? buildDockerLaunchCommand(resolveDockerLaunchOptions(mode, docker, sessionId, resumeSessionId))
+        : remote
+          ? buildRemoteSessionCommand({ mode, remote, sessionId, claudeMode, allowedTools })
+          : localFullCmd;
 
     try {
       // For OpenCode: set sensitive env vars via tmux setenv before respawn
@@ -2477,10 +2630,17 @@ export class TmuxManager extends EventEmitter implements TerminalMultiplexer {
       }
 
       // Re-apply user env overrides before respawn so the new shell inherits them.
+      // A password-authenticated remote host needs SSHPASS in the pane (see
+      // _configureSshPassword); a no-op for key auth and every non-remote session.
+      this._configureSshPassword(muxName, remote);
+
       this.applyEnvOverrides(muxName, envOverrides);
 
       // -c /tmp + cd bounce — see createSession() for rationale (stale FUSE state).
-      const launchCmd = remote || docker ? fullCmd : `cd ${JSON.stringify(workingDir)} && ${fullCmd}`;
+      // ⚠️ An adopted pane must NOT be `cd`'d: it only attaches, and its
+      // `workingDir` is the FOREIGN pane's cwd observed at adopt time — a path
+      // that need not exist on this host at all (a container path, a remote path).
+      const launchCmd = remote || docker || adopt ? fullCmd : `cd ${JSON.stringify(workingDir)} && ${fullCmd}`;
       await execAsync(
         `${this.tmux()} respawn-pane -k -c ${TMUX_LAUNCH_CWD} -t "${muxName}" bash -c ${JSON.stringify(launchCmd)}`,
         {
@@ -2687,6 +2847,54 @@ export class TmuxManager extends EventEmitter implements TerminalMultiplexer {
     // for a non-owned session. The only `kill-session` we run is on OUR LOCAL
     // socket (`this.tmux()` = `tmux -L codeman` on THIS host), which kills the
     // local pane — it does NOT reach the REMOTE socket.
+    // ADOPTION — DETACH-NOT-KILL, by construction rather than by discipline.
+    //
+    // An adopted session's wrapper is an ordinary session on OUR socket whose
+    // pane runs `tmux attach` (or `docker exec …`/`ssh …` then attach) against a
+    // FOREIGN server. Killing the wrapper kills our attach client, which is a
+    // DETACH on the foreign side; the human's session keeps running, and our
+    // grouped view session self-destroys via `destroy-unattached on`.
+    //
+    // The guard below is a formality more than a fence — `this.tmux()` only ever
+    // addresses our own socket, so no code path here CAN reach the foreign
+    // server. It is written out anyway so the intent survives future edits, the
+    // same way the non-owned-remote early return does.
+    if (session.adopt) {
+      console.log(`[TmuxManager] DETACH (adopted): tearing down wrapper only for ${session.muxName}`);
+      // A `docker exec` survives its client, so the in-container view would stay
+      // attached forever and leak. Best-effort, and it can only reach OUR view.
+      // See buildForeignDockerViewKillCommand for why local/remote need nothing.
+      if (session.adopt.location === 'docker' && session.adopt.docker) {
+        try {
+          execSync(
+            `${buildForeignDockerViewKillCommand({
+              dockerBase: buildDockerBaseArgs(session.adopt.docker).join(' '),
+              containerName: session.adopt.docker.containerName,
+              socketPath: session.adopt.socketPath,
+              viewSession: session.adopt.viewSession || foreignViewSessionName(sessionId),
+            })} 2>/dev/null`,
+            { timeout: EXEC_TIMEOUT_MS, stdio: 'ignore' }
+          );
+        } catch {
+          // The container may be gone, or the view already collected.
+        }
+      }
+      if (isValidMuxName(session.muxName)) {
+        try {
+          execSync(`${this.tmux()} kill-session -t "${session.muxName}" 2>/dev/null`, {
+            timeout: EXEC_TIMEOUT_MS,
+          });
+        } catch {
+          // Wrapper may already be gone.
+        }
+      }
+      this.lastPaneCount.delete(session.muxName);
+      this.sessions.delete(sessionId);
+      this.saveSessions();
+      this.emit('sessionKilled', { sessionId });
+      return true;
+    }
+
     if (session.remote && session.remote.owned === false) {
       console.log(`[TmuxManager] DETACH (non-owned remote): tearing down local pane only for ${session.muxName}`);
       if (isValidMuxName(session.muxName)) {

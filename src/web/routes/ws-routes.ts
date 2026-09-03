@@ -192,8 +192,31 @@ export function registerWsRoutes(app: FastifyInstance, ctx: SessionPort, getHost
               // a duplicate: the input was lost for good.
               if (!delivered && cid && seq !== null) session.forgetInputSeq(cid, seq);
             }
-            if (delivered && seq !== null && socket.readyState === 1) {
-              socket.send(`{"t":"ia","seq":${seq}}`);
+            if (seq !== null && socket.readyState === 1) {
+              if (apply) {
+                if (delivered) socket.send(`{"t":"ia","seq":${seq}}`);
+              } else {
+                // REJECTED as a duplicate. ACK it — the client must still drop it
+                // from its durable queue — but say so, and hand back our watermark.
+                //
+                // A plain ACK here is indistinguishable from "applied", which is
+                // what made a client with a rolled-back counter unrecoverable: its
+                // seqs persist to localStorage on a DEBOUNCED write, so a tab killed
+                // between a send and that write comes back with a counter BELOW this
+                // watermark, every later keystroke lands at or under it, and each one
+                // is dropped-but-ACKed. The UI stays clean, nothing is delivered, and
+                // a reload restores the same stale counter. `last` is what lets the
+                // client lift itself out.
+                // ⚠️ Defensive: the session arrives through a structural port, and an
+                // implementation without this method must not take the whole input
+                // path down with it — a throw here aborts the message handler and the
+                // frame is never ACKed at all, which strands it in the client's queue.
+                const watermark =
+                  typeof (session as { lastInputSeq?: (c: string) => number }).lastInputSeq === 'function'
+                    ? (session as { lastInputSeq: (c: string) => number }).lastInputSeq(cid as string)
+                    : seq;
+                socket.send(`{"t":"ia","seq":${seq},"dup":true,"last":${watermark}}`);
+              }
             }
           } else if (
             msg.t === 'z' &&
