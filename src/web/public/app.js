@@ -3535,13 +3535,20 @@ class CodemanApp {
    * Reset all app state maps, timers, and handlers to a clean baseline.
    * Called by handleInit() on SSE reconnect / page reload to prevent
    * memory leaks and stale data.
+   *
+   * @param {boolean} [preserveTerminal] Keep the terminal caches. Set when an SSE
+   *   RECONNECT lands back on the session already on screen: the buffers still
+   *   describe that session, and dropping them forces a full refetch + xterm
+   *   reset that throws away the user's scroll position (see handleInit).
    */
-  _resetAllAppState() {
+  _resetAllAppState(preserveTerminal = false) {
     this.sessions.clear();
     this.ralphStates.clear();
-    this.terminalBuffers.clear();
-    this.terminalBufferCache.clear();
-    this._xtermSnapshots?.clear();
+    if (!preserveTerminal) {
+      this.terminalBuffers.clear();
+      this.terminalBufferCache.clear();
+      this._xtermSnapshots?.clear();
+    }
     this.projectInsights.clear();
     this.teams.clear();
     this.teamTasks.clear();
@@ -3668,7 +3675,23 @@ class CodemanApp {
     // Stop any active voice recording on reconnect
     VoiceInput.cleanup();
 
-    this._resetAllAppState();
+    // A RECONNECT that lands back on the same session must not become a full
+    // reload. This used to clear the terminal caches and re-run selectSession()
+    // unconditionally, so every SSE reconnect refetched the buffer (up to 1 MiB)
+    // and reset+rewrote xterm. On a link that drops a connection about once a
+    // minute that reads as the page refreshing itself and losing your place.
+    // Keep the caches and the active id here; the restore block below resyncs
+    // through _onSessionNeedsRefresh(), which still reloads the buffer (so
+    // output produced during the outage is not lost) but preserves the reading
+    // position.
+    const activeBefore = this.activeSessionId;
+    const keepTerminal =
+      gen > 1 &&
+      !!activeBefore &&
+      Array.isArray(data.sessions) &&
+      data.sessions.some((s) => s.id === activeBefore);
+
+    this._resetAllAppState(keepTerminal);
 
     data.sessions.forEach(s => {
       this.sessions.set(s.id, s);
@@ -3798,20 +3821,32 @@ class CodemanApp {
     }
 
     const previousActiveId = this.activeSessionId;
-    this.activeSessionId = null;
-    if (this.sessionOrder.length > 0) {
+    if (this.sessionOrder.length === 0) {
+      this.activeSessionId = null;
+    } else {
       // Priority: current active > localStorage > first session
       let restoreId = previousActiveId;
       if (!restoreId || !this.sessions.has(restoreId)) {
         try { restoreId = localStorage.getItem('codeman-active-session'); } catch {}
       }
-      // `auto`: the app is restoring a session on load, not a human opening
-      // one, so a pending idle alert on that tab stays armed until it is
-      // actually tapped (see the userInitiated note in selectSession).
-      if (restoreId && this.sessions.has(restoreId)) {
-        this.selectSession(restoreId, { auto: true });
+      if (keepTerminal && restoreId === previousActiveId && this.sessions.has(restoreId)) {
+        // Reconnect onto the session already on screen. renderSessionTabs() ran
+        // above and activeSessionId never changed, so the tab strip is already
+        // correct; only the buffer needs to catch up. The WS has its own
+        // backoff reconnect, but if it is not on this session (dead socket, or
+        // a give-up) nothing else would re-establish it from here.
+        if (this._wsSessionId !== restoreId) this._connectWs(restoreId);
+        void this._onSessionNeedsRefresh({ id: restoreId });
       } else {
-        this.selectSession(this.sessionOrder[0], { auto: true });
+        this.activeSessionId = null;
+        // `auto`: the app is restoring a session on load, not a human opening
+        // one, so a pending idle alert on that tab stays armed until it is
+        // actually tapped (see the userInitiated note in selectSession).
+        if (restoreId && this.sessions.has(restoreId)) {
+          this.selectSession(restoreId, { auto: true });
+        } else {
+          this.selectSession(this.sessionOrder[0], { auto: true });
+        }
       }
     }
   }
