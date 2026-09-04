@@ -102,14 +102,14 @@ function withWebviews<T>(fn: (list: Webview[]) => Promise<T> | T): Promise<T> {
   return next;
 }
 
-export function registerWebviewRoutes(app: FastifyInstance, ctx: EventPort & TabLayoutPort): void {
-  registerCrudRoutes(app, ctx);
-  registerProxyRoutes(app);
+export function registerWebviewRoutes(app: FastifyInstance, ctx: EventPort & TabLayoutPort, basePath = ''): void {
+  registerCrudRoutes(app, ctx, basePath);
+  registerProxyRoutes(app, basePath);
 }
 
 // ───────────────────────────── CRUD ─────────────────────────────
 
-function registerCrudRoutes(app: FastifyInstance, ctx: EventPort & TabLayoutPort): void {
+function registerCrudRoutes(app: FastifyInstance, ctx: EventPort & TabLayoutPort, basePath: string): void {
   app.get('/api/webviews', async (req) => {
     const user = getAuthUser(req);
     const all = await readWebviews(configDir());
@@ -279,7 +279,7 @@ function registerCrudRoutes(app: FastifyInstance, ctx: EventPort & TabLayoutPort
     }
 
     const capability = webviewCapabilities.mint(webview.id, webview.owner);
-    const data: WebviewOpenData = { webview, embedUrl: proxyPrefixFor(capability) };
+    const data: WebviewOpenData = { webview, embedUrl: proxyPrefixFor(capability, basePath) };
     return { success: true, data };
   });
 }
@@ -347,7 +347,7 @@ async function probeUrl(url: string): Promise<WebviewProbe> {
 
 // ───────────────────────────── Proxy ─────────────────────────────
 
-function registerProxyRoutes(app: FastifyInstance): void {
+function registerProxyRoutes(app: FastifyInstance, basePath: string): void {
   app.register(async (scope) => {
     // Encapsulated to this plugin only. The proxy must relay request bodies
     // BYTE-FOR-BYTE, so every parser is replaced with a pass-through that hands
@@ -358,11 +358,11 @@ function registerProxyRoutes(app: FastifyInstance): void {
 
     // A single GET route serving both roles: `handler` for normal requests,
     // `wsHandler` for upgrades. Registering them as two routes on one URL would
-    // collide.
+    // collide. (The WS leg produces no browser-facing URLs, so it needs no base.)
     scope.route<{ Params: ProxyParams }>({
       method: 'GET',
       url: `${WEBVIEW_PROXY_PREFIX}/:cap/*`,
-      handler: proxyHttp,
+      handler: (req, reply) => proxyHttp(req, reply, basePath),
       wsHandler: proxyWebSocket,
     });
 
@@ -371,14 +371,14 @@ function registerProxyRoutes(app: FastifyInstance): void {
     scope.route<{ Params: ProxyParams }>({
       method: ['POST', 'PUT', 'PATCH', 'DELETE', 'OPTIONS'],
       url: `${WEBVIEW_PROXY_PREFIX}/:cap/*`,
-      handler: proxyHttp,
+      handler: (req, reply) => proxyHttp(req, reply, basePath),
     });
 
     // `/webview/<cap>` with no trailing slash: redirect rather than serve, so the
     // browser's notion of the base path ends in `/` and relative URLs in the
     // dashboard's HTML resolve inside the prefix instead of one level above it.
     scope.get<{ Params: { cap: string } }>(`${WEBVIEW_PROXY_PREFIX}/:cap`, (req, reply) => {
-      return reply.redirect(proxyPrefixFor(req.params.cap), 302);
+      return reply.redirect(proxyPrefixFor(req.params.cap, basePath), 302);
     });
   });
 }
@@ -406,8 +406,12 @@ async function lookupCapability(capability: string): Promise<Webview | null> {
  * streamed asset comes back zero-length. Returning the reply is what tells Fastify
  * the response is already owned by this handler.
  */
-function proxyHttp(req: FastifyRequest<{ Params: ProxyParams }>, reply: FastifyReply): Promise<FastifyReply> {
-  return proxyRequest(req, reply, req.params.cap, req.params['*'] ?? '');
+function proxyHttp(
+  req: FastifyRequest<{ Params: ProxyParams }>,
+  reply: FastifyReply,
+  basePath: string
+): Promise<FastifyReply> {
+  return proxyRequest(req, reply, req.params.cap, req.params['*'] ?? '', basePath);
 }
 
 /**
@@ -419,7 +423,8 @@ async function proxyRequest(
   req: FastifyRequest,
   reply: FastifyReply,
   cap: string,
-  wildcard: string
+  wildcard: string,
+  basePath = ''
 ): Promise<FastifyReply> {
   const webview = await lookupCapability(cap);
   if (!webview) {
@@ -454,7 +459,8 @@ async function proxyRequest(
   const headers = buildUpstreamRequestHeaders(req.headers, upstream, {
     forwardCookies: webview.trusted,
     sessionCookieName: AUTH_COOKIE_NAME,
-    refererPath: typeof req.headers.referer === 'string' ? stripProxyPrefix(req.headers.referer, cap) : undefined,
+    refererPath:
+      typeof req.headers.referer === 'string' ? stripProxyPrefix(req.headers.referer, cap, basePath) : undefined,
   });
 
   // #237: the timeout bounds TIME-TO-HEADERS only. A plain AbortSignal.timeout on
@@ -546,7 +552,8 @@ async function proxyRequest(
     response.headers.getSetCookie(),
     cap,
     upstream,
-    secureContext
+    secureContext,
+    basePath
   );
 
   reply.code(response.status);
@@ -575,7 +582,7 @@ async function proxyRequest(
     // Buffer only HTML, only under the cap: `<base>` injection needs the whole
     // document, and buffering an unbounded upstream body is a memory hazard.
     const html = await response.text();
-    return reply.send(html.length <= MAX_WEBVIEW_HTML_REWRITE_BYTES ? rewriteHtml(html, cap) : html);
+    return reply.send(html.length <= MAX_WEBVIEW_HTML_REWRITE_BYTES ? rewriteHtml(html, cap, basePath) : html);
   }
 
   return reply.send(Readable.fromWeb(response.body as Parameters<typeof Readable.fromWeb>[0]));
@@ -596,25 +603,34 @@ async function proxyRequest(
  *
  * @returns true when the request was handled (caller must not also reply).
  */
-export async function tryWebviewRefererFallback(req: FastifyRequest, reply: FastifyReply): Promise<boolean> {
+export async function tryWebviewRefererFallback(
+  req: FastifyRequest,
+  reply: FastifyReply,
+  basePath = ''
+): Promise<boolean> {
   // Safe methods only. A write arriving here has already lost its raw body to the
   // root instance's JSON parser, so it could not be relayed faithfully anyway.
   if (req.method !== 'GET' && req.method !== 'HEAD') return false;
 
-  const capability = capabilityFromReferer(typeof req.headers.referer === 'string' ? req.headers.referer : undefined);
+  const capability = capabilityFromReferer(
+    typeof req.headers.referer === 'string' ? req.headers.referer : undefined,
+    basePath
+  );
   if (!capability) return false;
   if (!webviewCapabilities.resolve(capability)) return false;
 
+  // req.url is already base-stripped by the server's rewriteUrl, so this is the
+  // internal path the upstream resolver expects.
   const path = req.url.split('?')[0].replace(/^\//, '');
-  await proxyRequest(req, reply, capability, path);
+  await proxyRequest(req, reply, capability, path, basePath);
   return true;
 }
 
 /** Turn a proxy-side Referer back into the upstream path it corresponds to. */
-function stripProxyPrefix(referer: string, capability: string): string | undefined {
+function stripProxyPrefix(referer: string, capability: string, basePath = ''): string | undefined {
   try {
     const url = new URL(referer);
-    const prefix = proxyPrefixFor(capability);
+    const prefix = proxyPrefixFor(capability, basePath);
     if (!url.pathname.startsWith(prefix)) return undefined;
     return `/${url.pathname.slice(prefix.length)}${url.search}`;
   } catch {

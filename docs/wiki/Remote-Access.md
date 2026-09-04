@@ -167,6 +167,47 @@ and is not one.
 Also make sure the proxy forwards WebSocket upgrades. The terminal is a WebSocket, and the
 upgrade runs the same Host and Origin checks, closing with code `4003` on failure.
 
+### Mounting under a sub-path
+
+By default Codeman assumes it is served at the origin root (`/`). To mount it under a
+sub-path — e.g. `https://example.com/codeman/` — start it with `--base-url` (or the
+`CODEMAN_BASE_URL` env var):
+
+```bash
+codeman web --base-url /codeman
+# or
+CODEMAN_BASE_URL=/codeman codeman web
+```
+
+The value is a plain path prefix; `/` (the default) means "mounted at the root". With a
+prefix set, Codeman emits every URL — the HTML shell and its assets, API/SSE/WebSocket
+calls, redirects, the PWA manifest and the service worker — under that prefix, so a browser
+loading `https://example.com/codeman/` stays inside the mount.
+
+**Forward the prefix unchanged — do NOT strip it.** Codeman expects the proxy to pass the
+full path (including `/codeman/`) straight through. A minimal nginx block:
+
+```nginx
+location /codeman/ {
+    proxy_pass         http://127.0.0.1:3000;   # note: no trailing slash — keep the /codeman/ prefix
+    proxy_http_version 1.1;
+    proxy_set_header   Host              $host;
+    proxy_set_header   Upgrade           $http_upgrade;   # WebSocket
+    proxy_set_header   Connection        "upgrade";
+}
+```
+
+Notes and current limits:
+
+- The prefix must still be paired with `CODEMAN_ALLOWED_HOSTS` for your domain, exactly as
+  above — the two are independent.
+- Health checks, Claude Code hooks and the docker bridge connect to the raw port directly
+  (bypassing the proxy), so Codeman also keeps answering at the un-prefixed paths on the port
+  itself. Nothing about those flows changes.
+- **Web-tab (dashboard) proxying** is base-path aware: proxied dashboards have their injected
+  `<base>` tag, root-absolute asset rewrites, runtime `fetch`/XHR shim, `Set-Cookie` paths, and
+  redirects all rebased onto the mount, so they load the same under `--base-url` as at the root.
+
 ## Session cookies and rate limits
 
 The first request prompts for HTTP Basic credentials. On success the server issues an opaque
@@ -198,6 +239,7 @@ for the full guide.
 | Symptom                                                     | Cause and fix                                                                                          |
 | ----------------------------------------------------------- | ------------------------------------------------------------------------------------------------------- |
 | `403 host not allowed`                                       | Your domain is not in the allowlist. Set `CODEMAN_ALLOWED_HOSTS`.                                       |
+| Assets 404 / blank page under a sub-path                     | Start Codeman with `--base-url /<prefix>` and have the proxy forward the prefix unchanged (don't strip it). |
 | Phone shows the login page but the terminal never connects   | The proxy is not forwarding WebSocket upgrades.                                                         |
 | Browser warns about the certificate                          | Expected with `--https` and its self-signed certificate. Tailscale gives you a real one instead.        |
 | LAN IP does not respond, but a tunnel to the same box works  | The server is bound to loopback. That is the default. A tunnel reaches it; a LAN browser cannot.        |

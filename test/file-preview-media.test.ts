@@ -64,6 +64,8 @@ function loadApp(media: FakeMedia[]) {
     console: { ...console, warn: vi.fn() },
     localStorage: { getItem: () => null, setItem: () => {}, removeItem: () => {} },
     escapeHtml: (s: string) => String(s),
+    // Reverse-proxy route builder from constants.js (not loaded here); identity at root.
+    CodemanBase: { base: '', url: (p: string) => p },
     document: { getElementById: () => null, addEventListener: vi.fn() },
     window: { addEventListener: vi.fn() },
     setTimeout,

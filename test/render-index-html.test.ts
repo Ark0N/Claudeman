@@ -228,3 +228,42 @@ describe('WebServer.renderIndexHtml', () => {
     expect(html).not.toContain('gesture-codeman.js');
   });
 });
+
+describe('WebServer.renderIndexHtml reverse-proxy base path', () => {
+  const BASE_TEMPLATE = ['<head>', '<base href="/">', '<title>Codeman</title>', '</head>', '<body></body>'].join('\n');
+
+  function makeBaseServer(basePath: string) {
+    // constructor: (port, https, testMode, host, titleHostname, allowUnauth, basePath)
+    const server = new WebServer(0, false, true, '127.0.0.1', undefined, false, basePath);
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any
+    (server as any).indexHtmlTemplate = BASE_TEMPLATE;
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any
+    (server as any).readSettings = vi.fn(async () => ({}));
+    return server;
+  }
+
+  it('is inert at root — base tag unchanged and no base global injected', async () => {
+    const server = makeBaseServer('');
+    const html = await render(server);
+    expect(html).toContain('<base href="/">');
+    // At root the frontend reads a MISSING __CODEMAN_BASE__ as root, so nothing is
+    // injected and the historical output is byte-identical.
+    expect(html).not.toContain('__CODEMAN_BASE__');
+  });
+
+  it('points the base tag and the base global at a sub-path mount', async () => {
+    const server = makeBaseServer('/codeman');
+    const html = await render(server);
+    expect(html).toContain('<base href="/codeman/">');
+    expect(html).toContain('window.__CODEMAN_BASE__="/codeman"');
+    // The global rides right after <base>, before any (deferred) script.
+    expect(html.indexOf('window.__CODEMAN_BASE__')).toBeLessThan(html.indexOf('</head>'));
+  });
+
+  it('normalizes a raw operator prefix passed to the constructor', async () => {
+    const server = makeBaseServer('codeman/');
+    const html = await render(server);
+    expect(html).toContain('<base href="/codeman/">');
+    expect(html).toContain('window.__CODEMAN_BASE__="/codeman"');
+  });
+});

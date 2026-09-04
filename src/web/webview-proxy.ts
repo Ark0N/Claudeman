@@ -39,6 +39,7 @@
  */
 
 import { WEBVIEW_PROXY_PREFIX } from '../config/webview-limits.js';
+import { stripBasePath } from '../config/base-path.js';
 
 /** Headers that are per-connection and must never be relayed in either direction. */
 const HOP_BY_HOP = new Set([
@@ -99,9 +100,18 @@ const DROP_RESPONSE_HEADERS = new Set([
   'referrer-policy',
 ]);
 
-/** The same-origin path prefix an iframe loads for a given capability. */
-export function proxyPrefixFor(capability: string): string {
-  return `${WEBVIEW_PROXY_PREFIX}/${capability}/`;
+/**
+ * The same-origin path prefix an iframe loads for a given capability.
+ *
+ * `basePath` is the reverse-proxy mount prefix (`''` at root, or `/foo`). It is
+ * INCLUDED here because this value is browser-facing — the iframe src, the
+ * `<base href>`, the runtime shim's rewrite target, Location/Set-Cookie rebasing —
+ * and all of those must ride the mount or they escape it. Requests coming the other
+ * way are base-stripped before routing, so the parsers (`capabilityFromProxyPath`,
+ * `resolveUpstreamUrl`) deliberately do NOT take a base.
+ */
+export function proxyPrefixFor(capability: string, basePath = ''): string {
+  return `${basePath}${WEBVIEW_PROXY_PREFIX}/${capability}/`;
 }
 
 /**
@@ -178,10 +188,13 @@ export function capabilityFromProxyPath(pathname: string): string | null {
  * Extract the capability a `Referer` belongs to. Backs the 404 fallback that
  * catches root-absolute asset requests (`/static/app.js`) which `<base>` cannot fix.
  */
-export function capabilityFromReferer(referer: string | undefined): string | null {
+export function capabilityFromReferer(referer: string | undefined, basePath = ''): string | null {
   if (!referer) return null;
   try {
-    return capabilityFromProxyPath(new URL(referer).pathname);
+    // The Referer is browser-supplied, so under a sub-path mount it carries the
+    // prefix (`/foo/webview/<cap>/...`); strip it back to the internal path the
+    // capability parser expects.
+    return capabilityFromProxyPath(stripBasePath(basePath, new URL(referer).pathname));
   } catch {
     return null;
   }
@@ -232,7 +245,7 @@ export function isFramableCrossOrigin(xFrameOptions: string | undefined, csp: st
  * proxied: relaying them would turn this into an open proxy for any host the
  * upstream chooses to name.
  */
-export function rewriteLocation(location: string, requestUrl: URL, capability: string): string {
+export function rewriteLocation(location: string, requestUrl: URL, capability: string, basePath = ''): string {
   let resolved: URL;
   try {
     resolved = new URL(location, requestUrl);
@@ -241,7 +254,7 @@ export function rewriteLocation(location: string, requestUrl: URL, capability: s
   }
   if (resolved.origin !== requestUrl.origin) return location;
   const suffix = resolved.pathname.replace(/^\//, '');
-  return `${proxyPrefixFor(capability)}${suffix}${resolved.search}${resolved.hash}`;
+  return `${proxyPrefixFor(capability, basePath)}${suffix}${resolved.search}${resolved.hash}`;
 }
 
 /**
@@ -252,7 +265,7 @@ export function rewriteLocation(location: string, requestUrl: URL, capability: s
  * cookie name, and `Secure` is dropped when Codeman itself is serving plain HTTP
  * in dev, where a Secure cookie would simply be discarded.
  */
-export function rewriteSetCookie(cookie: string, capability: string, secureContext: boolean): string {
+export function rewriteSetCookie(cookie: string, capability: string, secureContext: boolean, basePath = ''): string {
   const parts = cookie.split(';');
   const out: string[] = [parts[0]];
   let sawPath = false;
@@ -266,13 +279,13 @@ export function rewriteSetCookie(cookie: string, capability: string, secureConte
       sawPath = true;
       const value = attr.slice('path='.length);
       const suffix = value.replace(/^\//, '');
-      out.push(`Path=${proxyPrefixFor(capability)}${suffix}`);
+      out.push(`Path=${proxyPrefixFor(capability, basePath)}${suffix}`);
       continue;
     }
     out.push(attr);
   }
 
-  if (!sawPath) out.push(`Path=${proxyPrefixFor(capability)}`);
+  if (!sawPath) out.push(`Path=${proxyPrefixFor(capability, basePath)}`);
   return out.join('; ');
 }
 
@@ -336,7 +349,8 @@ export function buildDownstreamResponseHeaders(
   setCookies: string[],
   capability: string,
   requestUrl: URL,
-  secureContext: boolean
+  secureContext: boolean,
+  basePath = ''
 ): { headers: Record<string, string>; setCookie: string[]; csp: string | null } {
   const headers: Record<string, string> = {};
   let csp: string | null = null;
@@ -349,7 +363,7 @@ export function buildDownstreamResponseHeaders(
       continue;
     }
     if (lower === 'location') {
-      headers['location'] = rewriteLocation(value, requestUrl, capability);
+      headers['location'] = rewriteLocation(value, requestUrl, capability, basePath);
       continue;
     }
     if (DROP_RESPONSE_HEADERS.has(lower)) continue;
@@ -365,7 +379,7 @@ export function buildDownstreamResponseHeaders(
   // override this; that is the dashboard author's own decision about their page.
   headers['referrer-policy'] = 'same-origin';
 
-  const setCookie = setCookies.map((cookie) => rewriteSetCookie(cookie, capability, secureContext));
+  const setCookie = setCookies.map((cookie) => rewriteSetCookie(cookie, capability, secureContext, basePath));
 
   return { headers, setCookie, csp };
 }
@@ -593,8 +607,8 @@ try{
  * relative URLs, attribute rewriting for root-absolute markup, and the shim for
  * URLs built at runtime.
  */
-export function rewriteHtml(html: string, capability: string): string {
-  const prefix = proxyPrefixFor(capability);
+export function rewriteHtml(html: string, capability: string, basePath = ''): string {
+  const prefix = proxyPrefixFor(capability, basePath);
 
   // Fresh regexes per call: module-level /g patterns carry `lastIndex` between calls.
   const rebased = html

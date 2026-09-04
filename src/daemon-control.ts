@@ -45,6 +45,8 @@ export interface WebLaunchOptions {
   host: string;
   port: number;
   https: boolean;
+  /** Reverse-proxy sub-path prefix (normalized: '' for root, or '/foo'). */
+  basePath?: string;
   titleHostname?: string;
   allowUnauthenticatedNetwork?: boolean;
   multiuser?: boolean;
@@ -87,6 +89,7 @@ export interface DaemonStatus {
 export function buildWebArgs(options: WebLaunchOptions): string[] {
   const args = ['web', '--host', options.host, '--port', String(options.port)];
   if (options.https) args.push('--https');
+  if (options.basePath) args.push('--base-url', options.basePath);
   if (options.titleHostname) args.push('--title-hostname', options.titleHostname);
   if (options.allowUnauthenticatedNetwork) args.push('--allow-unauthenticated-network');
   if (options.multiuser) args.push('--multiuser');

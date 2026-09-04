@@ -304,7 +304,7 @@ const PathPicker = {
     // A hidden file is only reachable while the toggle is on, and the preview
     // endpoint re-resolves the path independently, so it needs the flag too.
     if (this._showHidden) params.set('showHidden', 'true');
-    const previewUrl = `/api/filesystem/preview?${params.toString()}`;
+    const previewUrl = (window.CodemanBase?.url || ((p) => p))(`/api/filesystem/preview?${params.toString()}`);
 
     const overlay = document.createElement('div');
     overlay.className = 'path-preview-overlay';

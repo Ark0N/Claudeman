@@ -52,6 +52,16 @@ describe('buildWebArgs', () => {
     ]);
   });
 
+  it('forwards --base-url so a detached/service relaunch keeps the mount prefix', () => {
+    const args = buildWebArgs({ host: '127.0.0.1', port: 3000, https: false, basePath: '/codeman' });
+    expect(args).toContain('--base-url');
+    expect(args[args.indexOf('--base-url') + 1]).toBe('/codeman');
+  });
+
+  it('omits --base-url at root (empty basePath)', () => {
+    expect(buildWebArgs({ host: '127.0.0.1', port: 3000, https: false, basePath: '' })).not.toContain('--base-url');
+  });
+
   it('never re-emits the daemon flags themselves (the child must not re-fork)', () => {
     const args = buildWebArgs({ host: '127.0.0.1', port: 3000, https: false });
     expect(args).not.toContain('--daemon');

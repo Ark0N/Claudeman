@@ -182,7 +182,9 @@ Object.assign(CodemanApp.prototype, {
       if (webview.trusted) sandbox.push('allow-same-origin');
       frame.setAttribute('sandbox', sandbox.join(' '));
       frame.setAttribute('referrerpolicy', 'no-referrer-when-downgrade');
-      frame.src = src;
+      // Proxied dashboards carry a root-absolute `/webview/<cap>/` embedUrl that must
+      // ride the mount prefix; external (trusted) URLs are absolute and pass through.
+      frame.src = CodemanBase.url(src);
 
       const failure = document.createElement('div');
       failure.className = 'webview-failure';

@@ -161,6 +161,8 @@ function loadPanel(options: { sessionId?: string | null; showHidden?: boolean } 
     CodemanApp,
     console,
     escapeHtml,
+    // Reverse-proxy route builder from constants.js (not loaded here); identity at root.
+    CodemanBase: { base: '', url: (p: string) => p },
     localStorage: { getItem: () => null, setItem: vi.fn() },
     document: {
       getElementById: (id: string) => elements[id] ?? null,
@@ -222,6 +224,8 @@ function loadRealSelectSessionHarness(options: { terminalFailure?: boolean } = {
     },
     HTMLCanvasElement: class HTMLCanvasElement {},
     WebSocket: { OPEN: 1 },
+    // Reverse-proxy route builder from constants.js (not loaded here); identity at root.
+    CodemanBase: { base: '', url: (p: string) => p },
     MobileDetection: { isTouchDevice: () => false },
     localStorage: { length: 0, key: vi.fn(), getItem: vi.fn(), setItem: vi.fn(), removeItem: vi.fn() },
     document: {
