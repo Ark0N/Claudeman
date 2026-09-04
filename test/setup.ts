@@ -21,9 +21,7 @@ const originalHome = process.env.HOME;
 const originalUserProfile = process.env.USERPROFILE;
 const originalVitest = process.env.VITEST;
 const originalPlaywrightBrowsersPath = process.env.PLAYWRIGHT_BROWSERS_PATH;
-const originalCodemanDataDir = process.env.CODEMAN_DATA_DIR;
 const testHome = mkdtempSync(join(tmpdir(), 'codeman-vitest-'));
-const testDataDir = join(tmpdir(), `codeman-vitest-data-${process.pid}`);
 
 if (originalPlaywrightBrowsersPath === undefined && originalHome) {
   process.env.PLAYWRIGHT_BROWSERS_PATH =
@@ -36,17 +34,6 @@ if (originalPlaywrightBrowsersPath === undefined && originalHome) {
 process.env.HOME = testHome;
 process.env.USERPROFILE = testHome;
 process.env.VITEST = 'true';
-
-// SAFETY: `getDataDir()` is `process.env.CODEMAN_DATA_DIR || join(homedir(), '.codeman<suffix>')`.
-// The temp HOME above already redirects the second half (`os.homedir()` follows
-// `$HOME`; libuv checks the env var before the passwd entry), but the first half
-// is an ABSOLUTE override: a `CODEMAN_DATA_DIR` inherited from the shell (a
-// second instance, a beta run) bypasses the temp HOME entirely, and a bare suite
-// run then reads and writes the REAL data dir (found 2026-08-29:
-// `session-routes-workspace-hooks.test.ts` overwrote the production
-// `remote-hosts.json` with an `h1/box/10.0.0.5` fixture, wiping every user-defined
-// remote host and emptying the launch case dropdown). Point it at a throwaway dir.
-process.env.CODEMAN_DATA_DIR = testDataDir;
 
 delete process.env.CODEMAN_PASSWORD;
 delete process.env.CODEMAN_USERNAME;
@@ -64,7 +51,13 @@ delete process.env.CODEMAN_GESTURE;
 //     `getDataDir()`, so it bypasses HOME entirely: a developer who exports it
 //     (or a shell left over from `codeman web -d`) has the suite reading and
 //     WRITING their real `state.json`, `users.json`, `intents.json` and
-//     `hook-secret` instead of a throwaway tree.
+//     `hook-secret` instead of a throwaway tree. Found live 2026-08-29 (#356):
+//     `session-routes-workspace-hooks.test.ts` overwrote a production
+//     `remote-hosts.json` with its `h1/box/10.0.0.5` fixture. `os.homedir()`
+//     itself DOES follow `$HOME`, so with this var gone `getDataDir()` lands
+//     under the temp HOME like everything else. (#356 first answered this by
+//     pointing the var at a second throwaway dir; deleting it is the same
+//     protection with one tree to clean up.)
 //   - CODEMAN_INSTANCE moves the data dir to `~/.codeman-<name>` and the socket to
 //     `codeman-<name>`. Inside the temp HOME that is not a data-loss risk, but it
 //     silently changes the paths tests assert on — and `scripts/run-beta.sh`
@@ -109,11 +102,7 @@ afterAll(async () => {
   if (originalPlaywrightBrowsersPath === undefined) delete process.env.PLAYWRIGHT_BROWSERS_PATH;
   else process.env.PLAYWRIGHT_BROWSERS_PATH = originalPlaywrightBrowsersPath;
 
-  if (originalCodemanDataDir === undefined) delete process.env.CODEMAN_DATA_DIR;
-  else process.env.CODEMAN_DATA_DIR = originalCodemanDataDir;
-
   rmSync(testHome, { recursive: true, force: true });
-  rmSync(testDataDir, { recursive: true, force: true });
 });
 
 // afterAll never fires for a fully-skipped test file (no tests execute), which
@@ -121,5 +110,4 @@ afterAll(async () => {
 // with force is a no-op when afterAll already removed it.
 process.on('exit', () => {
   rmSync(testHome, { recursive: true, force: true });
-  rmSync(testDataDir, { recursive: true, force: true });
 });

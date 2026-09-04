@@ -43,10 +43,10 @@ beforeEach(() => {
 });
 
 afterEach(() => {
-  // LINKED_CASES_FILE is dataPath('linked-cases.json') → CODEMAN_DATA_DIR,
-  // which test/setup.ts points at a throwaway /tmp dir, so a plain delete is
-  // safe here. Only homedir()-derived paths (CASES_DIR/LINKED_ROOT) need the
-  // containment gate.
+  // LINKED_CASES_FILE is dataPath('linked-cases.json'), which test/setup.ts
+  // sandboxes (temp HOME, and an inherited CODEMAN_DATA_DIR is stripped), so a
+  // plain delete is safe here. The case trees still go through the containment
+  // gate as defense in depth.
   rmSync(LINKED_CASES_FILE, { force: true });
   safeRmHomeTree(CASES_DIR);
   safeRmHomeTree(LINKED_ROOT);

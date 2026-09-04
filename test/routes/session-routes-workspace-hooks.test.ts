@@ -169,8 +169,9 @@ describe('POST /api/sessions workspace hooks', () => {
     // as a junk directory under the server cwd. statusLineTelemetry rides along:
     // applyStatusLineConfig mkdirs the same way and used to run for remote attaches.
     // SAFETY (2026-08-29): write straight to `getDataDir()` — `test/setup.ts`
-    // already sandboxes CODEMAN_DATA_DIR for the whole file (same convention as
-    // the docker-hosts fixtures below). A prior version of this test stubbed
+    // already sandboxes the data dir for the whole file (temp HOME, inherited
+    // CODEMAN_DATA_DIR stripped; same convention as the docker-hosts fixtures
+    // below). A prior version of this test stubbed
     // CODEMAN_DATA_DIR to a SEPARATE throwaway dir for just this write, but
     // `session-routes.ts`'s `CODEMAN_CONFIG_DIR` is a module-load-time constant
     // (frozen at the sandboxed dir before this test ever runs), so that fixture
