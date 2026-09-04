@@ -1,5 +1,21 @@
 # aicodeman
 
+## 1.24.6
+
+### Patch Changes
+
+- CLI backends are now a data-driven registry (#347, @opticon454). Every run mode (Claude Code, Terminal/Shell, OpenCode, Codex, Gemini, Antigravity, Pi, Grok, DeepSeek Harness and OMP) is a `CliEntry` in `src/config/cli-registry/`: binary discovery (search dirs, version and identity probes), the launch argv template, environment handling, the multi-user privileged-parameter and privileged-env-key clamps, the remote and Docker pane commands, and the capability flags the rest of the app reads instead of branching on a CLI's name. `~/.codeman/clis.json` can override any stock entry or add a custom CLI; it is read-only in this release, must be mode 0600, and every reason it was ignored is now logged once on first load (`docs/cli-registry.md`). Config never contains shell text: entries declare typed argv tokens, literals are validated at load time, and values resolve through patterns named in code. Registry data resolves at call time rather than at module import, so a CLI enabled while the server runs moves every surface at once, and a guard test fails the build if per-CLI-id branching reappears outside the stock catalog.
+
+  This is an internal refactor. The spawn command every CLI receives is byte-identical to the previous hand-written builders, verified by pinned golden strings in the test suite and by diffing both implementations across 11,602 option combinations for all ten modes. Five small deliberate changes ride along: the in-container version probe derives the binary from the registry (`antigravity` runs `agy`), the remote version probe now covers Grok and DeepSeek, `codeman doctor`'s CLI rows are generated from the registry (Claude's install hint is the install command, five CLIs gain hints, the row order follows the catalog), OMP now requires tmux like its siblings instead of silently falling back to a direct PTY, and an OMP session's attach client now receives `COLORTERM=truecolor` like the other truecolor CLIs.
+
+  Remote sessions are no longer auto-revived after a clean agent exit (#355, @timkjr). The reconnect watcher could not tell a transport drop from a Ctrl-C, Ctrl-D or `exit` inside the remote CLI, so a clean exit relaunched a fresh agent (OpenCode and OMP started a new conversation every time; Claude only looked fine because its `--resume` fallback masked it). The watcher now revives a dead pane only when the durable remote tmux session is verifiably still alive, via a `has-session` probe over ssh, and an unreachable host means do not revive. A follow-up classifies that probe by exit status, since `tmux has-session` prints nothing on success and reading its stdout had marked every live session as gone, forgets the cached answer whenever the pane is seen alive again so a stale result cannot revive a later clean exit, and caps the probe at one in flight per session.
+
+  The test suite can no longer reach the production `~/.codeman` data dir (#356, @timkjr). `test/setup.ts` now points `CODEMAN_DATA_DIR` at a throwaway directory, which is the absolute override that bypasses the suite's temporary HOME when inherited from the shell, and every test that deletes a case tree goes through a containment gate that refuses paths outside the temporary HOME. A bare suite run had overwritten a real `remote-hosts.json` with a route test's fixture. The comments around it and CLAUDE.md's testing section now name that variable as the cause; `os.homedir()` itself does follow `$HOME`.
+
+  ### Thanks
+  - @opticon454 for the CLI registry (#347), the phased resubmission of #343, and the review rounds that hardened it.
+  - @timkjr for the remote auto-revive fix (#355) and the test-isolation sweep (#356).
+
 ## 1.24.5
 
 ### Patch Changes
