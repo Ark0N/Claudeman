@@ -19,11 +19,32 @@ import Fastify, { type FastifyInstance } from 'fastify';
 import fastifyWebsocket from '@fastify/websocket';
 import WebSocket, { WebSocketServer } from 'ws';
 import { mkdirSync, writeFileSync, rmSync } from 'node:fs';
-import { homedir } from 'node:os';
 import { join } from 'node:path';
 import { createMockRouteContext, type MockRouteContext } from '../mocks/index.js';
 import { registerVoiceRoutes, _resetVoiceStreamCountForTesting } from '../../src/web/routes/voice-routes.js';
 import { MAX_CONCURRENT_STREAMS } from '../../src/config/voice.js';
+
+// SAFETY (2026-08-29): anchor on the REDIRECTED test HOME (process.env.HOME,
+// which test/setup.ts points at a throwaway dir) instead of os.homedir().
+// On some Linux builds os.homedir() reads /etc/passwd and would resolve to the
+// REAL home, clobbering the user's ~/.claude/.credentials.json.
+function testHome(): string {
+  if (!process.env.HOME) throw new Error('process.env.HOME unset — test/setup.ts must run first');
+  return process.env.HOME;
+}
+
+function writeCredentials(expiresAt: number | undefined): void {
+  const dir = join(testHome(), '.claude');
+  mkdirSync(dir, { recursive: true });
+  writeFileSync(
+    join(dir, '.credentials.json'),
+    JSON.stringify({ claudeAiOauth: { accessToken: TOKEN, expiresAt, subscriptionType: 'max' } })
+  );
+}
+
+function removeCredentials(): void {
+  rmSync(join(testHome(), '.claude', '.credentials.json'), { force: true });
+}
 
 const PORT = 3230;
 const UPSTREAM_PORT = 3231;
@@ -36,19 +57,6 @@ interface UpstreamCapture {
   binaryFrames: Buffer[];
   textFrames: string[];
   socket: WebSocket | null;
-}
-
-function writeCredentials(expiresAt: number | undefined): void {
-  const dir = join(homedir(), '.claude');
-  mkdirSync(dir, { recursive: true });
-  writeFileSync(
-    join(dir, '.credentials.json'),
-    JSON.stringify({ claudeAiOauth: { accessToken: TOKEN, expiresAt, subscriptionType: 'max' } })
-  );
-}
-
-function removeCredentials(): void {
-  rmSync(join(homedir(), '.claude', '.credentials.json'), { force: true });
 }
 
 function waitForClose(ws: WebSocket, timeoutMs = 3000): Promise<{ code: number; reason: string }> {

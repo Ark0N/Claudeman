@@ -21,6 +21,13 @@ export default defineConfig({
     environment: 'node',
     include: ['test/**/*.test.ts'],
     setupFiles: ['./test/setup.ts'],
+    // SAFETY: force every worker's data dir away from prod `~/.codeman`. Route
+    // tests (e.g. session-routes-workspace-hooks) write remote-hosts.json into
+    // `getDataDir()`; without this a bare run clobbers the production host
+    // registry (found 2026-08-29). `/tmp` is fine here — the tree is throwaway.
+    env: {
+      CODEMAN_DATA_DIR: '/tmp/codeman-vitest-data',
+    },
     // Run test files sequentially to respect mux session limits
     // Individual tests within files still run in parallel where safe
     fileParallelism: false,

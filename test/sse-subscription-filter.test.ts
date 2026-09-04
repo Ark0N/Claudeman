@@ -1,5 +1,8 @@
 import { describe, it, expect, beforeAll, afterAll } from 'vitest';
 import { WebServer } from '../src/web/server.js';
+import { safeRmHomeTree } from './mocks/index.js';
+import { homedir } from 'node:os';
+import { join } from 'node:path';
 
 const TEST_PORT = 3212;
 
@@ -437,14 +440,7 @@ describe('SSE Subscription Filtering', () => {
     expect(caseCreated).toBeDefined();
     expect((caseCreated?.data as any).name).toBe(caseName);
 
-    // Cleanup
-    const { rmSync } = await import('node:fs');
-    const { join } = await import('node:path');
-    const { homedir } = await import('node:os');
-    try {
-      rmSync(join(homedir(), 'codeman-cases', caseName), { recursive: true });
-    } catch {
-      /* may not exist */
-    }
+    // Cleanup (containment-gated)
+    safeRmHomeTree(join(homedir(), 'codeman-cases', caseName));
   });
 });

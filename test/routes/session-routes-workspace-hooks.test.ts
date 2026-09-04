@@ -19,14 +19,14 @@
  * including the sweep's deleted-workspace guard.
  */
 
-import { describe, it, expect, beforeEach, afterEach, vi } from 'vitest';
+import { describe, it, expect, beforeEach, afterEach } from 'vitest';
 import Fastify, { type FastifyInstance } from 'fastify';
 import fastifyCookie from '@fastify/cookie';
 import { mkdtemp, rm, readFile, mkdir, writeFile } from 'node:fs/promises';
 import { existsSync } from 'node:fs';
 import { join } from 'node:path';
 import { tmpdir } from 'node:os';
-import { createMockRouteContext, type MockRouteContext } from '../mocks/index.js';
+import { createMockRouteContext, safeRmHomeTree, type MockRouteContext } from '../mocks/index.js';
 import { installRouteErrorHandler } from '../../src/web/route-error-handler.js';
 import { registerSessionRoutes } from '../../src/web/routes/session-routes.js';
 import { generateHooksConfig, applyWorkspaceHooks } from '../../src/hooks-config.js';
@@ -168,6 +168,16 @@ describe('POST /api/sessions workspace hooks', () => {
     // `user@host:session` — locally a RELATIVE path, so a mkdir would create it
     // as a junk directory under the server cwd. statusLineTelemetry rides along:
     // applyStatusLineConfig mkdirs the same way and used to run for remote attaches.
+    // SAFETY (2026-08-29): write straight to `getDataDir()` — `test/setup.ts`
+    // already sandboxes CODEMAN_DATA_DIR for the whole file (same convention as
+    // the docker-hosts fixtures below). A prior version of this test stubbed
+    // CODEMAN_DATA_DIR to a SEPARATE throwaway dir for just this write, but
+    // `session-routes.ts`'s `CODEMAN_CONFIG_DIR` is a module-load-time constant
+    // (frozen at the sandboxed dir before this test ever runs), so that fixture
+    // landed somewhere the route handler could never read it — the remote host
+    // lookup silently failed and the test passed for the wrong reason (Fastify
+    // defaults an unset reply code to 200, so the NOT_FOUND branch and the
+    // intended success branch were indistinguishable by status code alone).
     await mkdir(getDataDir(), { recursive: true });
     await writeFile(
       join(getDataDir(), 'remote-hosts.json'),
@@ -248,7 +258,11 @@ describe('POST /api/quick-start workspace hooks', () => {
     // Docker fixtures + case dirs must not leak into the next test.
     await rm(join(getDataDir(), 'docker-hosts.json'), { force: true });
     await rm(join(getDataDir(), 'docker-cases.json'), { force: true });
-    await rm(CASES_DIR, { recursive: true, force: true });
+    // SAFETY (2026-08-29): CASES_DIR is `join(homedir(), 'codeman-cases')`, and
+    // on environments where `os.homedir()` ignores `$HOME` it resolves to the
+    // PROD case tree. `safeRmHomeTree` refuses to delete anything not under the
+    // redirected test HOME, so a run can never nuke the real `~/codeman-cases`.
+    safeRmHomeTree(CASES_DIR);
   });
 
   it('installs hooks into an EXISTING case directory (a linked case / cloned repo)', async () => {

@@ -9,8 +9,10 @@
  * working tree in the case directory, that scaffolding does not overwrite the
  * repository's own files, and that a rejected URL never reaches git.
  *
- * `test/setup.ts` points HOME at a per-file temp dir, so CASES_DIR resolves
- * inside the fixture and nothing touches the developer's real ~/codeman-cases.
+ * `test/setup.ts` points HOME at a per-file temp dir, but CASES_DIR is
+ * `join(homedir(), 'codeman-cases')` and `os.homedir()` ignores the HOME
+ * override on some platforms/Node builds — so cleanup below goes through
+ * `safeRmHomeTree`, which refuses to delete anything outside the temp HOME.
  *
  * Port: N/A (app.inject).
  */
@@ -31,7 +33,7 @@ import {
 } from 'node:fs';
 import { homedir, tmpdir } from 'node:os';
 import { join } from 'node:path';
-import { createMockRouteContext, type MockRouteContext } from '../mocks/index.js';
+import { createMockRouteContext, safeRmHomeTree, type MockRouteContext } from '../mocks/index.js';
 import { installRouteErrorHandler } from '../../src/web/route-error-handler.js';
 import { ApiErrorCode, httpStatusForErrorCode } from '../../src/types.js';
 import { registerCaseRoutes } from '../../src/web/routes/case-routes.js';
@@ -147,7 +149,7 @@ describe('POST /api/cases/clone — input rejection', () => {
       expect(res.statusCode).toBe(httpStatusForErrorCode(ApiErrorCode.ALREADY_EXISTS));
       expect(JSON.parse(res.body).error).toMatch(/already exists/i);
     } finally {
-      rmSync(join(CASES_DIR, 'taken'), { recursive: true, force: true });
+      safeRmHomeTree(join(CASES_DIR, 'taken'));
     }
   });
 });
@@ -217,7 +219,7 @@ describe.skipIf(!gitPresent)('POST /api/cases/clone — real clone', () => {
 
   afterAll(() => {
     rmSync(root, { recursive: true, force: true });
-    for (const name of created) rmSync(join(CASES_DIR, name), { recursive: true, force: true });
+    for (const name of created) safeRmHomeTree(join(CASES_DIR, name));
   });
 
   beforeEach(buildApp);

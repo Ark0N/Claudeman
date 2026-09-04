@@ -18,7 +18,9 @@ const originalHome = process.env.HOME;
 const originalUserProfile = process.env.USERPROFILE;
 const originalVitest = process.env.VITEST;
 const originalPlaywrightBrowsersPath = process.env.PLAYWRIGHT_BROWSERS_PATH;
+const originalCodemanDataDir = process.env.CODEMAN_DATA_DIR;
 const testHome = mkdtempSync(join(tmpdir(), 'codeman-vitest-'));
+const testDataDir = join(tmpdir(), `codeman-vitest-data-${process.pid}`);
 
 if (originalPlaywrightBrowsersPath === undefined && originalHome) {
   process.env.PLAYWRIGHT_BROWSERS_PATH =
@@ -31,6 +33,16 @@ if (originalPlaywrightBrowsersPath === undefined && originalHome) {
 process.env.HOME = testHome;
 process.env.USERPROFILE = testHome;
 process.env.VITEST = 'true';
+
+// SAFETY: `getDataDir()` resolves via `homedir()` → `~/.codeman<INSTANCE_SUFFIX>`.
+// Overriding HOME above is NOT enough: on Linux `os.homedir()` reads /etc/passwd,
+// not $HOME, so without this a route test that writes `remote-hosts.json` (or
+// any state file) into `getDataDir()` silently clobbers the PRODUCTION
+// `~/.codeman` tree (found 2026-08-29: `session-routes-workspace-hooks.test.ts`
+// overwrote prod `remote-hosts.json` with an `h1/box/10.0.0.5` fixture during a
+// bare full-suite run, wiping every user-defined remote host and emptying the
+// launch case dropdown). Point every test at a throwaway data dir instead.
+process.env.CODEMAN_DATA_DIR = testDataDir;
 
 delete process.env.CODEMAN_PASSWORD;
 delete process.env.CODEMAN_USERNAME;
@@ -50,7 +62,9 @@ afterAll(async () => {
   // "onUserConsoleLog" call is still pending, and that single unhandled
   // EnvironmentTeardownError fails the run after every test has passed
   // (observed twice on the PR #175/#176 merge commit; never locally).
-  await new Promise((resolve) => setTimeout(resolve, 50));
+  const { promise: drained, resolve: drainDone } = Promise.withResolvers<void>();
+  setTimeout(drainDone, 50);
+  await drained;
 
   if (originalHome === undefined) delete process.env.HOME;
   else process.env.HOME = originalHome;
@@ -64,7 +78,11 @@ afterAll(async () => {
   if (originalPlaywrightBrowsersPath === undefined) delete process.env.PLAYWRIGHT_BROWSERS_PATH;
   else process.env.PLAYWRIGHT_BROWSERS_PATH = originalPlaywrightBrowsersPath;
 
+  if (originalCodemanDataDir === undefined) delete process.env.CODEMAN_DATA_DIR;
+  else process.env.CODEMAN_DATA_DIR = originalCodemanDataDir;
+
   rmSync(testHome, { recursive: true, force: true });
+  rmSync(testDataDir, { recursive: true, force: true });
 });
 
 // afterAll never fires for a fully-skipped test file (no tests execute), which
@@ -72,4 +90,5 @@ afterAll(async () => {
 // with force is a no-op when afterAll already removed it.
 process.on('exit', () => {
   rmSync(testHome, { recursive: true, force: true });
+  rmSync(testDataDir, { recursive: true, force: true });
 });
