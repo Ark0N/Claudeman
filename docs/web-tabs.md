@@ -161,10 +161,21 @@ then every API call fails, which looks like the dashboard being broken.
   then streams the body without any time bound; a header timeout is logged
   server-side and answered as a 502 that names the limit. WebSocket handshakes use
   the separate `CODEMAN_WEBVIEW_WS_HANDSHAKE_TIMEOUT_MS` (default 30s).
-- **Not a security boundary.** The proxy reaches whatever the Codeman server can
-  reach. That is not an escalation for someone who already commands
-  `--dangerously-skip-permissions` agents, but in multi-user mode it does mean a
-  non-admin user's dashboard is fetched from the server's network position.
+- **Not a security boundary, with one carve-out.** The proxy reaches whatever the
+  Codeman server can reach (a `localhost` dashboard is the point), so it is not an
+  escalation for someone who already commands `--dangerously-skip-permissions`
+  agents, but in multi-user mode it does mean a non-admin user's dashboard is
+  fetched from the server's network position. The carve-out: link-local and
+  cloud-metadata addresses (`169.254.0.0/16`, `fe80::/10`, `fd00:ec2::254`,
+  Azure's `168.63.129.16`, Alibaba's `100.100.100.200`, the
+  `metadata.google.internal` alias) are refused at save time AND at connect
+  time, judged on the address a name actually resolves to. Nothing anyone embeds
+  as a dashboard lives there; an instance's IAM credentials do.
+- **The proxy URL is a bearer credential.** `/webview/<cap>/...` needs no cookie,
+  so treat it like a password. It is revoked when you log out, when an admin logs
+  you out, and when your account is deleted, and it expires after 12 hours
+  without use. Proxied responses carry `Referrer-Policy: same-origin`, so a
+  dashboard that links to third-party sites does not hand them the URL.
 
 ## Where the code lives
 
