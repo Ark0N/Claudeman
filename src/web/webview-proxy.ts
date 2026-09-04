@@ -93,6 +93,10 @@ const DROP_RESPONSE_HEADERS = new Set([
   'access-control-allow-headers',
   'access-control-expose-headers',
   'access-control-max-age',
+  // The capability rides in every proxied URL, so the upstream's own referrer
+  // policy must not decide whether third parties receive it. Ours is stamped in
+  // buildDownstreamResponseHeaders.
+  'referrer-policy',
 ]);
 
 /** The same-origin path prefix an iframe loads for a given capability. */
@@ -351,6 +355,15 @@ export function buildDownstreamResponseHeaders(
     if (DROP_RESPONSE_HEADERS.has(lower)) continue;
     headers[lower] = value;
   }
+
+  // Every URL inside the frame carries the capability, and a dashboard that sets
+  // `no-referrer-when-downgrade` or `unsafe-url` would hand it to any third-party
+  // host it links or embeds. `same-origin` keeps the Referer on requests back to
+  // Codeman (the 404 fallback and `refererPath` rely on it; both compare URL
+  // origins, which an opaque-origin frame still satisfies) and strips it for
+  // everyone else. A `<meta name="referrer">` inside the document can still
+  // override this; that is the dashboard author's own decision about their page.
+  headers['referrer-policy'] = 'same-origin';
 
   const setCookie = setCookies.map((cookie) => rewriteSetCookie(cookie, capability, secureContext));
 

@@ -31,6 +31,7 @@ import {
 } from '../../types.js';
 import { Session, isAltScreenStripMode, isExternalCliMode, isMuxAltScreenOnlyStripMode } from '../../session.js';
 import { SseEvent } from '../sse-events.js';
+import { webviewCapabilities } from '../../webview-capabilities.js';
 import {
   CreateSessionSchema,
   SessionNameSchema,
@@ -821,6 +822,10 @@ export function registerSessionRoutes(
     if (sessionToken) {
       ctx.authSessions?.delete(sessionToken);
     }
+    // The web-tab proxy authenticates on capabilities, not on this cookie, so a
+    // logout has to retire them too or every dashboard URL opened during this
+    // login keeps relaying without one (WebviewCapabilityStore.revokeOwner).
+    webviewCapabilities.revokeOwner(ownerFor(req));
     reply.clearCookie(AUTH_COOKIE_NAME, { path: '/' });
     return {};
   });
