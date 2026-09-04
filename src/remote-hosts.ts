@@ -390,13 +390,38 @@ export async function remoteTmuxSessionAlive(
   if (process.env.VITEST) return true;
   const command = buildRemoteSessionAliveCommand(remote, remoteSessionName);
   try {
-    const { stdout } = await execAsync(command, { timeout: 15_000 });
-    // has-session prints the session name on success (exit 0). Anything else is
-    // a non-zero exit → the session is gone.
-    return stdout.trim().length > 0;
-  } catch {
-    return undefined;
+    await execAsync(command, { timeout: 15_000 });
+    return classifyRemoteAliveExit(0, false);
+  } catch (err) {
+    const e = err as { code?: unknown; killed?: boolean };
+    return classifyRemoteAliveExit(typeof e.code === 'number' ? e.code : null, e.killed === true);
   }
+}
+
+/**
+ * Map the `has-session` probe's exit status onto the tri-state the watcher
+ * reads. Pure, so the mapping is unit-tested even though the probe itself is
+ * VITEST-guarded.
+ *
+ * ⚠️ `tmux has-session` prints NOTHING on success (measured: exit 0, empty
+ * stdout; the failure message goes to stderr), so the exit status is the ONLY
+ * signal. An earlier version read stdout and therefore classified every live
+ * remote session as gone, which silently disabled transport-drop reconnects.
+ *
+ *   - exit 0 → the durable remote session exists → `true`.
+ *   - exit 255 is ssh's own failure (unreachable host, auth, proxy/jump error)
+ *     and a timeout arrives as `killed` with no numeric code: we learned
+ *     nothing about the session → `undefined`, which the watcher treats as
+ *     "do not revive".
+ *   - any other non-zero status is the REMOTE command's: tmux's 1 for a missing
+ *     session, or 127 when tmux is not installed there (no durable session can
+ *     exist without it) → `false`.
+ */
+export function classifyRemoteAliveExit(code: number | null, killed: boolean): boolean | undefined {
+  if (killed) return undefined;
+  if (code === 0) return true;
+  if (code === null || code === 255) return undefined;
+  return false;
 }
 
 /**

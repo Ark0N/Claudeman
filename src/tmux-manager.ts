@@ -1368,6 +1368,13 @@ export class TmuxManager extends EventEmitter implements TerminalMultiplexer {
    * transport drop).
    */
   private remoteAliveCache: Map<string, boolean | undefined> = new Map();
+  /**
+   * Sessions with a `has-session` probe currently in flight. The probe is a
+   * fire-and-forget ssh round-trip with a 15s timeout against a 5s tick, so
+   * without this an unreachable host would accumulate three overlapping ssh
+   * processes per dead session.
+   */
+  private remoteAliveInFlight: Set<string> = new Set();
 
   private trueColorConfigured = false;
   /** tmux 3.7+ can resize pane history after creation; older releases cannot. */
@@ -2732,12 +2739,16 @@ export class TmuxManager extends EventEmitter implements TerminalMultiplexer {
    */
   private async refreshRemoteAlive(session: MuxSession): Promise<void> {
     if (!session.remote) return;
+    if (this.remoteAliveInFlight.has(session.sessionId)) return;
+    this.remoteAliveInFlight.add(session.sessionId);
     const remoteName = session.remote.remoteSessionName || remoteTmuxSessionName(session.sessionId);
     try {
       const alive = await remoteTmuxSessionAlive(session.remote, remoteName);
       this.remoteAliveCache.set(session.sessionId, alive);
     } catch {
       this.remoteAliveCache.set(session.sessionId, undefined);
+    } finally {
+      this.remoteAliveInFlight.delete(session.sessionId);
     }
   }
 
@@ -2751,7 +2762,15 @@ export class TmuxManager extends EventEmitter implements TerminalMultiplexer {
       // refreshed lazily so a clean exit (remote tmux gone) flips it to false
       // on the next tick and stops the auto-revive.
       const paneDead = this.isPaneDead(session.muxName);
-      if (paneDead && this.remoteAliveCache.get(sessionId) === undefined) {
+      if (!paneDead) {
+        // A live pane makes whatever the probe last said STALE, so forget it:
+        // after a successful reattach (or a manual restart) the next dead pane
+        // must be probed afresh. A cached `true` from the transport drop would
+        // otherwise revive a later CLEAN exit, the exact bug this cache exists
+        // to prevent, and a cached `false` from a clean exit would leave a
+        // manually restarted session with auto-reconnect permanently off.
+        this.remoteAliveCache.delete(sessionId);
+      } else if (this.remoteAliveCache.get(sessionId) === undefined) {
         void this.refreshRemoteAlive(session);
       }
       const action = decideReconnect({
@@ -2808,6 +2827,7 @@ export class TmuxManager extends EventEmitter implements TerminalMultiplexer {
     this.reconnectGuard.add(sessionId);
     this.reconnectState.delete(sessionId);
     this.remoteAliveCache.delete(sessionId);
+    this.remoteAliveInFlight.delete(sessionId);
   }
 
   /** Clear all per-session reconnect + guard state (e.g. when a session is removed). */
@@ -2815,6 +2835,7 @@ export class TmuxManager extends EventEmitter implements TerminalMultiplexer {
     this.reconnectState.delete(sessionId);
     this.reconnectGuard.delete(sessionId);
     this.remoteAliveCache.delete(sessionId);
+    this.remoteAliveInFlight.delete(sessionId);
   }
 
   destroy(): void {
@@ -2824,6 +2845,7 @@ export class TmuxManager extends EventEmitter implements TerminalMultiplexer {
     this.reconnectState.clear();
     this.reconnectGuard.clear();
     this.remoteAliveCache.clear();
+    this.remoteAliveInFlight.clear();
   }
 
   registerSession(session: MuxSession): void {
