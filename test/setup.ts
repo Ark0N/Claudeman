@@ -5,8 +5,11 @@
  * mode before application modules load. Tests therefore cannot touch the real
  * Codeman state/cases tree or launch external tmux-backed agent sessions.
  *
- * This setup file strips shell-level auth configuration that can leak from a
- * running Codeman instance, then handles mock/timer cleanup between tests.
+ * This setup file strips shell-level configuration that can leak from a running
+ * Codeman instance — auth (`CODEMAN_PASSWORD`/`CODEMAN_USERNAME`), the gesture
+ * flag, and the three INSTANCE-selection vars that would otherwise point the
+ * suite at a real data dir or tmux socket — then handles mock/timer cleanup
+ * between tests.
  */
 
 import { mkdtempSync, rmSync } from 'node:fs';
@@ -51,6 +54,33 @@ delete process.env.CODEMAN_USERNAME;
 // __codemanGestureAvailable flag), breaking byte-identity assertions
 // (test/server-index-title.test.ts) when the shell exports CODEMAN_GESTURE=1.
 delete process.env.CODEMAN_GESTURE;
+
+// Instance selection is PROCESS-WIDE and is what `src/config/instance.ts` derives
+// both the data dir and the tmux socket from, so a shell that exports any of these
+// three reaches straight past the temp HOME above and undoes the isolation this
+// file exists to provide:
+//
+//   - CODEMAN_DATA_DIR is the dangerous one. It is an ABSOLUTE override read in
+//     `getDataDir()`, so it bypasses HOME entirely: a developer who exports it
+//     (or a shell left over from `codeman web -d`) has the suite reading and
+//     WRITING their real `state.json`, `users.json`, `intents.json` and
+//     `hook-secret` instead of a throwaway tree.
+//   - CODEMAN_INSTANCE moves the data dir to `~/.codeman-<name>` and the socket to
+//     `codeman-<name>`. Inside the temp HOME that is not a data-loss risk, but it
+//     silently changes the paths tests assert on — and `scripts/run-beta.sh`
+//     exports it, so any shell that has run a beta carries it.
+//   - CODEMAN_TMUX_SOCKET renames the socket `resolveTmuxSocketName()` returns.
+//     `TmuxManager` no-ops its shell commands under vitest, so this is assertion
+//     drift rather than a stray `tmux -L` against prod — but it is the same class
+//     of leak and the same one-line fix.
+//
+// ⚠️ These must be deleted HERE rather than in a test, because `CODEMAN_INSTANCE`
+// is captured into a module-level const the first time `config/instance.ts` is
+// imported. A setup file runs before any application module loads; a beforeEach
+// would already be too late.
+delete process.env.CODEMAN_INSTANCE;
+delete process.env.CODEMAN_DATA_DIR;
+delete process.env.CODEMAN_TMUX_SOCKET;
 
 afterEach(() => {
   vi.clearAllMocks();
