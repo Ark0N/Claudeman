@@ -1,5 +1,20 @@
 # aicodeman
 
+## 1.24.7
+
+### Patch Changes
+
+- The web-tab proxy refuses link-local and cloud-metadata targets. Its Test probe, the proxy itself and the WebSocket relay accepted any http(s) host, so a saved dashboard URL could reach `169.254.169.254` (in decimal, hex, IPv6-mapped or DNS-name form) through a capability and no cookie. Loopback and RFC1918 addresses stay allowed on purpose, since a localhost Grafana is the feature; only link-local and the fixed cloud-metadata addresses are refused, at the schema, at every connect site, and through a DNS lookup hook that judges the resolved addresses, which is what closes DNS rebinding. Adds `undici` so the proxy runs its fetch through its own agent.
+
+  Proxy capabilities are revoked on logout. `revokeOwner()` had shipped with no caller, so a leaked proxy URL stayed valid for as long as anything kept polling it. `POST /api/logout`, the admin forced logout and user deletion now revoke the capabilities they should, and proxied responses carry `Referrer-Policy: same-origin` with the upstream's own policy dropped, so a dashboard on a loose referrer policy cannot hand the capability to a third-party host it links to.
+
+  The Docker Compose deployment updates itself from App Settings again (#373, @opticon454). The checkout Compose builds from is bind-mounted at `/opt/codeman`, so an update's `git checkout` and rebuild land on the host and survive container recreation; build artefacts live in named volumes so container-compiled native modules never enter the host checkout; the image keeps devDependencies and a build toolchain; and the restart is the server exiting under `restart: unless-stopped`. An in-place update applies code only, so the updater refuses a release that changes `server.Dockerfile` or `docker-compose.yaml`, or that adds keys to `.env.example` the user's `.env` has no value for (Compose interpolates an unset variable to the empty string and starts anyway), and points at `docker/Start-Codeman.sh` on the host instead. The four global agent CLIs in the image are pinned. A follow-up makes the final step fail safe: the server exits only when the Compose file declares `CODEMAN_RESTART_BY_EXIT=1` or the daemon confirms an auto-restart policy, and otherwise the build is staged for a manual restart, so a container nothing would restart is never taken down. Details in `docs/docker-self-update.md`.
+
+  The test suite strips `CODEMAN_INSTANCE`, `CODEMAN_DATA_DIR` and `CODEMAN_TMUX_SOCKET` before any application module loads (#371, @opticon454), with a two-half test whose static half reads `test/setup.ts` so a dropped line fails everywhere. This replaces the throwaway data dir #356 had set for the same variable.
+
+  ### Thanks
+  - @opticon454 for the Compose self-update (#373) and the test isolation fix (#371).
+
 ## 1.24.6
 
 ### Patch Changes
