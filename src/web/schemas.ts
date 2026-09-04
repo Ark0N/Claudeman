@@ -10,6 +10,7 @@
 import { z } from 'zod';
 import { SAFE_PATH_PATTERN, isSafePushEndpoint } from '../utils/index.js';
 import { isValidWebviewUrl } from './webview-proxy.js';
+import { isBlockedWebviewUrl } from './webview-egress-policy.js';
 import {
   MAX_TERMINAL_BUFFER_BYTES,
   MAX_TERMINAL_SCROLLBACK_LINES,
@@ -1762,6 +1763,13 @@ const webviewUrlSchema = z
   .max(2000, 'URL too long (max 2000 chars)')
   .refine(isValidWebviewUrl, {
     message: 'Invalid URL: must be http(s), with a hostname and no embedded credentials',
+  })
+  // Egress policy (`webview-egress-policy.ts`): no dashboard lives at a link-local
+  // or cloud-metadata address, while an IAM credential does. Refused at save time
+  // for the clear message; the proxy re-judges the RESOLVED address at connect time.
+  .refine((url) => !isBlockedWebviewUrl(url), {
+    message:
+      'Blocked URL: link-local and cloud-metadata addresses (169.254.0.0/16, metadata.google.internal, ...) cannot be dashboards',
   });
 
 const WebviewBaseSchema = z.object({
