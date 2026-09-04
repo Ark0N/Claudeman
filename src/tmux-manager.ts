@@ -72,6 +72,7 @@ import {
   defaultRemoteCommandForMode,
   remoteLoginShellCommand,
   remoteSshTarget,
+  remoteTmuxSessionAlive,
 } from './remote-hosts.js';
 import {
   buildDockerBaseArgs,
@@ -1355,6 +1356,18 @@ export class TmuxManager extends EventEmitter implements TerminalMultiplexer {
    * torn down (killed/detached/stopping). A guarded session is NEVER revived.
    */
   private reconnectGuard: Set<string> = new Set();
+  /**
+   * Cached result of the remote tmux `has-session` probe (sessionId → alive).
+   * `true` = the durable remote tmux session exists (transport drop → reconnect
+   * is safe); `false` = remote session gone (agent exited cleanly → do NOT
+   * reconnect); `undefined` = not yet probed / probe failed. Only sessions
+   * whose pane is otherwise dead+eligible get probed, so a clean exit tears
+   * down the remote tmux and the probe reports false — killing the auto-revive
+   * (found live 2026-08-29: remote omp/opencode ctrl-c/ctrl-d auto-respawned
+   * fresh agents because the watcher couldn't tell a clean exit from a
+   * transport drop).
+   */
+  private remoteAliveCache: Map<string, boolean | undefined> = new Map();
 
   private trueColorConfigured = false;
   /** tmux 3.7+ can resize pane history after creation; older releases cannot. */
@@ -1745,7 +1758,6 @@ export class TmuxManager extends EventEmitter implements TerminalMultiplexer {
 
       // Create tmux session in three steps to handle cold-start (no server running)
       // and avoid the race where the command exits before remain-on-exit is set:
-      // 1. Create session with default shell (starts tmux server, stays alive)
       // 2. Set remain-on-exit (server now exists, session won't vanish on exit)
       // 3. Replace shell with actual command via respawn-pane (no terminal echo)
       // Unset $TMUX so nested sessions work when the dev server itself runs inside tmux.
@@ -2710,16 +2722,44 @@ export class TmuxManager extends EventEmitter implements TerminalMultiplexer {
    * applies the pure {@link decideReconnect} decision and translates the result
    * into events + backoff/state transitions. Public for tests + the watcher.
    */
+  /**
+   * Refresh the cached remote-tmux liveness for a session whose pane is dead.
+   * Fire-and-forget (async, not awaited by the sync tick): the probe is a slow
+   * ssh round-trip, so it must not block the 5s watcher interval. On success it
+   * writes the cached result; the NEXT tick then makes the revive decision with
+   * fresh data. A clean exit makes the remote tmux session vanish, so the probe
+   * resolves false and the watcher stops reviving it (2026-08-29).
+   */
+  private async refreshRemoteAlive(session: MuxSession): Promise<void> {
+    if (!session.remote) return;
+    const remoteName = session.remote.remoteSessionName || remoteTmuxSessionName(session.sessionId);
+    try {
+      const alive = await remoteTmuxSessionAlive(session.remote, remoteName);
+      this.remoteAliveCache.set(session.sessionId, alive);
+    } catch {
+      this.remoteAliveCache.set(session.sessionId, undefined);
+    }
+  }
+
   runRemoteReconnectTick(now: number, enabled: boolean): void {
     for (const session of this.sessions.values()) {
       if (!session.remote) continue;
       const sessionId = session.sessionId;
       const state = this.reconnectState.get(sessionId);
+      // Only probe when the pane is actually dead — otherwise the ssh round-trip
+      // would run every 5s for every healthy remote session. The cache is
+      // refreshed lazily so a clean exit (remote tmux gone) flips it to false
+      // on the next tick and stops the auto-revive.
+      const paneDead = this.isPaneDead(session.muxName);
+      if (paneDead && this.remoteAliveCache.get(sessionId) === undefined) {
+        void this.refreshRemoteAlive(session);
+      }
       const action = decideReconnect({
         session: {
           sessionId,
           isRemote: true,
-          paneDead: this.isPaneDead(session.muxName),
+          paneDead,
+          remoteAlive: this.remoteAliveCache.get(sessionId),
         },
         state,
         guarded: this.reconnectGuard.has(sessionId),
@@ -2767,12 +2807,14 @@ export class TmuxManager extends EventEmitter implements TerminalMultiplexer {
   guardRemoteReconnect(sessionId: string): void {
     this.reconnectGuard.add(sessionId);
     this.reconnectState.delete(sessionId);
+    this.remoteAliveCache.delete(sessionId);
   }
 
   /** Clear all per-session reconnect + guard state (e.g. when a session is removed). */
   clearRemoteReconnectState(sessionId: string): void {
     this.reconnectState.delete(sessionId);
     this.reconnectGuard.delete(sessionId);
+    this.remoteAliveCache.delete(sessionId);
   }
 
   destroy(): void {
@@ -2781,6 +2823,7 @@ export class TmuxManager extends EventEmitter implements TerminalMultiplexer {
     this.stopRemoteReconnectWatcher();
     this.reconnectState.clear();
     this.reconnectGuard.clear();
+    this.remoteAliveCache.clear();
   }
 
   registerSession(session: MuxSession): void {
