@@ -14,6 +14,7 @@ import {
   diffRequiredEnvKeys,
   isAutoRestartPolicy,
   parseEnvKeys,
+  shouldRestartByExit,
   type EnvironmentGateInput,
 } from '../src/web/self-update.js';
 
@@ -83,6 +84,26 @@ describe('isAutoRestartPolicy', () => {
     expect(isAutoRestartPolicy('no')).toBe(false);
     expect(isAutoRestartPolicy('')).toBe(false);
     expect(isAutoRestartPolicy(null)).toBe(false);
+  });
+});
+
+describe('shouldRestartByExit', () => {
+  it('exits when the Compose file declared it, whatever the daemon says', () => {
+    expect(shouldRestartByExit(true, null)).toBe(true);
+    expect(shouldRestartByExit(true, 'unless-stopped')).toBe(true);
+  });
+
+  it('exits when the daemon confirms an auto-restart policy', () => {
+    expect(shouldRestartByExit(false, 'unless-stopped')).toBe(true);
+    expect(shouldRestartByExit(false, 'always')).toBe(true);
+  });
+
+  // ⚠️ The gate fails open on an unknown policy; the KILL must not. A container
+  // nothing restarts would otherwise go down with no UI left to recover it.
+  it('does NOT exit on an unknown or non-restarting policy without the declaration', () => {
+    expect(shouldRestartByExit(false, null)).toBe(false);
+    expect(shouldRestartByExit(false, 'no')).toBe(false);
+    expect(shouldRestartByExit(false, '')).toBe(false);
   });
 });
 

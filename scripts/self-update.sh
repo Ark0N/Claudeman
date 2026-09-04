@@ -24,7 +24,8 @@
 # Args (all from the server, never user input — tag is validated server-side):
 #   --repo <dir> --tag <codeman@X.Y.Z> --supervisor <systemd|launchd|docker-compose|none>
 #   --status-file <path> --update-id <uuid> --from-version <ver> --node <path>
-#   --log <path> [--prev-sha <sha>] [--stash]
+#   --log <path> [--prev-sha <sha>] [--stash] [--server-pid <pid>]
+#   [--restart-by-exit 0|1]   (docker-compose only: may we exit the server?)
 #
 set -uo pipefail
 
@@ -38,6 +39,7 @@ REPO=""
 TAG=""
 SUPERVISOR="none"
 SERVER_PID=""
+RESTART_BY_EXIT="0"
 STATUS_FILE=""
 UPDATE_ID=""
 FROM_VERSION=""
@@ -58,6 +60,7 @@ while [[ $# -gt 0 ]]; do
     --log) LOG="$2"; shift 2 ;;
     --prev-sha) PREV_SHA="$2"; shift 2 ;;
     --server-pid) SERVER_PID="$2"; shift 2 ;;
+    --restart-by-exit) RESTART_BY_EXIT="$2"; shift 2 ;;
     --stash) DO_STASH=1; shift ;;
     *) shift ;;
   esac
@@ -224,6 +227,18 @@ case "$SUPERVISOR" in
     # container's own Docker CLI talks to the HOST daemon, and a self-directed
     # restart there races the client's own death. Exiting is the one path that
     # needs no cooperation from anything outside the container.
+    #
+    # ⚠️ Only when the SERVER said the container comes back (`--restart-by-exit 1`:
+    # the Compose file declared it, or the daemon reported an auto-restart policy).
+    # An unknown policy stages the build and asks for a restart instead. Exiting
+    # blind would take a container the daemon does not restart down for good,
+    # with no UI left to recover it from.
+    if [[ "$RESTART_BY_EXIT" != "1" ]]; then
+      MANUAL_CMD="docker restart \$(hostname)  # from the Docker host"
+      write_status "completed-needs-manual-restart" "Update built — restart the Codeman container to apply v$TO_VERSION."
+      echo "[self-update] docker-compose: restart-by-exit not confirmed — not exiting; manual restart required"
+      exit 0
+    fi
     if [[ -n "$SERVER_PID" ]] && kill "$SERVER_PID" 2>/dev/null; then
       : # container exit + restart policy take it from here
     else

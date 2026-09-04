@@ -116,6 +116,12 @@ if [[ -n "$dockerfile_sha" && -n "$compose_sha" ]]; then
   printf '{\n  "dockerfileSha256": "%s",\n  "composeSha256": "%s"\n}\n' \
     "$dockerfile_sha" "$compose_sha" >"$state_dir/docker-env-applied.json.tmp"
   mv -- "$state_dir/docker-env-applied.json.tmp" "$state_dir/docker-env-applied.json"
+  # A root-run start (common on Unraid) would otherwise leave a root-owned
+  # `.codeman` on a FIRST start, before the container has created it as PUID,
+  # and the unprivileged server could then never write its own state there.
+  if [[ "$EUID" == '0' ]]; then
+    chown -- "$PUID:$PGID" "$state_dir" "$state_dir/docker-env-applied.json"
+  fi
 else
   printf 'Warning: no sha256 tool found; in-app updates will not detect environment changes.\n' >&2
 fi

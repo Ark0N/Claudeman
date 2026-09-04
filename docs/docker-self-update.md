@@ -56,6 +56,7 @@ unchanged. The container path is a new `SupervisorKind`, not a new updater.
 | `codeman-node-modules`, `codeman-dist` volumes | Container-owned build artefacts, layered over the bind mount.        |
 | `CODEMAN_IN_CONTAINER=1`                       | Tells `detectSupervisor()` to restart by exiting.                    |
 | `restart: unless-stopped`                      | Turns that exit into a restart. Verified before every update.        |
+| `CODEMAN_RESTART_BY_EXIT=1`                    | The Compose file's declaration of that policy, so the updater may exit even with no Docker socket. |
 | Toolchain + devDependencies in the image       | Lets `npm install` and `npm run build` run inside the container.     |
 | `docker-env-applied.json`                      | Fingerprint baseline, written by `Start-Codeman.sh` on every start.  |
 
@@ -118,6 +119,14 @@ Before signalling the server, the updater asks the Docker daemon for its own
 container's restart policy. If it is `no`, the update is refused: applying it
 would take Codeman down and leave no UI to recover from.
 
+If the policy cannot be read at all (no Docker socket mounted) the update is
+still allowed, but the final step changes: the server exits only when the
+Compose file declared `CODEMAN_RESTART_BY_EXIT=1` (the shipped one does, because
+it is the file that sets `restart: unless-stopped`) or the daemon confirmed an
+auto-restart policy. Otherwise the build completes and the panel asks you to
+restart the container by hand. A container started by plain `docker run` with no
+restart policy therefore gets a staged update, never an outage.
+
 ### What the gate deliberately does not do
 
 Every unknown fails **open**:
@@ -126,6 +135,10 @@ Every unknown fails **open**:
   is not treated as a change, or those installs could never update at all.
 - An unreadable `.env`, an unreachable Docker socket, or a target tag whose files
   cannot be read all yield "no blocker" rather than a refusal.
+
+The one place an unknown does NOT fail open is the kill itself: with neither the
+Compose declaration nor a daemon answer, the updater stages the build and asks
+for a manual restart rather than exiting a server nothing may bring back.
 
 The gate catches a specific, detectable class of mistake; it is not a last line of
 defence. It is also re-evaluated server-side on `POST /api/system/update`, so

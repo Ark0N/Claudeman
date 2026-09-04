@@ -271,6 +271,25 @@ export function isAutoRestartPolicy(name: string | null | undefined): boolean {
   return name === 'always' || name === 'unless-stopped' || name === 'on-failure';
 }
 
+/**
+ * PURE: may the container updater restart the server by exiting? Yes when the
+ * Compose file declared it (`CODEMAN_RESTART_BY_EXIT=1`, set only there, since
+ * that file is what sets `restart: unless-stopped`) or when the daemon reports an
+ * auto-restart policy. Otherwise the answer is NO, and the updater stages the
+ * build and asks for a manual restart instead of exiting: an unknown policy is
+ * fine to fail open in the GATE (refusing would block installs with no socket),
+ * but the kill itself must not fail open, or a container the daemon would not
+ * bring back goes down with no UI left to recover it from.
+ */
+export function shouldRestartByExit(declared: boolean, restartPolicy: string | null): boolean {
+  return declared || isAutoRestartPolicy(restartPolicy);
+}
+
+/** The Compose file's declaration that exiting relaunches this container. */
+export function restartByExitDeclared(): boolean {
+  return process.env.CODEMAN_RESTART_BY_EXIT === '1';
+}
+
 export interface EnvironmentGateInput {
   /** sha256 of `docker/server.Dockerfile` the running container was built from. */
   appliedDockerfileHash: string | null;
@@ -845,11 +864,18 @@ export async function startUpdate(): Promise<StartUpdateResult> {
     process.execPath,
     '--log',
     logFile,
-    // For the launchd-daemon restart path: the updater kills this PID and the
-    // KeepAlive daemon respawns the server on the freshly built dist/.
+    // For the launchd-daemon and docker-compose restart paths: the updater kills
+    // this PID and the supervisor (KeepAlive daemon / Docker restart policy)
+    // respawns the server on the freshly built dist/.
     '--server-pid',
     String(process.pid),
   ];
+  if (info.supervisor === 'docker-compose') {
+    // Decided HERE, where the Docker socket and the Compose env are reachable;
+    // the updater only reads the answer. Without a yes it never exits the server.
+    const byExit = shouldRestartByExit(restartByExitDeclared(), detectOwnRestartPolicy());
+    args.push('--restart-by-exit', byExit ? '1' : '0');
+  }
   if (prevSha) args.push('--prev-sha', prevSha);
   if (info.dirty) args.push('--stash');
 

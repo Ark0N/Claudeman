@@ -20,6 +20,12 @@ services:
       # here. Also set in the image; repeated so a container started without the
       # image default still self-identifies.
       CODEMAN_IN_CONTAINER: "1"
+      # This file sets `restart: unless-stopped` below, so the updater may restart
+      # the server by EXITING. Declared here and only here, never in the image: a
+      # container started by plain `docker run` has no restart policy unless the
+      # operator gave it one, and there the updater asks the daemon instead and
+      # stages the update for a manual restart when it cannot get an answer.
+      CODEMAN_RESTART_BY_EXIT: "1"
       CODEMAN_DOCKER_BRIDGE_HOOKS: ${CODEMAN_DOCKER_BRIDGE_HOOKS}
       # Host-side equivalent of the runtime user's HOME. Docker case seed,
       # credential and hook mounts are translated into the daemon namespace.
