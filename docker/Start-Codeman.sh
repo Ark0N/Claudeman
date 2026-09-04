@@ -70,4 +70,54 @@ fi
 
 export DOCKER_SOCKET_GID=${socket_ids##*:}
 
+repo_path=${CODEMAN_REPO_PATH:-$(cd -- "$script_dir/.." && pwd)}
+if [[ ! -d "$repo_path" ]]; then
+  printf 'Error: CODEMAN_REPO_PATH is not a directory: %s\n' "$repo_path" >&2
+  exit 1
+fi
+export CODEMAN_REPO_PATH="$repo_path"
+
+# The in-app updater runs `git checkout` and `npm install` against this checkout
+# as PUID:PGID. If the directory belongs to someone else, git refuses outright
+# ("detected dubious ownership") and the update fails at the first step — so warn
+# here, where the fix is obvious, rather than in a failed update hours later.
+if repo_owner=$(stat -c '%u' -- "$repo_path" 2>/dev/null || stat -f '%u' "$repo_path" 2>/dev/null); then
+  if [[ "$repo_owner" != "$PUID" ]]; then
+    printf 'Warning: %s is owned by UID %s but Codeman runs as UID %s.\n' "$repo_path" "$repo_owner" "$PUID" >&2
+    printf 'In-app updates will fail until the ownership matches. Codeman itself still starts.\n' >&2
+  fi
+fi
+
+if [[ ! -d "$repo_path/.git" ]]; then
+  printf 'Note: %s is not a git checkout, so in-app updates are unavailable.\n' "$repo_path" >&2
+fi
+
+# Record what the container is about to be built and created FROM. The in-app
+# updater compares these against the release it wants to apply: a release that
+# changes either file cannot be applied by the container restarting itself (a
+# restart reuses the existing image and config), so it is refused and the user
+# is sent back here. Written on every start, so the baseline always describes
+# the container that is actually running. See docs/docker-self-update.md.
+if command -v sha256sum >/dev/null 2>&1; then
+  sha256_of() { sha256sum -- "$1" | cut -d' ' -f1; }
+elif command -v shasum >/dev/null 2>&1; then
+  sha256_of() { shasum -a 256 -- "$1" | cut -d' ' -f1; }
+else
+  sha256_of() { printf ''; }
+fi
+
+dockerfile_sha=$(sha256_of "$script_dir/server.Dockerfile")
+compose_sha=$(sha256_of "$compose_file")
+if [[ -n "$dockerfile_sha" && -n "$compose_sha" ]]; then
+  # $CODEMAN_APPDATA_PATH is mounted at the runtime account's home, so this is
+  # dataPath('docker-env-applied.json') as the server inside the container sees it.
+  state_dir="$appdata_path/.codeman"
+  mkdir -p -- "$state_dir"
+  printf '{\n  "dockerfileSha256": "%s",\n  "composeSha256": "%s"\n}\n' \
+    "$dockerfile_sha" "$compose_sha" >"$state_dir/docker-env-applied.json.tmp"
+  mv -- "$state_dir/docker-env-applied.json.tmp" "$state_dir/docker-env-applied.json"
+else
+  printf 'Warning: no sha256 tool found; in-app updates will not detect environment changes.\n' >&2
+fi
+
 exec docker compose --env-file "$env_file" -f "$compose_file" up --build -d

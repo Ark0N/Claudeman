@@ -12,9 +12,12 @@ WORKDIR /opt/codeman
 
 COPY . .
 
+# devDependencies are deliberately KEPT (no `npm prune --omit=dev`). The in-app
+# updater rebuilds from inside this container, and `npm run build` is tsc +
+# esbuild — both devDependencies. Pruning them saves image size and takes the
+# self-updater with it. See docs/docker-self-update.md.
 RUN npm ci \
  && npm run build \
- && npm prune --omit=dev --ignore-scripts \
  && npm cache clean --force
 
 # The Docker CLI talks to the host daemon through the socket mounted by
@@ -25,13 +28,21 @@ ARG CODEMAN_RUNTIME_USER=opencode
 ARG PUID=1000
 ARG PGID=1000
 
+# python3/make/g++ are here for the SELF-UPDATER, not for this build. An update
+# runs `npm install` inside the running container, and node-pty ships no Linux
+# prebuild, so a release that bumps it compiles from source right here. Without
+# a toolchain that install fails and the update rolls back — every time, on the
+# releases that need it most. Same reason install.sh installs one on bare hosts.
 RUN apt-get update \
  && apt-get install -y --no-install-recommends \
       ca-certificates \
       curl \
+      g++ \
       git \
+      make \
       openssh-client \
       procps \
+      python3 \
       ripgrep \
       tmux \
  && rm -rf /var/lib/apt/lists/*
@@ -59,11 +70,23 @@ COPY --from=docker:29-cli \
 
 # Keep credentials out of the image. Users authenticate these CLIs at runtime
 # through Codeman sessions, and the configured host bind mount retains state.
+#
+# ⚠️ PINNED ON PURPOSE. Unpinned, the agent CLI versions a user ends up with are
+# a function of WHEN their image was built, not of any commit — so a Codeman
+# release that depends on newer CLI behaviour (the trust-dialog handling is
+# pinned to Claude Code 2.1.252's layout; wheel forwarding to >= 2.1.187) breaks
+# on an older image with no diff anywhere to explain why. In-app updates make
+# rebuilds RARER, which makes that drift worse. Pinning turns "this release needs
+# a newer CLI" into a Dockerfile change, which the updater's environment gate
+# already detects and refuses (docs/docker-self-update.md).
+#
+# Bump these deliberately, in a release. `--no-cache` is still needed to rebuild
+# this layer when only the pins change upstream.
 RUN npm install --global \
-      @anthropic-ai/claude-code \
-      @google/gemini-cli \
-      @openai/codex \
-      opencode-ai \
+      @anthropic-ai/claude-code@2.1.258 \
+      @google/gemini-cli@0.58.0 \
+      @openai/codex@0.152.1 \
+      opencode-ai@1.18.26 \
  && npm cache clean --force
 
 # Keep the web server and every local Codeman session unprivileged. PUID and
@@ -103,7 +126,12 @@ WORKDIR /opt/codeman
 
 COPY --from=build /opt/codeman /opt/codeman
 
-ENV CODEMAN_PORT=3000 \
+# CODEMAN_IN_CONTAINER tells the self-updater it must restart by exiting rather
+# than by asking an init system that is not here (src/web/self-update.ts).
+# NODE_ENV stays `production`; the updater passes `npm install --include=dev`
+# explicitly, since that value would otherwise omit the build toolchain.
+ENV CODEMAN_IN_CONTAINER=1 \
+    CODEMAN_PORT=3000 \
     HOME=/home/${CODEMAN_RUNTIME_USER} \
     NODE_ENV=production
 

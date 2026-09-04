@@ -390,6 +390,9 @@ export function registerSystemRoutes(
       'in-flight': { http: 409, api: ApiErrorCode.ALREADY_EXISTS },
       'up-to-date': { http: 409, api: ApiErrorCode.ALREADY_EXISTS },
       'not-git': { http: 400, api: ApiErrorCode.INVALID_INPUT },
+      // A container release that changes the ENVIRONMENT: not a client error to
+      // retry, it needs a host-side rebuild (docs/docker-self-update.md).
+      'env-blocked': { http: 409, api: ApiErrorCode.INVALID_INPUT },
       disabled: { http: 403, api: ApiErrorCode.INVALID_INPUT },
       'bad-tag': { http: 400, api: ApiErrorCode.INVALID_INPUT },
       error: { http: 500, api: ApiErrorCode.INTERNAL_ERROR },

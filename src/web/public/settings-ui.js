@@ -1079,10 +1079,14 @@ Object.assign(CodemanApp.prototype, {
     const verEl = this.$('updateCurrentVersion');
     if (verEl && data.currentVersion) verEl.textContent = `v${data.currentVersion}`;
 
-    if (data.installKind && data.installKind !== 'git') {
-      this._setUpdateResult(
-        `This install can't update itself (${escapeHtml(data.installKind)}). Update with <code>npm i -g aicodeman@latest</code>.`
-      );
+    // `docker-compose` self-updates in place like `git` does — the container
+    // restarts itself. Anything else cannot.
+    if (data.installKind && data.installKind !== 'git' && data.installKind !== 'docker-compose') {
+      const hint =
+        data.supervisor === 'docker-compose'
+          ? 'Update from the Docker host with <code>docker/Start-Codeman.sh</code>.'
+          : 'Update with <code>npm i -g aicodeman@latest</code>.';
+      this._setUpdateResult(`This install can't update itself (${escapeHtml(data.installKind)}). ${hint}`);
       return;
     }
     if (data.selfUpdateEnabled === false) {
@@ -1093,6 +1097,30 @@ Object.assign(CodemanApp.prototype, {
       this._setUpdateResult(escapeHtml(data.error));
       return;
     }
+    // A container release that changes the ENVIRONMENT (Dockerfile, compose file
+    // or new .env keys) cannot be applied by the container restarting itself, so
+    // the update button is never offered — the host command is, instead. The
+    // server re-checks this on POST, so hiding the button is UX, not the gate.
+    const blockers = data.environment?.blockers || [];
+    if (data.updateAvailable && blockers.length > 0) {
+      const reasons = blockers
+        .map((b) => {
+          const details = b.details?.length ? `<br><code>${escapeHtml(b.details.join(' '))}</code>` : '';
+          return `<li>${escapeHtml(b.message)}${details}</li>`;
+        })
+        .join('');
+      this._setUpdateResult(
+        `<strong>v${escapeHtml(data.latestVersion || '')}</strong> needs a rebuild on the Docker host` +
+          ` (current v${escapeHtml(data.currentVersion || '')}):<ul>${reasons}</ul>` +
+          `Run <code>${escapeHtml(data.environment?.hostCommand || 'docker/Start-Codeman.sh')}</code> there to apply it.`
+      );
+      if (notes && data.notes) {
+        notes.style.display = 'block';
+        notes.textContent = data.notes;
+      }
+      return;
+    }
+
     if (data.updateAvailable && data.latestVersion) {
       this._setUpdateResult(
         `Update available: <strong>v${escapeHtml(data.latestVersion)}</strong> &nbsp;(current v${escapeHtml(data.currentVersion || '')})`
