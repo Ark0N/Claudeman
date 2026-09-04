@@ -16,6 +16,10 @@ Every run mode Codeman can launch — Claude Code, Terminal/Shell, OpenCode, Cod
 
 `src/session-cli-registry-bridge.ts` maps the legacy per-mode option bag onto the engine, and `src/utils/cli-resolver.ts` / `src/utils/cli-launcher.ts` do registry-driven binary resolution and launcher-profile dispatch.
 
+## The override file
+
+`~/.codeman/clis.json` (instance-scoped through `dataPath()`) holds overrides and custom entries only, never a copy of the stock catalog: `{ "clis": { "<id>": { ...partial entry... } } }`. Objects merge key-wise onto the stock entry, arrays replace wholesale. **The file must be mode 0600**; the loader refuses any group/world permission bit, read bits included, so a file created with a normal umask (0644) is ignored until you `chmod 600` it. Every reason a file was ignored or an entry dropped is logged once, prefixed `[cli-registry]`, on the first load. A stock entry whose override fails validation falls back to the shipped definition; a custom entry that fails is dropped. The file is read once per process and re-read only on restart.
+
 ## The shape of an entry
 
 ```ts

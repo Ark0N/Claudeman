@@ -18,6 +18,14 @@
  * so there is nothing to persist, and it means importing the registry — which
  * `src/web/schemas.ts` does, transitively, just to validate a request — performs no
  * filesystem writes. A `seededStockIds` ratchet belongs with the write API that needs it.
+ * The one exception is the quarantine RENAME of a file that fails to parse (see
+ * `readRegistryFile`), which happens on first use rather than at import.
+ *
+ * ⚠️ The file must be mode 0600. `isUnsafePermissions` refuses ANY group/world bit, read
+ * bits included, so a file created with a normal umask (0644) is ignored. Every reason the
+ * file was ignored, or an entry in it dropped, is logged ONCE on first load: the warnings
+ * used to be returned to a caller that nobody wired up, so a normally-created file was
+ * ignored with no feedback anywhere (found reviewing #347).
  *
  * @module config/cli-registry/registry
  */
@@ -74,9 +82,9 @@ export interface LoadResult {
 }
 
 /**
- * Refuse a group/world-writable registry file — same posture as the ssh-key discipline.
- * This file selects the binaries Codeman spawns, so a writable one is a way to redirect
- * every session.
+ * Refuse a registry file with any group/world permission bit — same posture as the ssh-key
+ * discipline, so 0600 is the only accepted mode. This file selects the binaries Codeman
+ * spawns, so a writable one is a way to redirect every session.
  *
  * POSIX only: Windows has no meaningful group/world bits on NTFS (Node reports every file
  * as mode 0o666 there regardless of its actual ACL), so this check would flag every file on
@@ -96,7 +104,9 @@ function isUnsafePermissions(path: string): boolean {
 function readRegistryFile(path: string, warnings: string[]): CliRegistryFile | null {
   if (!existsSync(path)) return null;
   if (isUnsafePermissions(path)) {
-    warnings.push(`${path} is group/world-writable; ignoring it and falling back to stock CLIs.`);
+    warnings.push(
+      `${path} must be mode 0600 (no group/world permission bits; run \`chmod 600 ${path}\`); ignoring it and falling back to stock CLIs.`
+    );
     return null;
   }
   let raw: string;
@@ -181,6 +191,9 @@ export function loadCliRegistry(): LoadResult {
   const warnings: string[] = [];
   const existing = readRegistryFile(filePath(), warnings);
   cache = resolveRegistry(STOCK_CLIS, existing, warnings);
+  // Once per process (the result is memoized): silence here is what made a 0644 file look
+  // like "the override feature does nothing".
+  for (const warning of warnings) console.warn(`[cli-registry] ${warning}`);
   return cache;
 }
 
