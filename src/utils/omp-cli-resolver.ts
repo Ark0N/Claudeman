@@ -14,9 +14,9 @@
  */
 
 import { execFileSync } from 'node:child_process';
-import { join } from 'node:path';
-import { homedir } from 'node:os';
 import { EXEC_TIMEOUT_MS } from '../config/exec-timeout.js';
+import { getCli } from '../config/cli-registry/registry.js';
+import { expandHome } from './cli-resolver.js';
 import {
   createCliExecutableResolver,
   formatCliNotFoundMessage,
@@ -24,20 +24,15 @@ import {
 } from './cli-executable-resolver.js';
 
 /**
- * Common directories where the OMP CLI binary may be installed. `~/.local/bin`
- * leads: omp.sh's installer targets `$HOME/.local/bin` with no `--dir`
- * override (verified against a real `--no-cache` Docker build — see
- * docker/agent.Dockerfile); `~/.omp/bin` was an unverified guess that turned
- * out wrong, kept after `~/.local/bin` only as a defensive fallback.
+ * Directories probed after `which`, read from this CLI's registry entry so the spawn
+ * path, `codeman doctor` and this resolver cannot disagree about where to look.
+ * `~` is expanded by `expandHome`; nothing else is interpreted.
+ *
+ * `~/.local/bin` still leads, for the reason it always did: omp.sh's installer targets it
+ * with no `--dir` override (verified against a real `--no-cache` docker build), while
+ * `~/.omp/bin` was an unverified guess that turned out wrong and is kept as a fallback.
  */
-const OMP_SEARCH_DIRS = [
-  join(homedir(), '.local', 'bin'),
-  join(homedir(), '.omp', 'bin'),
-  '/usr/local/bin',
-  join(homedir(), '.bun', 'bin'),
-  join(homedir(), '.npm-global', 'bin'),
-  join(homedir(), 'bin'),
-];
+const OMP_SEARCH_DIRS = (): string[] => (getCli('omp')?.discovery.searchDirs ?? []).map(expandHome);
 
 /**
  * A real `omp --version` prints `omp/<semver>` (e.g. `omp/17.4.0`).

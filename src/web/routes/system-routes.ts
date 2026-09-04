@@ -5,6 +5,7 @@
  */
 
 import { FastifyInstance } from 'fastify';
+import { getCli } from '../../config/cli-registry/registry.js';
 import { join, dirname } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { existsSync, mkdirSync, readdirSync } from 'node:fs';
@@ -1040,7 +1041,8 @@ export function registerSystemRoutes(
       if (statusLineTelemetry === true) {
         const dirs = new Set<string>();
         for (const session of ctx.sessions.values()) {
-          if (session.mode === 'claude' && session.workingDir) dirs.add(session.workingDir);
+          if (getCli(session.mode)?.capabilities.statusLineTelemetry && session.workingDir)
+            dirs.add(session.workingDir);
         }
         await Promise.all([...dirs].map((dir) => applyStatusLineConfig(dir, true).catch(() => {})));
       }

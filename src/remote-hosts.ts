@@ -4,9 +4,9 @@ import { join } from 'node:path';
 import { homedir } from 'node:os';
 import { exec } from 'node:child_process';
 import { promisify } from 'node:util';
+import { getCli } from './config/cli-registry/registry.js';
 import type {
   RemoteCase,
-  RemoteCommandMode,
   RemoteHost,
   RemoteSessionInfo,
   RemoteSshOptions,
@@ -89,39 +89,54 @@ export function remoteLoginShellCommand(command: string): string {
   return `exec ${REMOTE_LOGIN_SHELL} -i -l -c ${shellescape(command)}`;
 }
 
+/**
+ * The CLI text a location overlay should launch for `mode`, or null when this build has no
+ * entry for it. `overlays.<location>.command` when the entry names one, otherwise the bare
+ * binary — which is what every non-claude CLI wants, and why only claude declares a command.
+ *
+ * ⚠️ This returns the CLI INVOCATION only. Each location wraps it its own way (remote: a
+ * login-shell `-c`; docker: `exec`), which is exactly why the overlay stores the unwrapped
+ * form rather than a ready-made line.
+ */
+function overlayCliCommand(mode: SessionMode, location: 'remote' | 'docker'): string | null {
+  const entry = getCli(mode);
+  if (!entry) return null;
+  const overlay = entry.overlays[location];
+  if (overlay && 'disabled' in overlay) return null;
+  return overlay?.command ?? entry.discovery.binaries[0] ?? null;
+}
+
+/**
+ * The default remote pane command for `mode`.
+ *
+ * Agent CLIs (claude/opencode/codex/gemini/antigravity/…) are typically installed under
+ * per-user paths like ~/.local/bin or ~/.opencode/bin, added to PATH only by the remote
+ * user's interactive-login shell startup files (~/.zshrc etc.). ssh's remote-command
+ * execution is neither interactive nor login, so a bare `exec claude` sees only sshd's
+ * minimal default PATH and fails with "command not found" (exit 127) — confirmed via
+ * `tmux capture-pane` on the remain-on-exit-preserved dead pane. Route through
+ * `$SHELL -i -l -c`, the same fix shell mode uses, so PATH is fully resolved first.
+ *
+ * ⚠️ The per-CLI half is now READ FROM THE REGISTRY (`overlays.remote`), not from a
+ * hardcoded `Record<RemoteCommandMode, string>`. The table it replaces duplicated the
+ * registry exactly, with nothing keeping the two in step — a capability that is both wrong
+ * and unread is worse than an absent one, because the next person trusts it. Notes that were
+ * attached to individual rows and are still true:
+ *   - claude carries `--dangerously-skip-permissions` so the remote agent runs
+ *     non-interactively (no trust-folder prompt nothing on the remote can answer);
+ *     `overlays.remote.command` on the claude entry is where that now lives.
+ *   - `dsh` alone boots nothing — the launcher needs a profile, and the remote box's profile
+ *     inventory is unknown here. The per-host `commands.deepseek` override names one.
+ * The per-host `commands.*` override remains the escape hatch for every mode.
+ */
 export function defaultRemoteCommandForMode(mode: SessionMode): string {
-  // Agent CLIs (claude/opencode/codex/gemini/antigravity) are typically installed
-  // under per-user paths like ~/.local/bin or ~/.opencode/bin, added to PATH only by
-  // the remote user's interactive-login shell startup files (~/.zshrc etc.). ssh's
-  // remote-command execution is neither interactive nor login, so a bare `exec
-  // claude` sees only sshd's minimal default PATH and fails with "command not
-  // found" (exit 127) — confirmed via `tmux capture-pane` on the
-  // remain-on-exit-preserved dead pane. Route through `$SHELL -i -l -c`, the same
-  // fix already used for shell mode below, so PATH is fully resolved before the
-  // CLI name is looked up.
-  const commands: Record<RemoteCommandMode, string> = {
-    // $SHELL, not a hardcoded bash: sshd sets it from the remote user's
-    // /etc/passwd entry, so this launches their actual login shell (zsh,
-    // fish, etc.). -i -l so it sources rc files (~/.zshrc etc.), matching
-    // the local shell-mode launch.
-    shell: `exec ${REMOTE_LOGIN_SHELL} -i -l`,
-    // Mirror the LOCAL claude default so the remote agent runs non-interactively
-    // (no trust-folder/permission prompt that nothing on the remote answers). The
-    // per-host `commands.claude` override stays the escape hatch.
-    claude: remoteLoginShellCommand('claude --dangerously-skip-permissions'),
-    opencode: remoteLoginShellCommand('opencode'),
-    codex: remoteLoginShellCommand('codex'),
-    gemini: remoteLoginShellCommand('gemini'),
-    antigravity: remoteLoginShellCommand('agy'),
-    pi: remoteLoginShellCommand('pi'),
-    grok: remoteLoginShellCommand('grok'),
-    // `dsh` alone boots nothing: the launcher needs a profile, and the remote box's
-    // profile inventory is unknown here. The per-host `commands.deepseek` override
-    // is the escape hatch for naming one.
-    deepseek: remoteLoginShellCommand('dsh'),
-    omp: remoteLoginShellCommand('omp'),
-  };
-  return commands[mode as RemoteCommandMode] || commands.shell;
+  // $SHELL, not a hardcoded bash: sshd sets it from the remote user's /etc/passwd entry, so
+  // this launches their actual login shell (zsh, fish, …). `-i -l` so it sources rc files,
+  // matching the local shell-mode launch. Not templatable as overlay data: the shell is
+  // whatever the REMOTE passwd says, which is why `shell` is the one arm still written here.
+  const shellCommand = `exec ${REMOTE_LOGIN_SHELL} -i -l`;
+  const cli = overlayCliCommand(mode, 'remote');
+  return cli === null ? shellCommand : remoteLoginShellCommand(cli);
 }
 
 export function remoteSshTarget(host: Pick<RemoteHost, 'username' | 'host'>): string {
@@ -264,19 +279,22 @@ export async function checkRemoteTmuxAvailable(
 }
 
 /**
- * The CLI binary each session mode runs on the remote host. Antigravity's
- * binary is `agy` (the mode name is not the command); shell has no CLI to
- * probe, so it is absent.
+ * The CLI binary a session mode runs on the remote host, read from the registry rather than
+ * from a hardcoded map. `shell` has no CLI to probe and resolves to undefined, which is what
+ * makes the probe return null for it.
+ *
+ * ⚠️ Deriving this CHANGES BEHAVIOUR, deliberately and in one direction. The map it replaces
+ * listed claude/opencode/codex/gemini/antigravity/pi/omp and simply omitted `grok` and
+ * `deepseek` — its own comment said the rule was "every mode except shell", so the two were
+ * an oversight from when those CLIs were added, not a decision. A remote grok or deepseek
+ * session therefore reported no version at all. It now probes `grok --version` /
+ * `dsh --version` through the same login-shell wrapper as its siblings.
+ *
+ * (`antigravity` is why this cannot be the mode name: its binary is `agy`.)
  */
-const REMOTE_CLI_BIN: Partial<Record<SessionMode, string>> = {
-  claude: 'claude',
-  opencode: 'opencode',
-  codex: 'codex',
-  gemini: 'gemini',
-  antigravity: 'agy',
-  pi: 'pi',
-  omp: 'omp',
-};
+function remoteCliBin(mode: SessionMode): string | undefined {
+  return getCli(mode)?.discovery.binaries[0];
+}
 
 /**
  * Build the SSH command that reads the remote CLI's version (`claude --version`
@@ -292,7 +310,7 @@ export function buildRemoteCliVersionProbeCommand(
   host: Pick<RemoteHost, 'username' | 'host' | 'port'> & RemoteSshOptions,
   mode: SessionMode
 ): string | null {
-  const bin = REMOTE_CLI_BIN[mode];
+  const bin = remoteCliBin(mode);
   if (!bin) return null;
   return [
     ...buildSshConnectionArgs(host),

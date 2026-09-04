@@ -24,6 +24,7 @@
 import { existsSync, mkdirSync, readFileSync, writeFileSync } from 'node:fs';
 import fs from 'node:fs/promises';
 import { dirname, isAbsolute, join, relative, resolve } from 'node:path';
+import { getCli } from './config/cli-registry/registry.js';
 import { fileURLToPath } from 'node:url';
 import { homedir } from 'node:os';
 import { createHash } from 'node:crypto';
@@ -32,7 +33,6 @@ import { promisify } from 'node:util';
 import { dataPath } from './config/instance.js';
 import type {
   DockerCase,
-  DockerCommandMode,
   DockerEngine,
   DockerHost,
   DockerNetworkMode,
@@ -134,22 +134,23 @@ export function dockerContainerName(caseName: string): string {
   return `${CONTAINER_NAME_PREFIX}${caseName}`;
 }
 
-/** Default pane command per CLI mode (mirror of defaultRemoteCommandForMode). */
+/**
+ * Default in-container pane command per CLI mode (mirror of defaultRemoteCommandForMode).
+ *
+ * ⚠️ Read from the registry (`overlays.docker`), not from a hardcoded
+ * `Record<DockerCommandMode, string>`. That table duplicated the registry exactly with
+ * nothing keeping the two in step. `shell` is the one arm still written here, because it is
+ * the entry that declares `docker: { disabled: true }` — a container has no per-user login
+ * shell to resolve, so it gets a plain `bash -l` rather than a CLI invocation.
+ */
 export function defaultDockerCommandForMode(mode: SessionMode): string {
-  const commands: Record<DockerCommandMode, string> = {
-    shell: 'exec bash -l',
-    // Mirror the LOCAL claude default so the in-container agent runs non-interactively.
-    claude: 'exec claude --dangerously-skip-permissions',
-    opencode: 'exec opencode',
-    codex: 'exec codex',
-    gemini: 'exec gemini',
-    antigravity: 'exec agy',
-    pi: 'exec pi',
-    grok: 'exec grok',
-    deepseek: 'exec dsh',
-    omp: 'exec omp',
-  };
-  return commands[mode as DockerCommandMode] || commands.shell;
+  const entry = getCli(mode);
+  const overlay = entry?.overlays.docker;
+  if (!entry || (overlay && 'disabled' in overlay)) return 'exec bash -l';
+  // Mirrors the LOCAL default for each CLI; claude's carries
+  // `--dangerously-skip-permissions` so the in-container agent runs non-interactively.
+  const cli = overlay?.command ?? entry.discovery.binaries[0];
+  return cli ? `exec ${cli}` : 'exec bash -l';
 }
 
 /** `container:/workdir` display string (mirror of remoteDisplayPath's `user@host:path`). */
@@ -1117,8 +1118,13 @@ export async function probeDockerCliVersion(
   mode: SessionMode
 ): Promise<string | undefined> {
   if (IS_TEST_MODE) return undefined;
-  const bin = mode === 'shell' ? null : mode;
-  if (!bin) return undefined;
+  // ⚠️ The MODE NAME IS NOT ALWAYS THE BINARY NAME — `antigravity` runs `agy`. This used
+  // to pass the mode straight through as the command, which would have probed a binary that
+  // does not exist. Only claude reaches this today (it is the one CLI with a version gate),
+  // so nothing was actually broken, but the registry is what makes it correct for the next
+  // CLI that needs a version.
+  const bin = getCli(mode)?.discovery.binaries[0];
+  if (!bin) return undefined; // `shell` has no binary of its own
   const argv = dockerEngineArgv(docker);
   try {
     const { stdout } = await execFileAsync(

@@ -18,6 +18,8 @@ import {
 } from '../config/terminal-history.js';
 import { MAX_EDITABLE_BYTES } from '../config/file-editing.js';
 import { MIN_MATCH_LENGTH, MAX_MATCH_LENGTH } from '../config/agent-wait.js';
+import { enabledCliIds, enabledClis } from '../config/cli-registry/registry.js';
+import type { SessionMode } from '../types.js';
 
 // ========== Path Validation ==========
 
@@ -119,38 +121,84 @@ export const FileWriteSchema = z
   })
   .strict();
 
-// ========== Env Var Allowlist ==========
-
-/** Allowlisted env var key prefixes */
-const ALLOWED_ENV_PREFIXES = [
-  'CLAUDE_CODE_',
-  'OPENCODE_',
-  'CODEX_',
-  'GEMINI_',
-  'GOOGLE_',
-  'ANTIGRAVITY_',
-  'PI_',
-  'GROK_',
-  'XAI_',
-  // DeepSeek Harness: `DSH_*` carries the launcher's own documented inputs
-  // (DSH_HOME, DSH_PERMISSION_MODE, DSH_TELEMETRY_MODE, and the DSH_TUI_* knobs
-  // the terminal front door reads); `DEEPSEEK_*` is the vendor namespace holding
-  // DEEPSEEK_API_KEY / DEEPSEEK_BASE_URL, the same narrow-vendor reasoning that
-  // admitted XAI_* for grok. Foreign provider keys stay out: a dsh settings.yaml
-  // can name ANY env var as a provider credential (apiKeyEnv), which is pi's
-  // 34-provider-key problem in a new shape, and the answer is the same one.
-  'DSH_',
-  'DEEPSEEK_',
-  'OMP_',
-];
+/**
+ * The run-mode ids the API currently accepts: every ENABLED registry entry.
+ *
+ * Exported so anything needing the authoritative list derives it from here rather than
+ * restating the nine names (which is how the old literal enum drifted from the run menu).
+ */
+export function sessionModeIds(): string[] {
+  return enabledCliIds();
+}
 
 /**
- * Allowlisted exact env var keys (checked alongside the prefixes).
- * CLAUDE_CONFIG_DIR relocates the Claude CLI's user config (credentials,
- * settings, stats) so a case can run on a separate Claude subscription (#255).
- * Exact match only — CLAUDE_CONFIG_DIR_EXTRA etc. stay rejected.
+ * Validation for a run mode, resolved AT PARSE TIME.
+ *
+ * ⚠️ Deliberately not a `z.enum([...])`. An enum has to be handed its members when the
+ * SCHEMA OBJECT is built, which happens once at module import — so a CLI enabled while the
+ * server was running kept failing validation with INVALID_INPUT until a restart, even
+ * though the run menu already offered it. Checking membership inside the refinement moves
+ * the question to when the request is actually validated.
+ *
+ * The cast is because callers type this field as `SessionMode`; the runtime check above is
+ * what actually constrains it.
  */
-const ALLOWED_ENV_KEYS = new Set(['CLAUDE_CONFIG_DIR']);
+function sessionModeSchema(): z.ZodType<SessionMode> {
+  return (
+    z
+      .string()
+      // Bounded BEFORE the membership check, and before the failure message quotes the value
+      // back. `.max(24)` matches the `cliId` pattern in cli-registry/schema.ts — no id longer
+      // than that can ever be registered, so nothing legitimate is rejected — and it means a
+      // rejected mode cannot echo a body-limit-sized string into an error string and a log
+      // line. Without it the only bound on either was the HTTP body limit.
+      .max(24)
+      .superRefine((value, ctx) => {
+        const allowed = sessionModeIds();
+        if (!allowed.includes(value)) {
+          ctx.addIssue({
+            code: 'custom',
+            message: `Invalid run mode ${JSON.stringify(value)}. Enabled modes: ${allowed.join(', ')}`,
+          });
+        }
+      }) as unknown as z.ZodType<SessionMode>
+  );
+}
+
+// ========== Env Var Allowlist ==========
+
+/**
+ * Allowlisted env var key prefixes, contributed by the ENABLED CLIs in the registry
+ * (`env.allowedPrefixes`) — `CLAUDE_CODE_`, `OPENCODE_`, `CODEX_`, `GEMINI_`, `GOOGLE_`,
+ * `ANTIGRAVITY_`, `PI_`, `GROK_`, `XAI_`, `DSH_`, `DEEPSEEK_` as shipped.
+ *
+ * ⚠️ Resolved AT PARSE TIME, not at module load. This used to be a frozen array computed
+ * once when the module was imported, which meant a CLI enabled while the server was running
+ * had its env prefix rejected until a restart — validation and the run menu disagreeing
+ * about which CLIs exist. Reading the registry per call costs a memoized array lookup.
+ *
+ * ⚠️ This is ONE GLOBAL LIST applied with no mode context, so admitting a prefix for one CLI
+ * widens it for every mode at once. That is why an entry only ever contributes its own
+ * VENDOR namespace: pi's ~34 provider keys (ANTHROPIC_API_KEY, OPENAI_API_KEY, HF_TOKEN, …)
+ * share no prefix and stay out, and a dsh `settings.yaml` can nominate ANY env var as a
+ * provider credential — same problem, same answer. Those CLIs authenticate via their own
+ * `/login` or the server process's own environment.
+ */
+function allowedEnvPrefixes(): string[] {
+  return enabledClis().flatMap((entry) => entry.env.allowedPrefixes);
+}
+
+/**
+ * Allowlisted exact env var keys (checked alongside the prefixes), likewise contributed by
+ * enabled registry entries via `env.allowedKeys`.
+ *
+ * As shipped this is claude's CLAUDE_CONFIG_DIR, which relocates the Claude CLI's user
+ * config (credentials, settings, stats) so a case can run on a separate Claude subscription
+ * (#255). Exact match only — CLAUDE_CONFIG_DIR_EXTRA etc. stay rejected.
+ */
+function allowedEnvKeys(): Set<string> {
+  return new Set(enabledClis().flatMap((entry) => entry.env.allowedKeys));
+}
 
 /** Env var keys that are always blocked (security-sensitive) */
 const BLOCKED_ENV_KEYS = new Set([
@@ -163,11 +211,17 @@ const BLOCKED_ENV_KEYS = new Set([
   'OPENCODE_SERVER_PASSWORD', // Security-sensitive: server auth password
 ]);
 
-/** Validate that an env var key is allowed */
+/**
+ * Validate that an env var key is allowed.
+ *
+ * ⚠️ `BLOCKED_ENV_KEYS` is checked FIRST and is deliberately NOT registry-driven. It is a
+ * hard floor: a rogue or fat-fingered `allowedPrefixes` entry (say `''`, which prefixes
+ * everything) still cannot unblock PATH or LD_PRELOAD.
+ */
 function isAllowedEnvKey(key: string): boolean {
   if (BLOCKED_ENV_KEYS.has(key)) return false;
-  if (ALLOWED_ENV_KEYS.has(key)) return true;
-  return ALLOWED_ENV_PREFIXES.some((prefix) => key.startsWith(prefix));
+  if (allowedEnvKeys().has(key)) return true;
+  return allowedEnvPrefixes().some((prefix) => key.startsWith(prefix));
 }
 
 /** Zod schema for env overrides with allowlist enforcement */
@@ -460,9 +514,7 @@ const parentSessionIdSchema = z.string().max(100).optional();
 
 export const CreateSessionSchema = z.object({
   workingDir: safePathSchema.optional(),
-  mode: z
-    .enum(['claude', 'shell', 'opencode', 'codex', 'gemini', 'antigravity', 'pi', 'grok', 'deepseek', 'omp'])
-    .optional(),
+  mode: sessionModeSchema().optional(),
   name: z.string().max(100).optional(),
   /** Session that spawned this one — see parentSessionIdSchema. */
   parentSessionId: parentSessionIdSchema,
@@ -892,9 +944,7 @@ export const QuickStartSchema = z.object({
    *  a real host dir, so the settings file crosses the bind mount); rejected for
    *  remote cases (the file would be written on the WRONG machine). */
   modelOverride: z.string().max(50).optional(),
-  mode: z
-    .enum(['claude', 'shell', 'opencode', 'codex', 'gemini', 'antigravity', 'pi', 'grok', 'deepseek', 'omp'])
-    .optional(),
+  mode: sessionModeSchema().optional(),
   openCodeConfig: OpenCodeConfigSchema,
   codexConfig: CodexConfigSchema,
   geminiConfig: GeminiConfigSchema,
@@ -1436,7 +1486,7 @@ const noNewlines = (v: string) => !/[\r\n]/.test(v);
 /** Shared field shape for creating/updating a scheduled job. */
 const CronJobBaseSchema = z.object({
   name: z.string().min(1).max(200),
-  agentType: z.enum(['claude', 'shell', 'opencode', 'codex', 'gemini', 'antigravity', 'pi', 'grok', 'deepseek', 'omp']),
+  agentType: sessionModeSchema(),
   workingDir: safePathSchema,
   launchCommand: z.string().max(2000).refine(noNewlines, 'launchCommand must be a single line').optional(),
   promptMode: z.enum(['inline_text', 'prompt_file_path']),
