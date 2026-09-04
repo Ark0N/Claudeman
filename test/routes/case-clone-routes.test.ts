@@ -9,10 +9,10 @@
  * working tree in the case directory, that scaffolding does not overwrite the
  * repository's own files, and that a rejected URL never reaches git.
  *
- * `test/setup.ts` points HOME at a per-file temp dir, but CASES_DIR is
- * `join(homedir(), 'codeman-cases')` and `os.homedir()` ignores the HOME
- * override on some platforms/Node builds — so cleanup below goes through
- * `safeRmHomeTree`, which refuses to delete anything outside the temp HOME.
+ * `test/setup.ts` points HOME at a per-file temp dir, so CASES_DIR
+ * (`join(homedir(), 'codeman-cases')`) resolves inside the fixture; cleanup
+ * below still goes through `safeRmHomeTree`, which refuses to delete anything
+ * outside the temp HOME, so a wrong anchor can never reach the real tree.
  *
  * Port: N/A (app.inject).
  */

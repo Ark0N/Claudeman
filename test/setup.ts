@@ -34,14 +34,15 @@ process.env.HOME = testHome;
 process.env.USERPROFILE = testHome;
 process.env.VITEST = 'true';
 
-// SAFETY: `getDataDir()` resolves via `homedir()` → `~/.codeman<INSTANCE_SUFFIX>`.
-// Overriding HOME above is NOT enough: on Linux `os.homedir()` reads /etc/passwd,
-// not $HOME, so without this a route test that writes `remote-hosts.json` (or
-// any state file) into `getDataDir()` silently clobbers the PRODUCTION
-// `~/.codeman` tree (found 2026-08-29: `session-routes-workspace-hooks.test.ts`
-// overwrote prod `remote-hosts.json` with an `h1/box/10.0.0.5` fixture during a
-// bare full-suite run, wiping every user-defined remote host and emptying the
-// launch case dropdown). Point every test at a throwaway data dir instead.
+// SAFETY: `getDataDir()` is `process.env.CODEMAN_DATA_DIR || join(homedir(), '.codeman<suffix>')`.
+// The temp HOME above already redirects the second half (`os.homedir()` follows
+// `$HOME`; libuv checks the env var before the passwd entry), but the first half
+// is an ABSOLUTE override: a `CODEMAN_DATA_DIR` inherited from the shell (a
+// second instance, a beta run) bypasses the temp HOME entirely, and a bare suite
+// run then reads and writes the REAL data dir (found 2026-08-29:
+// `session-routes-workspace-hooks.test.ts` overwrote the production
+// `remote-hosts.json` with an `h1/box/10.0.0.5` fixture, wiping every user-defined
+// remote host and emptying the launch case dropdown). Point it at a throwaway dir.
 process.env.CODEMAN_DATA_DIR = testDataDir;
 
 delete process.env.CODEMAN_PASSWORD;

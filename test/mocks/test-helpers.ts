@@ -42,13 +42,14 @@ export function createDeferred<T = void>(): {
  * Delete a directory tree, but ONLY when it lives inside the test HOME.
  *
  * SAFETY (2026-08-29): `test/setup.ts` redirects `process.env.HOME` to a
- * throwaway dir, but code that resolves paths via `os.homedir()` does NOT
- * follow that redirect on every Linux build/Node version — some read
- * /etc/passwd instead of $HOME. A test that `rmSync(CASES_DIR, recursive)` can
- * therefore delete the PRODUCTION `~/codeman-cases` (or any home-anchored
- * tree) on those platforms. This gate refuses to delete anything not under the
- * (redirected) `process.env.HOME`. Lexical `resolve()` is used because the leaf
- * often does not exist and `realpathSync` would throw.
+ * throwaway dir and `os.homedir()` follows it, so a `rmSync(CASES_DIR,
+ * recursive)` normally lands inside the fixture. This gate is defense in depth
+ * for the day that stops being true (a test that runs outside setup.ts, an
+ * env override that anchors a path elsewhere): it refuses to delete anything
+ * not under the redirected `process.env.HOME`, so the failure mode is a
+ * leftover temp dir rather than a deleted PRODUCTION `~/codeman-cases`.
+ * Lexical `resolve()` is used because the leaf often does not exist and
+ * `realpathSync` would throw.
  */
 export function safeRmHomeTree(path: string): void {
   const home = process.env.HOME;
@@ -63,8 +64,7 @@ export function safeRmHomeTree(path: string): void {
 /**
  * True when `path` resolves strictly inside `process.env.HOME` (or to it).
  * Same rationale as `safeRmHomeTree`; use for guarded non-recursive deletes
- * (single files like `linked-cases.json`) so they never touch prod state on
- * platforms where `os.homedir()` ignores `$HOME`.
+ * (single files like `linked-cases.json`) so they can never touch prod state.
  */
 export function isUnderTestHome(path: string): boolean {
   const home = process.env.HOME;

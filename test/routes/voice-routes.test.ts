@@ -25,9 +25,10 @@ import { registerVoiceRoutes, _resetVoiceStreamCountForTesting } from '../../src
 import { MAX_CONCURRENT_STREAMS } from '../../src/config/voice.js';
 
 // SAFETY (2026-08-29): anchor on the REDIRECTED test HOME (process.env.HOME,
-// which test/setup.ts points at a throwaway dir) instead of os.homedir().
-// On some Linux builds os.homedir() reads /etc/passwd and would resolve to the
-// REAL home, clobbering the user's ~/.claude/.credentials.json.
+// which test/setup.ts points at a throwaway dir). `os.homedir()` follows it too,
+// but this file writes and deletes `~/.claude/.credentials.json`, the one file
+// where a wrong anchor would sign the developer out of their own CLI, so it
+// fails loudly if setup.ts did not run rather than trusting any fallback.
 function testHome(): string {
   if (!process.env.HOME) throw new Error('process.env.HOME unset — test/setup.ts must run first');
   return process.env.HOME;
