@@ -388,3 +388,66 @@ describe('adopted container: probe modes come from the CLI registry', () => {
     expect(getCli('shell')?.discovery.binaries[0]).toBeUndefined();
   });
 });
+
+describe('adopted container: export never touches the container', () => {
+  const routes = readFileSync(new URL('../src/web/routes/case-routes.ts', import.meta.url), 'utf8');
+  const exporter = readFileSync(new URL('../src/docker-export.ts', import.meta.url), 'utf8');
+
+  it('refuses a full-image export, which would commit a container we do not own', () => {
+    expect(routes).toContain("if (mode === 'full' && dockerCase.owned === false)");
+  });
+
+  it('never pauses an adopted container for the workspace tar', () => {
+    // `docker pause` freezes the owner's processes for as long as the tar takes.
+    // It is the one export step that touches the container at all.
+    expect(exporter).toContain('!isAdoptedContainer(docker) && (await isContainerRunning(');
+  });
+});
+
+describe('adopted container: naming a foreign container is machine-level', () => {
+  const routes = readFileSync(new URL('../src/web/routes/case-routes.ts', import.meta.url), 'utf8');
+  const routeFor = (marker: string) => routes.slice(routes.indexOf(marker), routes.indexOf(marker) + 1400);
+
+  it('admin-gates adoption in multi-user mode, unlike docker-link', () => {
+    // docker-link only ever creates OUR container, whose sole bind mount is a
+    // workspace isWorkingDirAllowed already confined. An adopted container's
+    // mounts belong to its owner — one mounting `/` hands the adopter the host.
+    expect(routeFor("'/api/cases/docker-adopt'")).toContain('adminOnly(req, reply)');
+  });
+
+  it('admin-gates enumerating and browsing containers', () => {
+    expect(routeFor("'/api/docker-hosts/:hostId/containers'")).toContain('adminOnly(req, reply)');
+    expect(routeFor("'/api/docker-cases/browse'")).toContain('adminOnly(req, reply)');
+  });
+
+  it('lets a non-admin preflight only a container linked to a case they own', () => {
+    // NOT plain adminOnly: the run menu probes this for every docker case to learn
+    // which CLIs the container has, so an admin-only gate would hide every agent
+    // mode from a non-admin's own docker case.
+    const route = routeFor("'/api/docker-cases/adopt-preflight'");
+    expect(route).toContain('if (!isAdmin(req))');
+    expect(route).toContain('canAccessOwned(getAuthUser(req), item.owner)');
+    expect(route).not.toContain('adminOnly(req, reply)');
+  });
+});
+
+describe('adopted container: a missing container means different things per ownership', () => {
+  const ui = readFileSync(new URL('../src/web/public/session-ui.js', import.meta.url), 'utf8');
+  const routes = readFileSync(new URL('../src/web/routes/case-routes.ts', import.meta.url), 'utf8');
+
+  it('records a probe failure only for an adopted case', () => {
+    // An OWNED container does not exist until the first session launches it, so
+    // "not found" is the expected answer for every freshly linked Docker case.
+    // Treating it as a fault hid every agent mode behind an error telling the user
+    // to start a container the launch chain was about to create itself.
+    const probe = ui.slice(ui.indexOf('async _probeDockerCaseModes('), ui.indexOf('async _loadRunModeHistory('));
+    expect(probe).toContain('if (activeCase?.docker?.owned === false) {');
+    expect(probe.indexOf('if (activeCase?.docker?.owned === false) {')).toBeLessThan(
+      probe.indexOf('this._dockerCaseProbeError[name] =')
+    );
+  });
+
+  it('ships the ownership flag the UI reads that decision from', () => {
+    expect(routes).toContain('...(dockerCase.owned === false ? { owned: false } : {}),');
+  });
+});

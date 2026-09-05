@@ -174,6 +174,17 @@ export interface CaseInfo {
      * every CLI), which the UI reads as "do not gate".
      */
     availableModes?: string[];
+    /**
+     * `false` for an ADOPTED container (mirror of `DockerCase.owned`); absent = owned.
+     *
+     * ⚠️ The UI needs this to read a FAILED container probe correctly. For an adopted
+     * case a missing container is a real fault worth reporting, because the user is the
+     * only one who can start it. For an owned case it is the NORMAL state before the
+     * first session: the container is created on demand by the launch chain, so treating
+     * "not found" as a fault there hid every agent mode behind an error telling the user
+     * to start a container Codeman was about to create itself.
+     */
+    owned?: boolean;
   };
 }
 

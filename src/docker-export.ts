@@ -30,6 +30,7 @@ import { spawn } from 'node:child_process';
 import { pipeline } from 'node:stream/promises';
 import type { DockerEngine, SessionDocker } from './types.js';
 import { runWithConversionLimit } from './document-conversion-limiter.js';
+import { isAdoptedContainer } from './docker-hosts.js';
 
 const IS_TEST_MODE = !!process.env.VITEST;
 
@@ -287,7 +288,13 @@ export async function exportDockerCase(params: {
     const bundlePath = join(exportsDir, exportBundleName(caseName, timestamp, mode));
     const stageDir = join(exportsDir, `.stage-${caseName}-${timestamp}`);
     mkdirSync(stageDir, { recursive: true });
-    const wasRunning = await isContainerRunning(argv, docker.containerName);
+    // ⚠️ NEVER pause an ADOPTED container. The freeze exists only to make the committed
+    // image and the workspace tar mutually consistent, and it is a lifecycle mutation on a
+    // container that belongs to the user — it stops their processes for however long the
+    // tar takes. A workspace-only export of an adopted case therefore accepts a live
+    // filesystem, the same guarantee `tar` gives on any running host directory. Full-image
+    // export is refused for an adopted case at the route, before reaching here.
+    const wasRunning = !isAdoptedContainer(docker) && (await isContainerRunning(argv, docker.containerName));
     let commitTag: string | undefined;
 
     try {

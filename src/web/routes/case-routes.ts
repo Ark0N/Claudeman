@@ -300,6 +300,7 @@ export function registerCaseRoutes(app: FastifyInstance, ctx: EventPort & Config
           path: dockerCase.hostWorkspacePath,
           network: host.network ?? 'bridge',
           ...(dockerCase.availableModes ? { availableModes: dockerCase.availableModes } : {}),
+          ...(dockerCase.owned === false ? { owned: false } : {}),
         },
       };
       const existingIndex = cases.findIndex((item) => item.name === dockerCase.name);
@@ -794,7 +795,15 @@ export function registerCaseRoutes(app: FastifyInstance, ctx: EventPort & Config
    */
   app.post(
     '/api/cases/docker-adopt',
-    async (req): Promise<ApiResponse<{ case: unknown; image?: string; availableModes?: SessionMode[] }>> => {
+    async (req, reply): Promise<ApiResponse<{ case: unknown; image?: string; availableModes?: SessionMode[] }>> => {
+      // ⚠️ Admin-only in multi-user mode, unlike `docker-link` right above. Linking
+      // creates OUR container, whose only bind mount is a workspace `isWorkingDirAllowed`
+      // has already confined. Adoption names a container someone else built, and its
+      // mounts are whatever its owner gave it — a container mounting `/` hands the
+      // adopter a shell over the whole host, which is exactly the workspace scoping this
+      // mode exists to enforce. Same machine-level reasoning as the docker HOST routes.
+      const denied = adminOnly(req, reply);
+      if (denied) return denied;
       const dockerCase = {
         ...parseBody(DockerCaseAdoptSchema, req.body),
         type: 'docker' as const,
@@ -880,7 +889,11 @@ export function registerCaseRoutes(app: FastifyInstance, ctx: EventPort & Config
    */
   app.get(
     '/api/docker-hosts/:hostId/containers',
-    async (req): Promise<ApiResponse<{ containers: DockerContainerInfo[] }>> => {
+    async (req, reply): Promise<ApiResponse<{ containers: DockerContainerInfo[] }>> => {
+      // Enumerating every container on the engine is machine-level information (names,
+      // images, uptime), so it follows the docker-host policy rather than the case one.
+      const denied = adminOnly(req, reply);
+      if (denied) return denied;
       const { hostId } = req.params as { hostId: string };
       const host = (await readDockerHosts(CODEMAN_CONFIG_DIR)).find((item) => item.id === hostId);
       if (!host) return createErrorResponse(ApiErrorCode.NOT_FOUND, 'Docker host not found');
@@ -899,7 +912,11 @@ export function registerCaseRoutes(app: FastifyInstance, ctx: EventPort & Config
    * container nothing is mounted at a matching host path, so the field would
    * otherwise be typed blind. Read-only — one `ls` through `docker exec`.
    */
-  app.post('/api/docker-cases/browse', async (req): Promise<ApiResponse<DockerBrowseResult>> => {
+  app.post('/api/docker-cases/browse', async (req, reply): Promise<ApiResponse<DockerBrowseResult>> => {
+    // Reads a directory listing inside an ARBITRARY named container, so it is gated with
+    // the adopt flow it serves rather than with the (owner-scoped) case file routes.
+    const denied = adminOnly(req, reply);
+    if (denied) return denied;
     const body = parseBody(DockerBrowseSchema, req.body);
     const host = (await readDockerHosts(CODEMAN_CONFIG_DIR)).find((item) => item.id === body.hostId);
     if (!host) return createErrorResponse(ApiErrorCode.NOT_FOUND, 'Docker host not found');
@@ -915,8 +932,25 @@ export function registerCaseRoutes(app: FastifyInstance, ctx: EventPort & Config
     return { success: true, data: result };
   });
 
-  app.post('/api/docker-cases/adopt-preflight', async (req): Promise<ApiResponse<AdoptedContainerProbe>> => {
+  app.post('/api/docker-cases/adopt-preflight', async (req, reply): Promise<ApiResponse<AdoptedContainerProbe>> => {
     const body = parseBody(DockerAdoptPreflightSchema, req.body);
+    const dockerCases = await readDockerCases(CODEMAN_CONFIG_DIR);
+    // ⚠️ NOT plain `adminOnly`, unlike the two routes above: the run menu probes this for
+    // every docker case to learn which CLIs the CONTAINER has, so an admin-only gate would
+    // hide every agent mode from a non-admin's own docker case. A non-admin may therefore
+    // probe a container ALREADY linked to a case they can access — never an arbitrary one,
+    // which is the adopt-time question and stays admin-only with the rest of that flow.
+    if (!isAdmin(req)) {
+      const owns = dockerCases.some(
+        (item) =>
+          (item.container ?? dockerContainerName(item.name)) === body.container &&
+          canAccessOwned(getAuthUser(req), item.owner)
+      );
+      if (!owns) {
+        reply.code(403);
+        return createErrorResponse(ApiErrorCode.FORBIDDEN, 'Admin only in multi-user mode');
+      }
+    }
     const host = (await readDockerHosts(CODEMAN_CONFIG_DIR)).find((item) => item.id === body.hostId);
     if (!host) return createErrorResponse(ApiErrorCode.NOT_FOUND, 'Docker host not found');
     const probe = await probeAdoptableContainer(
@@ -1060,6 +1094,17 @@ export function registerCaseRoutes(app: FastifyInstance, ctx: EventPort & Config
     if (!host) return createErrorResponse(ApiErrorCode.NOT_FOUND, 'Docker host not found');
 
     const sessionDocker = toSessionDocker(host, dockerCase);
+    // A full export `docker commit`s the container into an image. For an ADOPTED
+    // container that means packaging someone else's container — with whatever
+    // credentials its owner logged in with — into a bundle Codeman then hands out,
+    // and it is the one export step that touches the container at all. The
+    // workspace-only export is a plain host-directory tar and stays available.
+    if (mode === 'full' && dockerCase.owned === false) {
+      return createErrorResponse(
+        ApiErrorCode.FORBIDDEN,
+        `Case "${name}" adopted an existing container. Codeman does not own it and will not commit it to an image — use a workspace-only export, or build the image yourself.`
+      );
+    }
     if (mode === 'full' && !sessionDocker.mountCredentials) {
       return createErrorResponse(
         ApiErrorCode.INVALID_INPUT,

@@ -503,6 +503,11 @@ Object.assign(CodemanApp.prototype, {
     if (isDocker && !this._dockerCaseModes?.[caseName]) void this._probeDockerCaseModes(activeCase, menu);
     // An unreachable container hides every agent mode and explains why, instead
     // of silently offering modes that cannot start.
+    //
+    // ⚠️ ADOPTED cases only. For an OWNED case a missing container is the normal
+    // state before the first session — the launch chain creates and starts it — so
+    // reporting it as a fault hid every agent mode on a freshly linked Docker case
+    // behind "start it yourself first", for a container Codeman was about to create.
     const probeError = isDocker ? this._dockerCaseProbeError?.[caseName] : null;
     for (const mode of ['claude', 'opencode', 'codex', 'gemini', 'antigravity', 'pi', 'grok', 'deepseek', 'omp']) {
       const btn = menu.querySelector(`.run-mode-option[data-mode="${mode}"]`);
@@ -707,12 +712,19 @@ Object.assign(CodemanApp.prototype, {
         this._dockerCaseModes[name] = probe.availableModes;
         delete this._dockerCaseProbeError?.[name];
       } else {
-        // A container that cannot be probed — recreated, stopped, engine down —
-        // must NOT fall through to "show everything". Offering claude on a
+        // An ADOPTED container that cannot be probed — recreated, stopped, engine
+        // down — must NOT fall through to "show everything". Offering claude on a
         // container that is not running is a click that can only fail, with the
         // reason visible nowhere. Record the reason and say it in the menu.
-        this._dockerCaseProbeError = this._dockerCaseProbeError || {};
-        this._dockerCaseProbeError[name] = probe?.error || `Could not read container "${container}".`;
+        //
+        // ⚠️ An OWNED container gets no error: it does not exist until the first
+        // session launches it, so "not found" is the expected answer for every
+        // newly linked Docker case, and gating on it made those cases unusable.
+        // Leaving the cache empty reads as "unknown", which does not gate.
+        if (activeCase?.docker?.owned === false) {
+          this._dockerCaseProbeError = this._dockerCaseProbeError || {};
+          this._dockerCaseProbeError[name] = probe?.error || `Could not read container "${container}".`;
+        }
         delete this._dockerCaseModes[name];
       }
       // Only repaint while the menu the user opened is still on screen.
