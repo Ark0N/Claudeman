@@ -536,8 +536,21 @@ async function resolveFilesystemPickerPath(
     throwFilesystemPickerError(403, ApiErrorCode.INVALID_INPUT, 'No filesystem browse roots are available');
   }
 
+  // With no explicit path (the "Link Existing" case picker, which passes no
+  // sessionId and an empty initialPath until the user has typed something),
+  // land on the shared cases root rather than falling through to whichever
+  // root happens to be first. `Home` is only nested under `Codeman Cases` on
+  // the native default (~/codeman-cases); a Docker deployment binds them at
+  // unrelated host paths (CODEMAN_APPDATA_PATH vs CODEMAN_CASES_PATH), so a
+  // Home-first fallback opened the picker somewhere with no cases in sight —
+  // and, worse, made an OLD case folder left behind by a since-changed
+  // CODEMAN_CASES_PATH look like a normal thing to stumble across while
+  // browsing for one to link.
   const fallbackRoot =
-    roots.find((root) => root.label === 'Current Folder') ?? roots.find((root) => root.path === '/mnt/d') ?? roots[0];
+    roots.find((root) => root.label === 'Current Folder') ??
+    roots.find((root) => root.label === 'Codeman Cases') ??
+    roots.find((root) => root.path === '/mnt/d') ??
+    roots[0];
   const candidatePath = resolve(requestedPath ?? fallbackRoot.path);
 
   let resolvedPath: string;
