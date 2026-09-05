@@ -8,7 +8,7 @@ import { FastifyInstance, type FastifyReply } from 'fastify';
 import { z } from 'zod';
 import { join, dirname, extname, basename } from 'node:path';
 import { homedir } from 'node:os';
-import { existsSync, statSync, mkdirSync, writeFileSync, rmSync } from 'node:fs';
+import { existsSync, statSync, mkdirSync, writeFileSync } from 'node:fs';
 import { execFile } from 'node:child_process';
 import fs from 'node:fs/promises';
 import { randomBytes } from 'node:crypto';
@@ -55,6 +55,7 @@ import {
 } from '../schemas.js';
 import { readCustomModelHosts } from '../../custom-model-hosts.js';
 import { buildCustomModelInjection } from '../../custom-model-injection.js';
+import { applyConfigDirInjection, removeConfigDir } from '../../custom-model-injection-apply.js';
 import { ownerLayoutKey } from '../../tab-layout-persistence.js';
 import { TabLayoutValidationError } from '../../tab-layout.js';
 import {
@@ -1183,7 +1184,7 @@ export function registerSessionRoutes(
 
     if ('clear' in body) {
       const previousConfigDir = session.setCustomModel(undefined);
-      if (previousConfigDir) rmSync(previousConfigDir, { recursive: true, force: true });
+      removeConfigDir(previousConfigDir);
       const restarted = await session.restartCli();
       persistAndBroadcastSession(ctx, session);
       return { customModel: session.customModel, restarted };
@@ -1215,16 +1216,8 @@ export function registerSessionRoutes(
     } else if (injection.kind === 'configDir') {
       // Isolated per-session dir — never the user's real CLI config path.
       configDir = join(dataPath('custom-model-configs'), session.id);
-      for (const file of injection.files) {
-        const filePath = join(configDir, file.relPath);
-        mkdirSync(dirname(filePath), { recursive: true });
-        writeFileSync(filePath, file.content, 'utf8');
-      }
-      // extraEnv: vars the written config file REFERENCES by name (codex's `env_key`
-      // convention) rather than embedding a literal value — must ride alongside
-      // dirEnvVar or the config points at a credential that was never actually set.
-      envOverrides = { [injection.dirEnvVar]: configDir, ...injection.extraEnv };
-      envKeys = [injection.dirEnvVar, ...Object.keys(injection.extraEnv ?? {})];
+      envOverrides = applyConfigDirInjection(configDir, injection);
+      envKeys = Object.keys(envOverrides);
     } else {
       // 'unsupported' is already handled above; this keeps the switch exhaustive.
       return createErrorResponse(ApiErrorCode.OPERATION_FAILED, `${session.mode} has no known custom-model mechanism`);
@@ -1237,7 +1230,7 @@ export function registerSessionRoutes(
     // Clean up the OLD config dir on disk, unless the new one happens to reuse the same
     // path (same session, configDir kind again) — never delete the dir we just wrote.
     if (previousConfigDir && previousConfigDir !== configDir) {
-      rmSync(previousConfigDir, { recursive: true, force: true });
+      removeConfigDir(previousConfigDir);
     }
 
     const restarted = await session.restartCli();

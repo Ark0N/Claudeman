@@ -91,21 +91,25 @@ describe('buildCustomModelInjection', () => {
     expect(result.files[0].content).toContain('model = "weird\\"model"');
   });
 
-  it('pi: configDir writes models.json under agent/', () => {
+  it('pi: configDir writes .pi/agent/models.json, redirected via HOME (verified live — PI_CONFIG_DIR does nothing for pi)', () => {
     const result = buildCustomModelInjection(entryOrThrow('pi'), endpoint, 'qwen3');
     if (result.kind !== 'configDir') throw new Error('unreachable');
-    expect(result.dirEnvVar).toBe('PI_CONFIG_DIR');
-    expect(result.files[0].relPath).toBe('agent/models.json');
+    expect(result.dirEnvVar).toBe('HOME');
+    expect(result.files[0].relPath).toBe('.pi/agent/models.json');
     const parsed = JSON.parse(result.files[0].content);
     expect(parsed.providers.custom.baseUrl).toBe('http://192.168.1.50:8080/v1');
+    expect(parsed.providers.custom.authHeader).toBe(true);
+    expect(parsed.providers.custom.models).toEqual([{ id: 'qwen3' }]); // array, NOT keyed by id
   });
 
-  it('omp: configDir writes models.yml under agent/, redirected via PI_CONFIG_DIR', () => {
+  it('omp: configDir writes .omp/agent/models.yml, redirected via HOME (verified live end-to-end)', () => {
     const result = buildCustomModelInjection(entryOrThrow('omp'), endpoint, 'qwen3');
     if (result.kind !== 'configDir') throw new Error('unreachable');
-    expect(result.dirEnvVar).toBe('PI_CONFIG_DIR');
-    expect(result.files[0].relPath).toBe('agent/models.yml');
+    expect(result.dirEnvVar).toBe('HOME');
+    expect(result.files[0].relPath).toBe('.omp/agent/models.yml');
     expect(result.files[0].content).toContain('baseUrl: "http://192.168.1.50:8080/v1"');
+    expect(result.files[0].content).toContain('authHeader: true');
+    expect(result.files[0].content).toContain('- id: "qwen3"');
   });
 
   it('gemini: env kind sets GOOGLE_GEMINI_BASE_URL/GEMINI_API_KEY/GEMINI_MODEL', () => {
@@ -118,14 +122,19 @@ describe('buildCustomModelInjection', () => {
     });
   });
 
-  it('grok: env kind sets GROK_BASE_URL/XAI_API_KEY/GROK_MODEL', () => {
+  it('grok: configDir writes a config.toml [model.<name>] block, key rides as extraEnv (XAI_API_KEY)', () => {
     const result = buildCustomModelInjection(entryOrThrow('grok'), endpoint, 'qwen3');
-    if (result.kind !== 'env') throw new Error('unreachable');
-    expect(result.envOverrides).toEqual({
-      GROK_BASE_URL: 'http://192.168.1.50:8080',
-      XAI_API_KEY: 'my-key',
-      GROK_MODEL: 'qwen3',
-    });
+    expect(result.kind).toBe('configDir');
+    if (result.kind !== 'configDir') throw new Error('unreachable');
+    expect(result.dirEnvVar).toBe('GROK_HOME');
+    expect(result.files).toHaveLength(1);
+    expect(result.files[0].relPath).toBe('config.toml');
+    expect(result.files[0].content).toContain('model = "qwen3"');
+    expect(result.files[0].content).toContain('base_url = "http://192.168.1.50:8080/v1"');
+    expect(result.files[0].content).toContain('api_backend = "chat_completions"');
+    expect(result.files[0].content).toContain('env_key = "XAI_API_KEY"');
+    expect(result.files[0].content).not.toContain('api_key ='); // never a literal TOML field
+    expect(result.extraEnv).toEqual({ XAI_API_KEY: 'my-key' });
   });
 
   it('deepseek: env kind sets base URL/key only, no model var', () => {

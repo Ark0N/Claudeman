@@ -50,7 +50,7 @@ just "add the gateway once, everything behind it shows up."
 ## Why
 
 The maintainer pays for a Claude Code subscription but also runs a capable
-local model. Every harness Codeman drives already *has* its own mechanism
+local model. Every harness Codeman drives already _has_ its own mechanism
 for pointing at a custom endpoint (env vars for Claude, a JSON config blob
 for opencode, a TOML file for Codex, etc.) — Codeman just never exposed a
 UI for it. Full motivation, the per-CLI recipe table, and the on-prem
@@ -77,7 +77,7 @@ hardware use cases are written up in **[`deployment_plan.md`](deployment_plan.md
   web tabs use.
 - **`src/web/schemas.ts`** — `customModelEndpointsEnabled` (synced, default
   OFF) + the endpoint payload schema.
-- **`scripts/test-local-llm-harnesses.mjs`** — standalone smoke-test script
+- **`scripts/test-local-llm-harnesses.ts`** — standalone smoke-test script
   that spawns each real CLI binary one-shot against a real endpoint and
   checks it can answer "hello world," independent of the web UI. Reads
   defaults from a gitignored `scripts/local-llm-test.config.json` (see the
@@ -130,11 +130,13 @@ format + tests green), ⬜ = not started.
   until chunk 6 lands) + a CLAUDE.md pointer bullet
 
 Also done outside the chunk list: the standalone
-`scripts/test-local-llm-harnesses.mjs` smoke-test script + its gitignored
-config file, the on-prem-hardware use-case writeup in `deployment_plan.md`
-(DGX Spark, Strix Halo, Qwen5090), and a `codeman/agent:llm-test` Docker
-image (all 9 CLI binaries, built from `docker/agent.Dockerfile`) for the
-real end-to-end test against a live llama-swap server.
+`scripts/test-local-llm-harnesses.ts` smoke-test script (now dynamic —
+reads the live CLI registry rather than a hand-maintained harness list) +
+its gitignored config file, the on-prem-hardware use-case writeup in
+`deployment_plan.md` (DGX Spark, Strix Halo, Qwen5090), a
+`codeman/agent:llm-test` Docker image (all 9 CLI binaries, built from
+`docker/agent.Dockerfile`), and a **completed real end-to-end run of all 9
+harnesses** against a live llama-swap server — see Testing below.
 
 ## Testing performed so far
 
@@ -145,14 +147,67 @@ test/custom-model-injection-contract.test.ts test/routes/custom-model-routes.tes
 test/routes/session-custom-model.test.ts test/routes/external-cli-bypass-clamp.test.ts` —
   245+ tests passing, including the existing multi-user clamp suite (no
   regressions from the `privilegedEnvKeys` additions)
-- `node --check scripts/test-local-llm-harnesses.mjs` + manual `--help` run
+- Refactored `scripts/test-local-llm-harnesses.ts` (now `npx tsx`-run, was
+  plain `.mjs`) to import `enabledClis()` and `buildCustomModelInjection()`
+  directly from source instead of keeping a second hand-maintained copy of
+  every CLI's env/config shape — a registry change now needs zero edits to
+  the test script. Extracted the config-dir-write logic shared with the
+  production route into `custom-model-injection-apply.ts` so both places
+  call exactly one implementation.
 - **Real end-to-end run against the maintainer's live llama-swap server**
   (`http://10.10.11.241:8080`), inside `codeman/agent:llm-test` (all 9 CLI
   binaries, built via `docker/agent.Dockerfile`), against the smallest
   available model (`qwen3.5-0.8b-ud-q8_k_xl`, 1.1GB — picked by parsing the
-  server's own reported model sizes). Real findings, not simulated:
+  server's own reported model sizes). **Full 9-harness result: claude,
+  opencode, pi, grok, omp all PASS with a genuine "hello world" reply
+  round-tripped through the real endpoint; codex FAILs for a confirmed
+  protocol reason (not a bug — see below); gemini and deepseek reach the
+  server but fail for reasons not yet root-caused; antigravity SKIPs (no
+  known mechanism); all correctly classified by the now-dynamic
+  `scripts/test-local-llm-harnesses.ts`, which reads the live CLI registry
+  rather than a hand-maintained harness list.** Real findings, not
+  simulated:
   - **opencode: PASS.** Genuinely round-tripped a "hello world" reply
     through the real endpoint.
+  - **pi: PASS, after two real bugs found and fixed.** `PI_CONFIG_DIR` does
+    nothing for pi at all (grepped pi's entire bundled JS source — the
+    string appears nowhere); the real redirect is the child process's own
+    `HOME`, since pi hardcodes `~/.pi/agent/models.json` with no dedicated
+    override. Separately, pi's `models` field must be an **array** of
+    `{id}` objects, not an object keyed by id (confirmed against pi's own
+    bundled `docs/models.md`) — the object shape silently loaded zero
+    models. Also needs an explicit `--model custom/<id>` on invocation.
+  - **grok: PASS, after the original recipe turned out to be flat-out
+    wrong**, not just unverified — the env-var recipe in this table's first
+    draft (`GROK_BASE_URL`/`XAI_API_KEY`/`GROK_MODEL`) produced "Not signed
+    in" against a real binary. Researched xAI's actual docs and corrected
+    to a `config.toml` with a `[model.<name>]` block redirected via
+    `GROK_HOME`, with the key riding as an `env_key`-named env var — then
+    confirmed working end-to-end.
+  - **omp: PASS**, after the same two fixes as pi (array-shaped `models`,
+    `HOME`-redirect instead of `PI_CONFIG_DIR`) plus `--model custom/<id>`.
+    Unverified against omp's own official docs (none are bundled in the
+    install), but empirically confirmed working live.
+  - **gemini: confirmed broken, unresolved after real investigation.**
+    Setting `GOOGLE_GEMINI_BASE_URL` makes gemini-cli internally select an
+    undocumented `AuthType.GATEWAY` path with validation requirements a
+    live run never satisfies (`Invalid auth method selected`, regardless of
+    key format). Tried and ruled out: a Google-format dummy key,
+    `GOOGLE_GENAI_USE_VERTEXAI=false`, a `GEMINI_DEFAULT_AUTH_TYPE`
+    override, and a hand-written `settings.json`. `--skip-trust` is a real,
+    separate fix for a different symptom (an untrusted-folder check
+    silently overriding `--approval-mode yolo`) and is kept, but does not
+    touch this auth failure. Left as an open, documented gap rather than
+    claimed as working.
+  - **deepseek: confirmed reaching the server, still failing, unresolved.**
+    A real run returns `dsh: HTTP_404: DeepSeek API error (HTTP 404)`
+    consistently — the env vars are read (the request reaches the network
+    rather than failing locally), but the root cause was not identified in
+    the time available. By analogy with codex's Responses-API gap, `dsh`
+    may expect DeepSeek's own API response shape rather than a generic
+    OpenAI-compatible one, but this was not confirmed by reading dsh's own
+    bundled source the way the pi/grok questions were resolved. Documented
+    as best-effort/unknown, matching its pre-existing lowest confidence tag.
   - **codex: real bug found and fixed.** The recipe's TOML shape
     (`[model].default`) was rejected by a real codex binary ("invalid
     type: map, expected a string") — codex wants a top-level `model`
@@ -193,7 +248,7 @@ test/routes/session-custom-model.test.ts test/routes/external-cli-bypass-clamp.t
     is a tooling-correctness fix (affects the script's own baseline check),
     not a claim about how any CLI's own HTTP client behaves.
   - **Also found and fixed**: an earlier design sent BOTH `Authorization:
-    Bearer` and `api-key` auth header conventions on every discovery/
+Bearer` and `api-key` auth header conventions on every discovery/
     baseline request, on the theory that an unused header is harmless.
     Live-tested against the real server, sending both reliably HUNG the
     request (reproduced 3×: either header alone ~500-600ms, both together
@@ -206,13 +261,33 @@ test/routes/session-custom-model.test.ts test/routes/external-cli-bypass-clamp.t
 
 ## Not yet done / open questions for review
 
-- Six of nine per-CLI recipes (Gemini, Pi, Grok, DeepSeek, OMP) are
-  **web-researched, not verified** against real binaries — see the
-  confidence table in `deployment_plan.md`. Antigravity has no known
-  mechanism at all and stays unsupported.
-- Chunk 5's session-restart design needs a careful look before
-  implementation: switching a session's endpoint restarts its CLI process
-  in place (confirmed acceptable with the maintainer — these harnesses
-  read endpoint config at process start, not per-turn).
+- **Chunk 6 (frontend)** — settings group, toolbar picker, tab badge — is
+  still entirely unbuilt; the feature is currently HTTP-API-only (see
+  `docs/custom-model-endpoints.md`).
+- **Gemini is confirmed broken end-to-end** (`Invalid auth method
+  selected`, traced to an undocumented `GATEWAY` AuthType gemini-cli
+  selects once `GOOGLE_GEMINI_BASE_URL` is set) — needs upstream
+  investigation before it can be called supported. Documented in full in
+  `deployment_plan.md`'s confidence table rather than silently shipped as
+  working.
+- **DeepSeek is confirmed reaching the server but failing** with a
+  consistent `HTTP_404`, root cause not identified — documented as
+  best-effort/unknown, same as its pre-existing lowest confidence tag.
+- **Codex cannot work against a plain OpenAI-Chat-Completions server**
+  (llama.cpp/llama-swap/Ollama/vLLM's default) — it only speaks the
+  Responses API since Feb 2026. This is an external protocol
+  incompatibility, not something this PR can fix; codex support is real
+  only against a Responses-API-compatible endpoint.
+- Antigravity has no known mechanism at all and stays unsupported.
+- Chunk 5's session-restart design needs a careful look before merge:
+  switching a session's endpoint restarts its CLI process in place
+  (confirmed acceptable with the maintainer — these harnesses read
+  endpoint config at process start, not per-turn). Whether an INTERACTIVE
+  claude session with a custom model hits the same async-title-generation
+  hang the standalone script worked around with `--bare` (vs. just a
+  harmless background warning) is untested and should be checked before
+  calling claude's chunk 5 support done — `--bare` itself must never be
+  applied to a real interactive session, since it disables hooks Codeman
+  depends on.
 
 🤖 Generated with [Claude Code](https://claude.com/claude-code)

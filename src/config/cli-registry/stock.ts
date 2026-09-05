@@ -749,20 +749,30 @@ const PI: CliEntry = {
     // just answer "yes" to, so omitting --approve is not itself a clamp — MATERIALIZE
     // approveProjectTrust:false so buildPiCommand emits --no-approve outright.
     privilegedParams: [{ param: 'approveProjectTrust', clampTo: false, materializeWhenAbsent: true }],
-    // Web-researched, unverified. pi's models.json hot-reloads, but this feature always
-    // restarts the CLI on switch for consistency with the other 8 harnesses. Written to an
-    // isolated PI_CONFIG_DIR so the user's real ~/.pi/agent/models.json is never touched.
+    // CORRECTED after live-testing: `PI_CONFIG_DIR` does NOT exist anywhere in pi's own
+    // bundled source (grepped the installed package directly) — it does nothing for pi
+    // itself, despite being a real Codeman env var that OTHER things (omp) read. The
+    // confirmed working redirect is `HOME` itself: pi hardcodes `~/.pi/agent/models.json`
+    // with no dedicated override, so redirecting the CHILD PROCESS's HOME is what
+    // actually relocates it (verified: a model written under an isolated HOME's
+    // `.pi/agent/models.json` shows up in `pi --list-models` and answers a real prompt
+    // against a real llama-swap server; PI_CONFIG_DIR alone left it silently unable to
+    // see any provider). ⚠️ This is a bigger blast radius than a dedicated config-dir
+    // var: it also redirects pi's real sessions/auth/extensions for the DURATION of a
+    // custom-model session, not just its provider config — document this trade-off
+    // wherever this capability is surfaced.
     customModelInjection: {
       kind: 'configDir',
-      dirEnvVar: 'PI_CONFIG_DIR',
-      fileName: 'agent/models.json',
+      dirEnvVar: 'HOME',
+      fileName: '.pi/agent/models.json',
       template: 'pi-models-json',
     },
-    // PI_CONFIG_DIR already matches the PI_ allowedPrefix above, so it was ALREADY
-    // reachable via plain envOverrides before this feature existed — and pi executes
-    // repo-local .pi/extensions TypeScript (see the External CLI modes note in CLAUDE.md),
-    // so redirecting this dir is a code-execution surface, not just a config swap.
-    privilegedEnvKeys: ['PI_CONFIG_DIR'],
+    // HOME is not `PI_`-prefixed, so unlike the old (wrong) PI_CONFIG_DIR guess this was
+    // never reachable via the generic envOverrides allowlist at all — listed here anyway,
+    // matching the documented pattern for every other CLI's dir-redirect var, since a
+    // redirected HOME is at least as sensitive as CODEX_HOME/GROK_HOME (pi executes
+    // repo-local .pi/extensions TypeScript — see the External CLI modes note in CLAUDE.md).
+    privilegedEnvKeys: ['HOME'],
   },
   overlays: {
     credStore: {
@@ -858,16 +868,24 @@ const GROK: CliEntry = {
     // already its safe interactive ask-mode, so the multi-user clamp only needs to force an
     // EXPLICITLY-SENT bypass flag back off — nothing is materialized when config is absent.
     privilegedParams: [{ param: 'alwaysApprove', clampTo: false }],
-    // Web-researched, unverified.
+    // CORRECTED after live-testing against a real grok binary: the original `env` kind
+    // (GROK_BASE_URL/GROK_MODEL/XAI_API_KEY) produced "Not signed in" — those env vars
+    // are NOT grok's real custom-endpoint mechanism. The real one (verified against
+    // xAI's own docs) is a `[model.<name>]` block in a config.toml under GROK_HOME,
+    // the same configDir shape as codex/pi/omp. `api_backend = "chat_completions"` is
+    // explicitly supported (unlike codex, which dropped it) — grok CAN talk to a plain
+    // OpenAI Chat-Completions server directly.
     customModelInjection: {
-      kind: 'env',
-      baseUrlVar: 'GROK_BASE_URL',
-      apiKeyVar: 'XAI_API_KEY',
-      modelVars: ['GROK_MODEL'],
+      kind: 'configDir',
+      dirEnvVar: 'GROK_HOME',
+      fileName: 'config.toml',
+      template: 'grok-toml',
     },
-    // All three already match the GROK_/XAI_ allowedPrefixes above, so they were ALREADY
-    // reachable via plain envOverrides before this feature existed.
-    privilegedEnvKeys: ['GROK_BASE_URL', 'XAI_API_KEY', 'GROK_MODEL'],
+    // GROK_HOME already matches the GROK_ allowedPrefix above, so it was ALREADY
+    // reachable via plain envOverrides before this feature existed — same reasoning
+    // as CODEX_HOME: a redirected config dir can restate policy the argv-level
+    // `alwaysApprove` clamp above cannot see.
+    privilegedEnvKeys: ['GROK_HOME'],
   },
   overlays: {
     // ~/.grok also holds sessions/, memory/, downloads/ (the ~160MB binary), completions/,
@@ -1133,18 +1151,20 @@ const OMP: CliEntry = {
     // Where omp resolves its auth from. No known concrete exfiltration path today (omp
     // forwards no operator-held key into a pane), but a non-granted owner redirecting where
     // a shared multi-tenant deployment resolves auth is not something to allow silently.
-    // PI_CONFIG_DIR added for custom-model-injection.ts's omp recipe, which reuses pi's
-    // dir-redirect mechanism (see the customModelInjection comment below) — already
-    // reachable via the PI_ allowedPrefix (pi's own entry), so this closes the same
-    // pre-existing gap for an omp session that PI's own entry closes for a pi session.
-    privilegedEnvKeys: ['OMP_AUTH_BROKER_URL', 'OMP_AUTH_BROKER_TOKEN', 'PI_CONFIG_DIR'],
-    // Web-researched, unverified. omp's ~/.omp tree is itself relocatable via PI_CONFIG_DIR
-    // (see the DeepSeek/OMP note in CLAUDE.md), so this reuses that same redirect rather
-    // than inventing an OMP-specific dir env var.
+    // HOME added for custom-model-injection.ts's omp recipe (see below). Unlike pi,
+    // PI_CONFIG_DIR genuinely IS one of the env vars omp reads (per the DeepSeek/OMP
+    // note in CLAUDE.md) — but live-testing this feature found it did NOT relocate
+    // omp's model config the way expected, while redirecting HOME itself (like pi)
+    // worked immediately (verified end-to-end: a real "hello world" reply came back).
+    privilegedEnvKeys: ['OMP_AUTH_BROKER_URL', 'OMP_AUTH_BROKER_TOKEN', 'HOME'],
+    // Verified end-to-end against a real llama-swap server (live-tested, not just
+    // researched — a real "hello world" reply came back). Same HOME-redirect mechanism
+    // as pi (see its customModelInjection comment for the full reasoning) — omp hardcodes
+    // `~/.omp/agent/models.yml` with no dedicated config-dir override either.
     customModelInjection: {
       kind: 'configDir',
-      dirEnvVar: 'PI_CONFIG_DIR',
-      fileName: 'agent/models.yml',
+      dirEnvVar: 'HOME',
+      fileName: '.omp/agent/models.yml',
       template: 'omp-models-yml',
     },
   },

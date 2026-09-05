@@ -14,7 +14,7 @@
  * llama-swap server (a real "hello world" reply came back). `codex`'s
  * config.toml STRUCTURE is now verified (an earlier `[model].default` table
  * shape was rejected by a real codex binary with "invalid type: map,
- * expected a string" — caught by `scripts/test-local-llm-harnesses.mjs`),
+ * expected a string" — caught by `scripts/test-local-llm-harnesses.ts`),
  * but `wire_api = "responses"` is the only value codex still accepts
  * (support for `"chat"` was dropped in Feb 2026), and a plain OpenAI
  * Chat-Completions server (llama.cpp, llama-swap, most local setups) does
@@ -134,8 +134,12 @@ function renderConfigContent(
 
 const CODEX_API_KEY_ENV_VAR = 'CODEMAN_CUSTOM_MODEL_API_KEY';
 
+/** The `[model.<name>]` block name grok's config.toml uses for the injected model — also
+ *  what `-m <name>` in the standalone script's ONE_SHOT argv must reference to select it. */
+export const GROK_CUSTOM_MODEL_NAME = 'codeman-custom';
+
 function renderConfigFile(
-  template: 'codex-toml' | 'pi-models-json' | 'omp-models-yml',
+  template: 'codex-toml' | 'pi-models-json' | 'omp-models-yml' | 'grok-toml',
   endpoint: CustomModelEndpoint,
   modelId: string,
   apiKey: string
@@ -145,7 +149,7 @@ function renderConfigFile(
     case 'codex-toml': {
       // Verified against real codex (>= Feb 2026): `model` is a top-level STRING, never
       // a `[model].default` table — codex rejects that with "invalid type: map, expected
-      // a string" (caught by scripts/test-local-llm-harnesses.mjs against a real llama-swap
+      // a string" (caught by scripts/test-local-llm-harnesses.ts against a real llama-swap
       // server). The API key is NEVER a literal TOML field: codex's schema only supports
       // `env_key`, the NAME of an env var it reads the credential from at runtime, so the
       // actual value must ride along as an extra env var, never embedded in the file.
@@ -169,11 +173,23 @@ function renderConfigFile(
       return { content, extraEnv: { [CODEX_API_KEY_ENV_VAR]: apiKey } };
     }
     case 'pi-models-json':
+      // Verified against pi's OWN bundled docs (models.md): `models` is an ARRAY of
+      // `{id: "..."}` objects, NOT an object keyed by model id — the earlier shape here
+      // silently loaded zero models ("No models available"), confirmed live. `authHeader:
+      // true` is required too: pi does not automatically send `Authorization: Bearer
+      // <apiKey>` just because `apiKey` is set (per the same doc) — without it, a real
+      // (non-llama.cpp) endpoint that actually checks the key would reject every request.
       return {
         content: JSON.stringify(
           {
             providers: {
-              custom: { baseUrl, apiKey, api: 'openai-completions', models: { [modelId]: {} } },
+              custom: {
+                baseUrl,
+                apiKey,
+                api: 'openai-completions',
+                authHeader: true,
+                models: [{ id: modelId }],
+              },
             },
           },
           null,
@@ -181,8 +197,33 @@ function renderConfigFile(
         ),
       };
     case 'omp-models-yml':
+      // Mirrors the pi-models-json fix above (omp shares pi's config lineage per
+      // CLAUDE.md — it reads several of pi's own env vars): a flat list of bare model
+      // name strings under `models` is UNCONFIRMED against real omp docs (none are
+      // bundled with the binary) — this now matches pi's `{id: "..."}` object-list
+      // shape and adds `authHeader: true` on the same reasoning, but has not itself
+      // been live-tested the way pi's fix was. Verify before raising its confidence.
       return {
-        content: `providers:\n  custom:\n    baseUrl: ${quoted(baseUrl)}\n    apiKey: ${quoted(apiKey)}\n    models:\n      - ${quoted(modelId)}\n`,
+        content: `providers:\n  custom:\n    baseUrl: ${quoted(baseUrl)}\n    apiKey: ${quoted(apiKey)}\n    api: openai-completions\n    authHeader: true\n    models:\n      - id: ${quoted(modelId)}\n`,
       };
+    case 'grok-toml': {
+      // Verified against xAI's own docs (docs.x.ai/build/settings/reference): a
+      // `[model.<name>]` block, NOT plain env vars — an earlier `env`-kind recipe for
+      // grok was wrong, not just unverified (see the customModelInjection doc comment
+      // in cli-registry/types.ts). `api_backend = "chat_completions"` is explicitly
+      // supported (unlike codex, which dropped it after Feb 2026), so this one CAN
+      // talk to a plain OpenAI-compatible server directly. `env_key` reuses grok's own
+      // documented fallback var name (XAI_API_KEY) rather than inventing a new one.
+      const content = [
+        `[model.${GROK_CUSTOM_MODEL_NAME}]`,
+        `model = ${quoted(modelId)}`,
+        `base_url = ${quoted(baseUrl)}`,
+        `name = "Custom Endpoint"`,
+        `env_key = "XAI_API_KEY"`,
+        `api_backend = "chat_completions"`,
+        '',
+      ].join('\n');
+      return { content, extraEnv: { XAI_API_KEY: apiKey } };
+    }
   }
 }

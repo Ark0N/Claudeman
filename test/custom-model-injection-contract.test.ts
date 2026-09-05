@@ -12,7 +12,7 @@
  * proves "if the CLI honors its documented env/config contract, it will hit
  * the right endpoint with the right model." It does NOT prove the real CLI
  * binary actually reads that env var / config file the way its docs say —
- * that's still the job of `scripts/test-local-llm-harnesses.mjs` against a
+ * that's still the job of `scripts/test-local-llm-harnesses.ts` against a
  * real endpoint and real binaries. This suite catches regressions in
  * Codeman's own injection logic; it cannot catch a CLI changing its env-var
  * name in a future release.
@@ -142,16 +142,17 @@ describe('custom-model-injection contract (mock server)', () => {
     expect(mock.requests[0].headers.authorization).toBe('Bearer contract-test-key');
   });
 
-  // gemini/grok/deepseek's `env` kind passes the base URL through UNCHANGED (unlike
-  // opencode/codex/pi/omp, which build a structured config and explicitly append /v1) —
-  // matching Anthropic's own convention for claude's ANTHROPIC_BASE_URL, where the SDK
-  // appends the path itself. Whether each of these THREE CLIs' own OpenAI-compatible
+  // gemini/deepseek's `env` kind passes the base URL through UNCHANGED (unlike
+  // opencode/codex/pi/omp/grok, which build a structured config and explicitly append
+  // /v1) — matching Anthropic's own convention for claude's ANTHROPIC_BASE_URL, where the
+  // SDK appends the path itself. Whether each of these TWO CLIs' own OpenAI-compatible
   // client expects the var to already include /v1 (the common OpenAI-SDK convention) or
   // appends it itself is genuinely CLI-specific and UNVERIFIED (see the confidence table
   // in deployment_plan.md) — these tests model the common OpenAI-SDK convention (base_url
   // ends in /v1) since that's the more likely behavior for an OpenAI-compatible client,
   // but that assumption should be corrected here the moment it's checked against a real
-  // binary.
+  // binary. (grok WAS in this group too, until live-testing showed the whole `env` recipe
+  // was wrong for it — see its own test below.)
 
   it('gemini: GOOGLE_GEMINI_BASE_URL/GEMINI_API_KEY reach the mock', async () => {
     const injection = buildCustomModelInjection(entryOrThrow('gemini'), endpointFor(mock), 'qwen3');
@@ -168,15 +169,18 @@ describe('custom-model-injection contract (mock server)', () => {
     expect((mock.requests[0].body as { model: string }).model).toBe('qwen3');
   });
 
-  it('grok: GROK_BASE_URL/XAI_API_KEY reach the mock', async () => {
+  it('grok: config.toml [model.<name>] block base_url/env_key + extraEnv reach the mock over /v1/chat/completions', async () => {
     const injection = buildCustomModelInjection(entryOrThrow('grok'), endpointFor(mock), 'qwen3');
-    if (injection.kind !== 'env') throw new Error('unreachable');
+    if (injection.kind !== 'configDir') throw new Error('unreachable');
+    const toml = injection.files[0].content;
+    const baseUrl = /base_url = "([^"]+)"/.exec(toml)?.[1];
+    const model = /^model = "([^"]+)"/m.exec(toml)?.[1];
+    expect(baseUrl).toBe(`${mock.baseUrl}/v1`);
+    expect(model).toBe('qwen3');
+    expect(toml).toContain('api_backend = "chat_completions"');
+    expect(injection.extraEnv).toEqual({ XAI_API_KEY: 'contract-test-key' });
 
-    await callOpenAiCompat(
-      `${injection.envOverrides.GROK_BASE_URL}/v1`,
-      injection.envOverrides.XAI_API_KEY,
-      injection.envOverrides.GROK_MODEL
-    );
+    await callOpenAiCompat(baseUrl!, injection.extraEnv!.XAI_API_KEY, model!);
 
     expect(mock.requests[0].path).toBe('/v1/chat/completions');
     expect(mock.requests[0].headers.authorization).toBe('Bearer contract-test-key');

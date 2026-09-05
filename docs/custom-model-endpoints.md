@@ -81,15 +81,30 @@ pointed at.
 
 ## Confidence per harness
 
-Only Claude, opencode, and Codex have been verified against a real
-llama.cpp server by hand. Gemini, Pi, Grok, DeepSeek, and OMP's recipes are
-correct on their one-shot invocation flags (confirmed against real
-installed binaries' own `--help` output) but their env-var/config
-conventions for a _custom_ endpoint are still web-researched, not verified
-end-to-end — see the confidence table in `deployment_plan.md` before relying
-on one of those five in production. `scripts/test-local-llm-harnesses.mjs`
-is the standalone script used to check a harness against a real endpoint
-outside the web UI entirely; see its own `--help` for usage.
+Every harness except Antigravity has now been run end-to-end against a real
+llama-swap server via `scripts/test-local-llm-harnesses.ts` (a dynamic
+script that reads the live CLI registry, so a registry change is picked up
+automatically). Results:
+
+- **Claude, opencode, Pi, Grok, OMP** — verified: a real "hello world" reply
+  came back through the endpoint.
+- **Codex** — the config is structurally correct, but Codex only speaks the
+  Responses API since Feb 2026, which llama.cpp/llama-swap don't implement.
+  This is a real protocol incompatibility, not a bug here; Codex support
+  needs a Responses-API-compatible endpoint.
+- **Gemini** — fails with `Invalid auth method selected`, traced to an
+  undocumented `GATEWAY` auth path gemini-cli selects once
+  `GOOGLE_GEMINI_BASE_URL` is set. Unresolved after real investigation
+  (several auth workarounds were tried and ruled out); do not rely on
+  Gemini support yet.
+- **DeepSeek** — the request reaches the server (env vars are read) but
+  gets a consistent `HTTP_404`. Root cause not identified; best-effort only.
+- **Antigravity** — no known custom-endpoint mechanism at all; unsupported.
+
+See the confidence table in `deployment_plan.md` for the full detail behind
+each result. `scripts/test-local-llm-harnesses.ts` is the standalone script
+used to check a harness against a real endpoint outside the web UI
+entirely; see its own `--help` for usage.
 
 ## Security note
 

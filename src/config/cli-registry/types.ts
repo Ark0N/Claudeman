@@ -452,9 +452,18 @@ export interface CliCapabilities {
    * carried in one env var (opencode's `OPENCODE_CONFIG_CONTENT`).
    * `configDir`: a generated config file under an isolated, dir-redirect-env-
    * pointed directory so the user's real CLI config is never touched
-   * (codex's `CODEX_HOME`/`config.toml`, pi/omp's `PI_CONFIG_DIR`).
-   * `unsupported`: no known mechanism (antigravity) — the toolbar entry
-   * stays disabled for this CLI.
+   * (codex's `CODEX_HOME`/`config.toml`, pi/omp's `PI_CONFIG_DIR`, grok's
+   * `GROK_HOME`/`config.toml`). `unsupported`: no known mechanism
+   * (antigravity) — the toolbar entry stays disabled for this CLI.
+   *
+   * ⚠️ grok was ORIGINALLY declared as `env` kind (`GROK_BASE_URL`/
+   * `GROK_MODEL`/`XAI_API_KEY`) — that recipe was WRONG, not just unverified:
+   * live-tested against a real grok binary, it produced "Not signed in",
+   * because those env vars are not grok's real custom-endpoint mechanism at
+   * all. The real one is a `[model.<name>]` block in a `config.toml` under
+   * `GROK_HOME` (verified against xAI's own docs), same shape as codex/pi/
+   * omp — this is why the confidence table in deployment_plan.md exists:
+   * "researched" web docs can still be plausible-sounding and wrong.
    *
    * Every env var name this introduces that can redirect a session's
    * traffic MUST also appear in `privilegedEnvKeys` above, exactly like
@@ -469,7 +478,7 @@ export interface CliCapabilities {
         kind: 'configDir';
         dirEnvVar: string;
         fileName: string;
-        template: 'codex-toml' | 'pi-models-json' | 'omp-models-yml';
+        template: 'codex-toml' | 'pi-models-json' | 'omp-models-yml' | 'grok-toml';
       }
     | { kind: 'unsupported' };
 }
