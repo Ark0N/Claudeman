@@ -56,6 +56,7 @@ const MOBILE_OVERVIEW_RUN_MODES = [
   { mode: 'pi', label: 'Pi', short: 'Pi' },
   { mode: 'grok', label: 'Grok', short: 'Grok' },
   { mode: 'deepseek', label: 'DeepSeek', short: 'DeepSeek' },
+  { mode: 'omp', label: 'OMP', short: 'OMP' },
   { mode: 'shell', label: 'Terminal / Shell', short: 'Shell' },
 ];
 
@@ -388,7 +389,7 @@ Object.assign(CodemanApp.prototype, {
   async resumeMobileOverviewSession(sessionId) {
     const row = (this._mobileOverviewPastRows || []).find((r) => r.id === sessionId);
     if (!row || !row.workingDir) return;
-    await this.resumeHistorySession(row.claudeSessionId || row.id, row.workingDir, row.name || undefined);
+    await this.resumeHistorySession(row.claudeSessionId || row.id, row.workingDir, row.name || undefined, row.mode);
   },
 
   // ═══════════════════════════════════════════════════════════════

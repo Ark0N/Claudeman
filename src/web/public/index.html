@@ -452,6 +452,10 @@
               <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><polygon points="5 3 19 12 5 21 5 3"/></svg>
               Run DeepSeek
             </button>
+            <button class="welcome-btn welcome-btn-omp" id="welcomeOmpBtn" style="display: none;" onclick="app.setRunMode('omp'); app.runOmp()">
+              <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><polygon points="5 3 19 12 5 21 5 3"/></svg>
+              Run OMP
+            </button>
           </div>
           <div class="welcome-qr" id="welcomeQr" onclick="app.toggleWelcomeQrSize()">
             <div class="welcome-qr-inner" id="welcomeQrInner"></div>
@@ -642,6 +646,9 @@
                    not a greyed-out entry the user cannot act on. -->
               <button class="run-mode-option run-mode-option-install" data-action="deepseek-install" id="runModeDeepSeekInstall" style="display: none;" onclick="app.installDeepSeekProfile()">
                 <span class="run-mode-dot deepseek"></span>DeepSeek — add a terminal profile…
+              </button>
+              <button class="run-mode-option" data-mode="omp" onclick="app.setRunMode('omp')">
+                <span class="run-mode-dot omp"></span>OMP
               </button>
               <div class="run-mode-sep"></div>
               <button class="run-mode-option" data-mode="shell" onclick="app.setRunMode('shell')">
@@ -930,6 +937,7 @@
                 <option value="pi">Pi</option>
                 <option value="grok">Grok</option>
                 <option value="deepseek">DeepSeek</option>
+                <option value="omp">OMP</option>
               </select>
             </div>
             <div class="form-row"><label>Working Directory</label><input type="text" id="schWorkingDir" placeholder="/absolute/path"></div>
@@ -2020,6 +2028,8 @@
                   <div class="set-modelgrid" id="appSettingsModelCards" role="radiogroup" aria-label="Model for new Claude sessions" data-search="model opus sonnet haiku fable claude"></div>
                   <select id="appSettingsClaudeModel" class="set-select set-field-hidden" aria-hidden="true" tabindex="-1">
                     <option value="" data-meta="Whatever the CLI picks">Default (CLI setting)</option>
+                    <option value="claude-fable-5-1" data-meta="Latest" data-base="claude-fable-5-1" data-ctx="1">Fable 5.1</option>
+                    <option value="claude-fable-5-1[1m]" data-variant="1m" data-base="claude-fable-5-1">Fable 5.1 (1M context)</option>
                     <option value="claude-fable-5" data-meta="Most powerful" data-base="claude-fable-5" data-ctx="1">Fable 5</option>
                     <option value="claude-fable-5[1m]" data-variant="1m" data-base="claude-fable-5">Fable 5 (1M context)</option>
                     <option value="opus" data-meta="Most capable" data-base="opus" data-ctx="1">Opus</option>
@@ -2032,7 +2042,7 @@
                   <div class="set-row" id="appSettingsContextRow" data-search="1m context window opus long">
                     <div class="set-row-text">
                       <span class="set-row-label">1M context window</span>
-                      <span class="set-row-desc" id="appSettingsContextDesc">Available for Fable 5, Opus and Opus 4.6.</span>
+                      <span class="set-row-desc" id="appSettingsContextDesc">Available for Fable 5.1, Fable 5, Opus and Opus 4.6.</span>
                     </div>
                     <label class="switch switch-sm"><input type="checkbox" id="appSettingsOpusContext1m"><span class="slider"></span></label>
                   </div>
@@ -2072,6 +2082,7 @@
                     </div>
                     <select id="appSettingsDefaultModel" class="set-select">
                       <option value="">Default (CLI default)</option>
+                      <option value="claude-fable-5-1">Fable 5.1 (Latest)</option>
                       <option value="claude-fable-5">Fable 5 (Most powerful)</option>
                       <option value="opus">Opus (Most capable)</option>
                       <option value="sonnet">Sonnet (Balanced)</option>
@@ -2086,6 +2097,7 @@
                         <option value="haiku">Haiku</option>
                         <option value="sonnet">Sonnet</option>
                         <option value="opus">Opus</option>
+                        <option value="claude-fable-5-1">Fable 5.1</option>
                         <option value="claude-fable-5">Fable 5</option>
                       </select>
                     </div>
@@ -2096,6 +2108,7 @@
                         <option value="haiku">Haiku</option>
                         <option value="sonnet">Sonnet</option>
                         <option value="opus">Opus</option>
+                        <option value="claude-fable-5-1">Fable 5.1</option>
                         <option value="claude-fable-5">Fable 5</option>
                       </select>
                     </div>
@@ -2106,6 +2119,7 @@
                         <option value="haiku">Haiku</option>
                         <option value="sonnet">Sonnet</option>
                         <option value="opus">Opus</option>
+                        <option value="claude-fable-5-1">Fable 5.1</option>
                         <option value="claude-fable-5">Fable 5</option>
                       </select>
                     </div>
@@ -2116,6 +2130,7 @@
                         <option value="haiku">Haiku</option>
                         <option value="sonnet">Sonnet</option>
                         <option value="opus">Opus</option>
+                        <option value="claude-fable-5-1">Fable 5.1</option>
                         <option value="claude-fable-5">Fable 5</option>
                       </select>
                     </div>
@@ -2710,6 +2725,7 @@
                 <option value="pi" data-cli="pi">Pi</option>
                 <option value="grok" data-cli="grok">Grok</option>
                 <option value="deepseek" data-cli="deepseek">DeepSeek</option>
+                <option value="omp" data-cli="omp">OMP</option>
                 <option value="shell">Shell (no agent)</option>
               </select>
               <span class="form-hint">Which CLI to point the Run button at once the clone finishes. Changeable any time from the Run dropdown.</span>

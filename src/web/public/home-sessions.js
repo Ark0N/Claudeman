@@ -80,6 +80,7 @@ const HOME_SESSIONS_MODE_BADGE = {
   pi: 'pi',
   grok: 'gk',
   deepseek: 'ds',
+  omp: 'om',
 };
 
 Object.assign(CodemanApp.prototype, {

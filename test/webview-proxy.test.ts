@@ -653,3 +653,34 @@ describe('misc helpers', () => {
     expect(proxyPrefixFor(CAP)).toBe(PREFIX);
   });
 });
+
+describe('referrer policy on proxied responses', () => {
+  const CAP = 'c'.repeat(32);
+  const requestUrl = new URL('http://127.0.0.1:4000/');
+
+  it('stamps same-origin and drops the upstream policy, so the capability in the URL never reaches a third party', () => {
+    const { headers } = buildDownstreamResponseHeaders(
+      [
+        ['referrer-policy', 'unsafe-url'],
+        ['content-type', 'text/html'],
+      ],
+      [],
+      CAP,
+      requestUrl,
+      false
+    );
+    expect(headers['referrer-policy']).toBe('same-origin');
+    expect(headers['content-type']).toBe('text/html');
+  });
+
+  it('stamps it even when the upstream sent none (the browser default would still leak on a downgrade-style policy)', () => {
+    const { headers } = buildDownstreamResponseHeaders(
+      [['content-type', 'application/json']],
+      [],
+      CAP,
+      requestUrl,
+      false
+    );
+    expect(headers['referrer-policy']).toBe('same-origin');
+  });
+});

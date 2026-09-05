@@ -16,6 +16,15 @@
  * tested, and IO wrappers (`getInstallInfo`, `checkForUpdate`, `startUpdate`,
  * `reconcileUpdateOnBoot`) that touch git/network/fs.
  *
+ * DOCKER COMPOSE installs update in place too, through the same script and the
+ * same status file. The repo is a host bind mount, so the pull/build land on the
+ * host filesystem and survive container recreation; the "restart" is the server
+ * EXITING so the container's restart policy relaunches it on the new `dist/`.
+ * That applies CODE only — a restart reuses the existing container's image and
+ * config — so `evaluateEnvironmentGate()` refuses a release that changes
+ * `server.Dockerfile`, `docker-compose.yaml` or `.env.example`, pointing at the
+ * host command instead. See `docs/docker-self-update.md`.
+ *
  * Related: `src/types/update.ts`, `scripts/self-update.sh`, routes in
  * `src/web/routes/system-routes.ts`.
  *
@@ -26,13 +35,15 @@ import { spawn, execFileSync } from 'node:child_process';
 import { existsSync, readFileSync, writeFileSync, renameSync, copyFileSync, chmodSync } from 'node:fs';
 import { dirname, join } from 'node:path';
 import { fileURLToPath } from 'node:url';
-import { homedir, tmpdir } from 'node:os';
-import { randomUUID } from 'node:crypto';
+import { homedir, hostname, tmpdir } from 'node:os';
+import { randomUUID, createHash } from 'node:crypto';
 import { createRequire } from 'node:module';
 import { dataPath } from '../config/instance.js';
 import { LAUNCHD_LABEL, SYSTEMD_UNIT } from '../config/service-names.js';
 import { EXEC_TIMEOUT_MS } from '../config/exec-timeout.js';
 import type {
+  EnvironmentBlocker,
+  EnvironmentGate,
   InstallInfo,
   InstallKind,
   SupervisorKind,
@@ -216,6 +227,139 @@ export function reconcileStatusDecision(
 }
 
 // ─────────────────────────────────────────────────────────────────────────────
+// PURE helpers — the container environment gate
+// ─────────────────────────────────────────────────────────────────────────────
+
+/** Host command that resolves every environment blocker. */
+export const DOCKER_HOST_UPDATE_COMMAND = 'docker/Start-Codeman.sh';
+
+/**
+ * Parse the SET keys out of a dotenv file. Commented-out lines are deliberately
+ * NOT keys: `docker/.env.example` uses `# PUID=1000` to document an OPTIONAL
+ * override, so treating those as required would block every update on settings
+ * the user is meant to leave alone.
+ */
+export function parseEnvKeys(text: string): string[] {
+  const keys: string[] = [];
+  for (const raw of text.split(/\r?\n/)) {
+    const line = raw.trim();
+    if (!line || line.startsWith('#')) continue;
+    const m = line.replace(/^export\s+/, '').match(/^([A-Za-z_][A-Za-z0-9_]*)\s*=/);
+    if (m && !keys.includes(m[1])) keys.push(m[1]);
+  }
+  return keys;
+}
+
+/**
+ * Keys the TARGET release's `.env.example` sets that the user's `.env` does not.
+ *
+ * This is the check that makes a new required setting visible: Compose resolves
+ * an unset `${VAR}` to the empty string and starts anyway, so a missing key is
+ * otherwise silent until something misbehaves at runtime.
+ */
+export function diffRequiredEnvKeys(targetExample: string, userEnv: string): string[] {
+  const have = new Set(parseEnvKeys(userEnv));
+  return parseEnvKeys(targetExample).filter((k) => !have.has(k));
+}
+
+/**
+ * True when the container's restart policy relaunches it after the server exits.
+ * `no` and an empty policy mean an in-place update would take Codeman DOWN
+ * rather than restart it, so the update is refused instead.
+ */
+export function isAutoRestartPolicy(name: string | null | undefined): boolean {
+  return name === 'always' || name === 'unless-stopped' || name === 'on-failure';
+}
+
+/**
+ * PURE: may the container updater restart the server by exiting? Yes when the
+ * Compose file declared it (`CODEMAN_RESTART_BY_EXIT=1`, set only there, since
+ * that file is what sets `restart: unless-stopped`) or when the daemon reports an
+ * auto-restart policy. Otherwise the answer is NO, and the updater stages the
+ * build and asks for a manual restart instead of exiting: an unknown policy is
+ * fine to fail open in the GATE (refusing would block installs with no socket),
+ * but the kill itself must not fail open, or a container the daemon would not
+ * bring back goes down with no UI left to recover it from.
+ */
+export function shouldRestartByExit(declared: boolean, restartPolicy: string | null): boolean {
+  return declared || isAutoRestartPolicy(restartPolicy);
+}
+
+/** The Compose file's declaration that exiting relaunches this container. */
+export function restartByExitDeclared(): boolean {
+  return process.env.CODEMAN_RESTART_BY_EXIT === '1';
+}
+
+export interface EnvironmentGateInput {
+  /** sha256 of `docker/server.Dockerfile` the running container was built from. */
+  appliedDockerfileHash: string | null;
+  /** sha256 of `docker/server.Dockerfile` at the target release tag. */
+  targetDockerfileHash: string | null;
+  /** sha256 of `docker/docker-compose.yaml` the running container was created from. */
+  appliedComposeHash: string | null;
+  /** sha256 of `docker/docker-compose.yaml` at the target release tag. */
+  targetComposeHash: string | null;
+  /** Keys from `diffRequiredEnvKeys()`. */
+  missingEnvKeys: string[];
+  /** Docker restart policy name of the running container, or null if unknown. */
+  restartPolicy: string | null;
+}
+
+/**
+ * PURE gate decision. An in-place container update applies CODE only: the server
+ * exits and the container's restart policy relaunches it on the new `dist/`. A
+ * restart reuses the existing container's image and config, so anything that
+ * changes the ENVIRONMENT cannot take effect that way and is refused here with
+ * the host command that can apply it.
+ *
+ * ⚠️ An unknown hash (null) is NOT treated as "changed": a first update from a
+ * container created before the fingerprint file existed has no baseline, and
+ * failing closed there would block every such install from ever updating. The
+ * baseline is written by `Start-Codeman.sh`, so it exists from the first
+ * host-side start onward. An unknown restart policy is likewise not a blocker —
+ * the shipped Compose file sets `unless-stopped`, and the probe needs the Docker
+ * socket, which a user may not have mounted.
+ */
+export function computeEnvironmentBlockers(input: EnvironmentGateInput): EnvironmentBlocker[] {
+  const blockers: EnvironmentBlocker[] = [];
+
+  if (
+    input.appliedDockerfileHash &&
+    input.targetDockerfileHash &&
+    input.appliedDockerfileHash !== input.targetDockerfileHash
+  ) {
+    blockers.push({
+      kind: 'dockerfile-changed',
+      message: 'This release changes docker/server.Dockerfile, so the image must be rebuilt.',
+    });
+  }
+
+  if (input.appliedComposeHash && input.targetComposeHash && input.appliedComposeHash !== input.targetComposeHash) {
+    blockers.push({
+      kind: 'compose-changed',
+      message: 'This release changes docker/docker-compose.yaml, so the container must be recreated.',
+    });
+  }
+
+  if (input.missingEnvKeys.length > 0) {
+    blockers.push({
+      kind: 'env-keys-missing',
+      message: `This release adds ${input.missingEnvKeys.length} setting(s) your docker/.env has no value for.`,
+      details: input.missingEnvKeys,
+    });
+  }
+
+  if (input.restartPolicy !== null && !isAutoRestartPolicy(input.restartPolicy)) {
+    blockers.push({
+      kind: 'no-auto-restart',
+      message: `This container's restart policy is "${input.restartPolicy}", so it would not come back after the update.`,
+    });
+  }
+
+  return blockers;
+}
+
+// ─────────────────────────────────────────────────────────────────────────────
 // Status file IO
 // ─────────────────────────────────────────────────────────────────────────────
 
@@ -273,11 +417,136 @@ export function resolveInstallDir(): string {
   return process.cwd();
 }
 
+/**
+ * True when this process runs inside a container. `/.dockerenv` is created by the
+ * Docker daemon itself; the env var is set by our own Compose file so the check
+ * also holds under runtimes that omit that file.
+ */
+export function isRunningInContainer(): boolean {
+  return process.env.CODEMAN_IN_CONTAINER === '1' || existsSync('/.dockerenv');
+}
+
 function detectInstallKind(dir: string): InstallKind {
-  if (existsSync(join(dir, '.git'))) return 'git';
+  // A container whose code is a bind-mounted checkout updates in place (the pull
+  // and build land on the host filesystem and survive container recreation). A
+  // container WITHOUT that mount runs a baked image copy — a pull there would go
+  // to the writable layer and vanish on the next `up`, so it is not updatable.
+  if (existsSync(join(dir, '.git'))) return isRunningInContainer() ? 'docker-compose' : 'git';
   // Global npm install ships only dist/ (no src/, no .git).
   if (!existsSync(join(dir, 'src'))) return 'npm';
   return 'unknown';
+}
+
+/** Install kinds whose update is applied in place by `scripts/self-update.sh`. */
+export function canSelfUpdateInPlace(kind: InstallKind): boolean {
+  return kind === 'git' || kind === 'docker-compose';
+}
+
+/** Path of the fingerprint baseline written by `docker/Start-Codeman.sh`. */
+const DOCKER_ENV_APPLIED_FILE = dataPath('docker-env-applied.json');
+
+/** Files whose content defines the container ENVIRONMENT (vs. the app's code). */
+const DOCKERFILE_REL = 'docker/server.Dockerfile';
+const COMPOSE_REL = 'docker/docker-compose.yaml';
+const ENV_EXAMPLE_REL = 'docker/.env.example';
+const ENV_REL = 'docker/.env';
+
+function sha256(text: string): string {
+  return createHash('sha256').update(text, 'utf-8').digest('hex');
+}
+
+/** Read a file at a git TAG without checking it out (`git show tag:path`). */
+function gitShowAtTag(repo: string, tag: string, relPath: string): string | null {
+  return tryExec('git', ['show', `${tag}:${relPath}`], repo);
+}
+
+function readFileOrNull(path: string): string | null {
+  try {
+    return readFileSync(path, 'utf-8');
+  } catch {
+    return null;
+  }
+}
+
+/**
+ * The fingerprints the RUNNING container was created from, recorded on the host
+ * by `Start-Codeman.sh` at each build/recreate. Returns nulls when absent (a
+ * container started before this file existed) — `computeEnvironmentBlockers()`
+ * deliberately treats an unknown baseline as "not a blocker".
+ */
+function readAppliedEnvironmentFingerprints(): { dockerfile: string | null; compose: string | null } {
+  const raw = readFileOrNull(DOCKER_ENV_APPLIED_FILE);
+  if (!raw) return { dockerfile: null, compose: null };
+  try {
+    const parsed = JSON.parse(raw) as { dockerfileSha256?: string; composeSha256?: string };
+    return { dockerfile: parsed.dockerfileSha256 ?? null, compose: parsed.composeSha256 ?? null };
+  } catch {
+    return { dockerfile: null, compose: null };
+  }
+}
+
+/**
+ * Restart policy of the container we're running in, via the mounted Docker
+ * socket. Returns null when the socket or CLI is unavailable — an unknown policy
+ * is not a blocker (see `computeEnvironmentBlockers`).
+ */
+function detectOwnRestartPolicy(): string | null {
+  // Docker sets HOSTNAME to the short container id; os.hostname() is the same
+  // value when the env var is absent. A custom `hostname:` in the compose file
+  // makes both unresolvable to the daemon, which fails open (unknown is not a
+  // blocker) rather than refusing an update over a cosmetic setting.
+  const id = process.env.HOSTNAME || hostname();
+  if (!id) return null;
+  const out = tryExec('docker', ['inspect', '--format', '{{.HostConfig.RestartPolicy.Name}}', id]);
+  return out && out.length > 0 ? out : null;
+}
+
+/**
+ * Evaluate the environment gate for a candidate release tag. Reads the TARGET
+ * tag's files straight out of git (`git show`), so nothing is checked out and the
+ * answer is available at CHECK time — the UI can refuse before the user commits
+ * to an update.
+ */
+export function evaluateEnvironmentGate(installDir: string, tag: string): EnvironmentGate {
+  // `git show <tag>:<path>` needs the tag's objects locally, and neither the
+  // GitHub API nor `ls-remote` fetches anything — so a check that has never seen
+  // this tag would read nothing and report a falsely clean gate. Fetch the one
+  // ref first (cheap: it deltas against what the clone already has) and only
+  // then read. The updater fetches the same ref again; both are idempotent.
+  if (tryExec('git', ['rev-parse', '--verify', '--quiet', `${tag}^{commit}`], installDir) === null) {
+    tryExec(
+      'git',
+      ['fetch', '--tags', '--force', 'origin', `refs/tags/${tag}:refs/tags/${tag}`],
+      installDir,
+      CHECK_TIMEOUT_MS
+    );
+  }
+
+  const targetDockerfile = gitShowAtTag(installDir, tag, DOCKERFILE_REL);
+  const targetCompose = gitShowAtTag(installDir, tag, COMPOSE_REL);
+  const targetExample = gitShowAtTag(installDir, tag, ENV_EXAMPLE_REL);
+
+  // No environment files at the target tag at all: we cannot judge, so say so
+  // rather than reporting a clean gate the caller would trust.
+  if (targetDockerfile === null && targetCompose === null && targetExample === null) {
+    return { checked: false, blockers: [], hostCommand: DOCKER_HOST_UPDATE_COMMAND };
+  }
+
+  const applied = readAppliedEnvironmentFingerprints();
+  const userEnv = readFileOrNull(join(installDir, ENV_REL));
+
+  const blockers = computeEnvironmentBlockers({
+    appliedDockerfileHash: applied.dockerfile,
+    targetDockerfileHash: targetDockerfile === null ? null : sha256(targetDockerfile),
+    appliedComposeHash: applied.compose,
+    targetComposeHash: targetCompose === null ? null : sha256(targetCompose),
+    // A missing/unreadable .env cannot be diffed — report no missing keys rather
+    // than every key, which would block on an install using a non-standard path.
+    missingEnvKeys: targetExample !== null && userEnv !== null ? diffRequiredEnvKeys(targetExample, userEnv) : [],
+    restartPolicy: detectOwnRestartPolicy(),
+  });
+
+  return { checked: true, blockers, hostCommand: DOCKER_HOST_UPDATE_COMMAND };
 }
 
 /**
@@ -286,6 +555,11 @@ function detectInstallKind(dir: string): InstallKind {
  * the detached child must not re-probe with a stripped-down environment.
  */
 export function detectSupervisor(): SupervisorKind {
+  // Checked FIRST: a container has no init system of its own, and its "restart"
+  // is the server exiting so the Docker restart policy relaunches it. Probing
+  // systemd here would find nothing and report `none`, which stages the update
+  // and then asks the user to restart by hand for no reason.
+  if (isRunningInContainer()) return 'docker-compose';
   if (process.platform === 'darwin') {
     if (existsSync(join(homedir(), 'Library', 'LaunchAgents', `${LAUNCHD_LABEL}.plist`))) return 'launchd';
     // Headless Macs (no GUI login → no gui domain) run Codeman as a system-level
@@ -389,9 +663,21 @@ export async function checkForUpdate(): Promise<UpdateCheckResult> {
     checkedAt,
     source: 'none',
   };
-  if (info.installKind !== 'git') {
-    return { ...base, error: 'Not a git install — self-update is unavailable.' };
+  if (!canSelfUpdateInPlace(info.installKind)) {
+    return {
+      ...base,
+      error:
+        info.installKind === 'unknown' && isRunningInContainer()
+          ? 'This container runs a baked image copy with no repository mounted — self-update is unavailable. See docs/docker-self-update.md.'
+          : 'Not a git install — self-update is unavailable.',
+    };
   }
+
+  /** Attach the container environment gate to a finished check result. */
+  const withGate = (result: UpdateCheckResult): UpdateCheckResult => {
+    if (info.installKind !== 'docker-compose' || !result.latestTag || !result.updateAvailable) return result;
+    return { ...result, environment: evaluateEnvironmentGate(info.installDir, result.latestTag) };
+  };
 
   const remote = tryExec('git', ['remote', 'get-url', 'origin'], info.installDir);
   const gh = remote ? parseGitHubRepo(remote) : null;
@@ -399,7 +685,7 @@ export async function checkForUpdate(): Promise<UpdateCheckResult> {
   if (gh) {
     const rel = await fetchLatestReleaseFromGitHub(gh.owner, gh.repo);
     if (rel) {
-      return {
+      return withGate({
         ...base,
         latestVersion: rel.version,
         latestTag: rel.tag,
@@ -407,20 +693,20 @@ export async function checkForUpdate(): Promise<UpdateCheckResult> {
         htmlUrl: rel.htmlUrl,
         updateAvailable: isNewerStableVersion(info.currentVersion, rel.version),
         source: 'github-api',
-      };
+      });
     }
   }
 
   // Fallback: enumerate remote tags directly (works for non-GitHub remotes too).
   const viaGit = fetchLatestTagViaGit(info.installDir);
   if (viaGit) {
-    return {
+    return withGate({
       ...base,
       latestVersion: viaGit.version,
       latestTag: viaGit.tag,
       updateAvailable: isNewerStableVersion(info.currentVersion, viaGit.version),
       source: 'git-ls-remote',
-    };
+    });
   }
 
   return { ...base, error: 'Could not reach the update server (GitHub API + git ls-remote both failed).' };
@@ -432,7 +718,11 @@ export async function checkForUpdate(): Promise<UpdateCheckResult> {
 
 export type StartUpdateResult =
   | { ok: true; updateId: string; toTag: string; toVersion: string | null }
-  | { ok: false; code: 'disabled' | 'not-git' | 'in-flight' | 'up-to-date' | 'bad-tag' | 'error'; message: string };
+  | {
+      ok: false;
+      code: 'disabled' | 'not-git' | 'in-flight' | 'up-to-date' | 'bad-tag' | 'env-blocked' | 'error';
+      message: string;
+    };
 
 /**
  * Copy the updater script OUT of the repo before running it. The script lives in
@@ -497,11 +787,13 @@ export async function startUpdate(): Promise<StartUpdateResult> {
   if (!info.selfUpdateEnabled) {
     return { ok: false, code: 'disabled', message: 'Self-update is disabled (CODEMAN_DISABLE_SELF_UPDATE=1).' };
   }
-  if (info.installKind !== 'git') {
+  if (!canSelfUpdateInPlace(info.installKind)) {
     return {
       ok: false,
       code: 'not-git',
-      message: 'This is not a git install. Update with: npm i -g aicodeman@latest',
+      message: isRunningInContainer()
+        ? 'This container has no repository mounted. Update from the host with docker/Start-Codeman.sh.'
+        : 'This is not a git install. Update with: npm i -g aicodeman@latest',
     };
   }
   const existing = readUpdateStatus();
@@ -515,6 +807,20 @@ export async function startUpdate(): Promise<StartUpdateResult> {
   }
   if (!isValidReleaseTag(check.latestTag)) {
     return { ok: false, code: 'bad-tag', message: `Refusing to update to an unrecognized tag: ${check.latestTag}` };
+  }
+
+  // Re-evaluate rather than trusting the check the browser saw: the UI hides the
+  // button when the gate blocks, but the endpoint is reachable directly and the
+  // release could have moved between the check and the click.
+  if (info.installKind === 'docker-compose') {
+    const gate = evaluateEnvironmentGate(info.installDir, check.latestTag);
+    if (gate.blockers.length > 0) {
+      return {
+        ok: false,
+        code: 'env-blocked',
+        message: `${gate.blockers.map((b) => b.message).join(' ')} Run ${gate.hostCommand} on the Docker host to apply this release.`,
+      };
+    }
   }
 
   const prevSha = tryExec('git', ['rev-parse', 'HEAD'], info.installDir);
@@ -558,11 +864,18 @@ export async function startUpdate(): Promise<StartUpdateResult> {
     process.execPath,
     '--log',
     logFile,
-    // For the launchd-daemon restart path: the updater kills this PID and the
-    // KeepAlive daemon respawns the server on the freshly built dist/.
+    // For the launchd-daemon and docker-compose restart paths: the updater kills
+    // this PID and the supervisor (KeepAlive daemon / Docker restart policy)
+    // respawns the server on the freshly built dist/.
     '--server-pid',
     String(process.pid),
   ];
+  if (info.supervisor === 'docker-compose') {
+    // Decided HERE, where the Docker socket and the Compose env are reachable;
+    // the updater only reads the answer. Without a yes it never exits the server.
+    const byExit = shouldRestartByExit(restartByExitDeclared(), detectOwnRestartPolicy());
+    args.push('--restart-by-exit', byExit ? '1' : '0');
+  }
   if (prevSha) args.push('--prev-sha', prevSha);
   if (info.dirty) args.push('--stash');
 

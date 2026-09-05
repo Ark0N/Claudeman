@@ -5,7 +5,7 @@
 <h2 align="center">Mission control for AI coding agents</h2>
 
 <p align="center">
-  <em>Claude Code &bull; OpenCode &bull; Codex &bull; Antigravity &bull; Gemini &bull; Pi &bull; Grok &bull; Terminal - One Dashboard &bull; Any Device</em>
+  <em>Claude Code &bull; OpenCode &bull; Codex &bull; Antigravity &bull; Gemini &bull; Pi &bull; Grok &bull; OMP &bull; Terminal - One Dashboard &bull; Any Device</em>
 </p>
 
 <p align="center">
@@ -27,7 +27,7 @@
   <img src="docs/images/subagent-demo-20260724.gif" alt="Codeman — parallel subagent visualization" width="900">
 </p>
 
-**Codeman** is a self-hosted mission control for AI coding agents. It spawns Claude Code, OpenCode, Codex, Antigravity, Gemini, Pi, or Grok inside persistent tmux sessions, streams the real terminal to any browser, and keeps agents productive after you walk away: it re-prompts on idle, resumes when a usage limit resets, runs scheduled jobs, and shows every background agent working in real time.
+**Codeman** is a self-hosted mission control for AI coding agents. It spawns Claude Code, OpenCode, Codex, Antigravity, Gemini, Pi, Grok, or OMP inside persistent tmux sessions, streams the real terminal to any browser, and keeps agents productive after you walk away: it re-prompts on idle, resumes when a usage limit resets, runs scheduled jobs, and shows every background agent working in real time.
 
 Get started in one line (macOS & Linux, Windows via WSL):
 
@@ -42,7 +42,7 @@ codeman web
 
 The installer asks before every system change, and re-running the same line updates in place. Full details: [Quick Start - Installation](#quick-start---installation).
 
-- **One dashboard, seven CLIs** - run [Claude Code, OpenCode, Codex, Antigravity, Gemini, Pi, or Grok](#more-features) per session (plus plain shell), locally, [in Docker](#isolated-docker-sessions), or [over SSH](#remote-ssh-sessions)
+- **One dashboard, eight CLIs** - run [Claude Code, OpenCode, Codex, Antigravity, Gemini, Pi, Grok, or OMP](#more-features) per session (plus plain shell), locally, [in Docker](#isolated-docker-sessions), or [over SSH](#remote-ssh-sessions)
 - **Truly phone-friendly** - a [touch-optimized terminal](#mobile-optimized-web-ui) with instant local echo, QR login, swipe navigation, and push notifications
 - **Runs while you sleep** - [idle detection + respawn cycling](#respawn-controller) and auto-resume when a subscription limit resets, for 24+ hour unattended runs
 - **See your agents think** - [live floating windows](#live-agent-visualization) for every subagent and teammate, with real-time transcripts
@@ -68,7 +68,7 @@ This installs Node.js, tmux and a build toolchain if missing (node-pty ships no 
 - **Re-run to update.** The same one-liner updates a finished install in place: local changes in `~/.codeman/app` are stashed (never discarded), and a running service is restarted and verified. If a first install was interrupted, re-running resumes the full setup instead. `install.sh update` and `install.sh uninstall` also exist.
 - **CI / headless:** without a terminal attached, steps that would change your system abort with instructions instead of running silently. Set `CODEMAN_NONINTERACTIVE=1` to approve them for automation.
 
-You'll need at least one AI coding CLI installed — [Claude Code](https://docs.anthropic.com/en/docs/claude-code), [OpenCode](https://opencode.ai), [Codex](https://developers.openai.com/codex/cli), [Antigravity](https://antigravity.google), [Gemini CLI](https://github.com/google-gemini/gemini-cli), [Pi](https://pi.dev), or [Grok Build](https://github.com/xai-org/grok-build) (any combination works; Gemini CLI is enterprise-only since Google's consumer cutover, and Antigravity is its successor). The installer detects whichever of the seven is present; if none is found, it offers to install Claude Code or OpenCode, or you can skip and install one yourself later. After install:
+You'll need at least one AI coding CLI installed — [Claude Code](https://docs.anthropic.com/en/docs/claude-code), [OpenCode](https://opencode.ai), [Codex](https://developers.openai.com/codex/cli), [Antigravity](https://antigravity.google), [Gemini CLI](https://github.com/google-gemini/gemini-cli), [Pi](https://pi.dev), [Grok Build](https://github.com/xai-org/grok-build), [DeepSeek Harness](https://github.com/deepseek-ai/deepseek-harness), or [OMP](https://github.com/can1357/oh-my-pi) (any combination works; Gemini CLI is enterprise-only since Google's consumer cutover, and Antigravity is its successor). The installer detects whichever of the nine is present; if none is found, it offers to install Claude Code or OpenCode, or you can skip and install one yourself later. After install:
 
 ```bash
 codeman web
@@ -81,6 +81,8 @@ codeman web
 codeman users add alice --admin      # create the first admin account
 codeman web --multiuser              # named logins + per-user case spaces
 ```
+
+**Prefer Docker Compose?** A local-image Compose deployment ships in `docker/`: copy `docker/.env.example` to `docker/.env`, set `CODEMAN_PASSWORD`, then run `bash docker/Start-Codeman.sh` on Linux. Codeman runs in a container and spawns Docker cases as sibling containers through the host socket. See the [Docker deployment guide](docker/README.md) for direct Compose commands, storage and networking options.
 
 Details in [Multi-User Mode](#multi-user-mode-opt-in) below.
 
@@ -171,7 +173,7 @@ launchctl bootstrap gui/$(id -u) ~/Library/LaunchAgents/com.codeman.web.plist
 wsl bash -c "curl -fsSL https://getcodeman.com/install | bash"
 ```
 
-Codeman requires tmux, so Windows users need [WSL](https://learn.microsoft.com/en-us/windows/wsl/install). If you don't have WSL yet: run `wsl --install` in an admin PowerShell, reboot, open Ubuntu, then install your preferred AI coding CLI inside WSL ([Claude Code](https://docs.anthropic.com/en/docs/claude-code), [OpenCode](https://opencode.ai), [Codex](https://developers.openai.com/codex/cli), [Antigravity](https://antigravity.google), [Gemini CLI](https://github.com/google-gemini/gemini-cli), [Pi](https://pi.dev), or [Grok Build](https://github.com/xai-org/grok-build)). After installing, `http://localhost:3000` is accessible from your Windows browser.
+Codeman requires tmux, so Windows users need [WSL](https://learn.microsoft.com/en-us/windows/wsl/install). If you don't have WSL yet: run `wsl --install` in an admin PowerShell, reboot, open Ubuntu, then install your preferred AI coding CLI inside WSL ([Claude Code](https://docs.anthropic.com/en/docs/claude-code), [OpenCode](https://opencode.ai), [Codex](https://developers.openai.com/codex/cli), [Antigravity](https://antigravity.google), [Gemini CLI](https://github.com/google-gemini/gemini-cli), [Pi](https://pi.dev), [Grok Build](https://github.com/xai-org/grok-build), [DeepSeek Harness](https://github.com/deepseek-ai/deepseek-harness), or [OMP](https://github.com/can1357/oh-my-pi)). After installing, `http://localhost:3000` is accessible from your Windows browser.
 
 </details>
 
@@ -253,7 +255,7 @@ Click **+ New Session** (or **Quick Start**). A session is one AI CLI running in
 | Field                        | What it does                                                                                                        |
 | ---------------------------- | ------------------------------------------------------------------------------------------------------------------- |
 | **Working directory / case** | The folder the agent operates in. A "case" is just a named working dir Codeman remembers. **Add Case** creates one from scratch, links an existing folder, or clones a GitHub repo straight into one (**Clone Repo**). |
-| **CLI / run mode**           | `Claude` (default), `OpenCode`, `Codex`, `Antigravity`, `Gemini`, `Pi`, `Grok`, or `Terminal` (plain shell).         |
+| **CLI / run mode**           | `Claude` (default), `OpenCode`, `Codex`, `Antigravity`, `Gemini`, `Pi`, `Grok`, `OMP`, or `Terminal` (plain shell).  |
 | **Model**                    | Per-session model (App Settings → Models → New Claude sessions). A soft default — `/model` still works in-session.                  |
 | **Effort / Ultracode**       | Reasoning effort (`low`–`max`) or `ultracode` for dynamic multi-agent workflows. Switchable anytime with `/effort`. |
 
@@ -437,7 +439,7 @@ PTY Output → 16ms Server Batch → DEC 2026 Wrap → SSE → Client rAF → xt
 - **Background daemon & service install** — `codeman web -d` runs the server detached with a pidfile, `~/.codeman/web.log`, and verified startup (it polls the server until it answers, so a port clash never reads as success); `codeman service install` writes a systemd user unit (Linux) or LaunchAgent (macOS) with your shell's PATH baked in, so an nvm or Homebrew `node`, `tmux` and `claude` are actually found. Secrets are never written into unit files
 - **Self-update** — git-clone installs under systemd/launchd update in place from **App Settings → System → Updates**: it detects the latest release, auto-stashes a dirty tree, and streams build progress across the service restart (npm installs report as non-updatable)
 - **Clone a GitHub repo as a case** — paste a repository URL into **Add Case → Clone Repo** and Codeman clones it into `~/codeman-cases/<name>` and registers it as a normal case, ready to run an agent in. It preflights the URL while you type (tells you whether it can be cloned anonymously and offers the repo's real branches and tags for the optional branch/tag field), fills the case name in from the URL, and lets you pick which CLI the Run button should use. Public repositories over `https://`; Codeman never collects or stores credentials
-- **Multi-CLI** — run **Claude Code**, **OpenCode**, **Codex**, **Antigravity**, **Gemini**, **Pi**, or **Grok** per session; env-var prefixes auto-gate (`CLAUDE_CODE_*` vs `OPENCODE_*` vs `CODEX_*` vs `ANTIGRAVITY_*` vs `GEMINI_*`/`GOOGLE_*` vs `PI_*` vs `GROK_*`/`XAI_*`). See [`docs/opencode-integration.md`](docs/opencode-integration.md), [`docs/pi-integration.md`](docs/pi-integration.md) and [`docs/grok-integration.md`](docs/grok-integration.md)
+- **Multi-CLI** — run **Claude Code**, **OpenCode**, **Codex**, **Antigravity**, **Gemini**, **Pi**, **Grok**, or **OMP** per session; env-var prefixes auto-gate (`CLAUDE_CODE_*` vs `OPENCODE_*` vs `CODEX_*` vs `ANTIGRAVITY_*` vs `GEMINI_*`/`GOOGLE_*` vs `PI_*` vs `GROK_*`/`XAI_*` vs `OMP_*`). See [`docs/opencode-integration.md`](docs/opencode-integration.md), [`docs/pi-integration.md`](docs/pi-integration.md), [`docs/grok-integration.md`](docs/grok-integration.md) and [`docs/omp-integration.md`](docs/omp-integration.md)
 - **Docker sessions** — run a case inside an isolated, hardened container. One checkbox on **Create New** spins up a container with sensible defaults and starts the agent inside it; multiple sessions share one per-case container; export a container + its workspace to a portable `.tar.gz` to move it to another machine. See [`docs/docker-cases.md`](docs/docker-cases.md)
 - **Remote SSH sessions** — point a case at another machine and run the agent there inside a durable remote tmux: survives SSH drops, auto-reconnects, and can discover + attach sessions already running on the host. See [`docs/remote-sessions.md`](docs/remote-sessions.md)
 - **Effort & Ultracode** — set a per-session default effort (`low`–`max`) or enable **ultracode** (dynamic multi-agent workflows). Soft defaults only — switchable anytime with `/effort` in-session. Extended-thinking budget is configurable too
@@ -460,7 +462,7 @@ Run a case inside its own hardened Docker container instead of directly on your 
 - **Shared per-case container** — many sessions can `docker exec` into the same container; killing one session never tears the container out from under the others.
 - **Hardened by default** — non-root, `--cap-drop ALL`, `no-new-privileges`, PID/memory caps, never `--privileged` or the docker socket; a **sealed** profile (no host credentials, network off) is one toggle away.
 - **Seamless auth, isolated credentials** — your host Claude / Codex / Antigravity / Gemini / OpenCode / Pi logins work inside the container out of the box: credentials are seeded (copied) in at launch and onboarding/trust prompts are pre-answered, so no login wizard appears. The container keeps its own copies and never writes back to your host credential stores; only conversation transcripts are shared, and exports never capture secrets.
-- **Move it to another machine** — export a container's whole environment (toolchain + workspace) to a portable `.tar.gz`, `docker load` it on the other side, and import it into a fresh case.
+- **Seamless auth, isolated credentials** — your host Claude / Codex / Antigravity / Gemini / OpenCode / OMP logins work inside the container out of the box: credentials are seeded (copied) in at launch and onboarding/trust prompts are pre-answered, so no login wizard appears. The container keeps its own copies and never writes back to your host credential stores; only conversation transcripts are shared, and exports never capture secrets.- **Move it to another machine** — export a container's whole environment (toolchain + workspace) to a portable `.tar.gz`, `docker load` it on the other side, and import it into a fresh case.
 - **Durable** — reconnect after a restart lands back in the same live agent; a container stop/reboot resumes the conversation from the bind-mounted transcript.
 
 Prerequisite: just Docker (or Podman). The agent base image builds itself automatically on first use, with progress streamed to the UI (or pre-build it with `node scripts/build-agent-image.mjs`). Full guide: [`docs/docker-cases.md`](docs/docker-cases.md).
@@ -795,7 +797,7 @@ When a CLI runs in a Codeman-managed session, these environment variables are se
 5. **`/api/v1/*`** is a stable alias of `/api/*`.
 6. **Wait instead of polling, and don't treat a timeout as an error.** The wait endpoints answer with HTTP `200` and `wait.timedOut: true` when nothing happened in time, so loop over short waits (60s is the default) rather than issuing one long call, because tunnels cut idle connections. `wait.timeoutMs` tells you the timeout the server actually applied after clamping (600s ceiling).
 7. **Only `claude` sessions emit `stop` and `blocked`.** Those two come from Claude Code hooks; `shell` and the external CLIs (opencode/codex/gemini/antigravity/pi) accept only `idle`, `working` and `exit`. Asking for `stop` explicitly on those is a `400`; omitting `until` is always safe. ⚠️ On a `shell` session `idle` fires **once**, at startup, and never again, so send-and-wait there can only time out; synchronize hook-less sessions with a `wait-output` marker.
-8. **Nothing reports "ready", so wait for it explicitly.** A new session answers `{"signal":"exit","immediate":true}` (that means *not started*, not *crashed*) until its PID exists, and a `claude` worker in a fresh case then sits on the CLI's trust dialog. Prompt it there and the wait resolves on `idle` in ~2s looking exactly like a finished turn, while the text sits stuck in the dialog. Recipe 2b below is the sequence that avoids it.
+7. **Only `claude` sessions emit `stop` and `blocked`.** Those two come from Claude Code hooks; `shell` and the external CLIs (opencode/codex/gemini/antigravity/omp) accept only `idle`, `working` and `exit`. Asking for `stop` explicitly on those is a `400`; omitting `until` is always safe. ⚠️ On a `shell` session `idle` fires **once**, at startup, and never again, so send-and-wait there can only time out; synchronize hook-less sessions with a `wait-output` marker.8. **Nothing reports "ready", so wait for it explicitly.** A new session answers `{"signal":"exit","immediate":true}` (that means *not started*, not *crashed*) until its PID exists, and a `claude` worker in a fresh case then sits on the CLI's trust dialog. Prompt it there and the wait resolves on `idle` in ~2s looking exactly like a finished turn, while the text sits stuck in the dialog. Recipe 2b below is the sequence that avoids it.
 
 ### Recipes
 
@@ -1011,7 +1013,7 @@ flowchart TB
 
         subgraph External["External"]
             CLI["AI CLI<br/><small>Claude Code / OpenCode / Codex / Antigravity / Gemini / Pi</small>"]
-            BG["Background Agents<br/><small>(Task tool)</small>"]
+            CLI["AI CLI<br/><small>Claude Code / OpenCode / Codex / Antigravity / Gemini / OMP</small>"]            BG["Background Agents<br/><small>(Task tool)</small>"]
         end
     end
 

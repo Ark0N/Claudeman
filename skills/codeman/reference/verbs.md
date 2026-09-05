@@ -171,10 +171,27 @@ itself, reliably enough that stage 1 usually just works: `_maybeAcceptTrustDialo
 reads the **rendered pane** via `capturePaneText()` rather than the arriving chunk
 (the per-chunk `includes()` version could never match, because tmux repaints the row
 with cursor-forward escapes in place of spaces, and it is documented in-source as the
-historical bug). The remaining miss modes are structural: the auto-accept only runs
-inside a 90 s window after interactive start and gives up after 3 attempts. So keep
-the dialog handling as a bounded fallback, and never send a blind Enter up front (if
-auto-accept already fired, it lands in the composer).
+historical bug).
+
+⚠️ **The answer is no longer "press Enter".** Claude Code 2.1.252 dropped the option
+numbers, reversed the two options, and highlights the one that quits:
+
+```
+  ❯ No, exit
+    Yes, I trust this folder
+  Enter to confirm · Esc to cancel
+```
+
+so a blind `\r` answers *exit*: the pane is dead (`Pane is dead (status 1)`) about six
+seconds after the spawn, measured on a fresh case. Read the marker off the rendered
+pane (`GET .../terminal?full=1`), send `ESC [ B` while it sits on `No, exit`, re-read,
+and press Enter only once the marker is on the trust option. `_accept_trust` in the
+§0 preamble is exactly that, and `trustDialogNextKey()` is the server-side twin.
+
+The remaining miss modes are structural: the auto-accept only runs inside a 90 s window
+after interactive start and gives up after 6 keystrokes. So keep the dialog handling as
+a bounded fallback, and never send a blind Enter up front — landing in an already-ready
+composer only wastes a turn, landing in this dialog ends the worker.
 
 Stage 1 is short on purpose: an already-trusted case matches `shift+tab` in under a
 second, while a case still showing the dialog cannot pass stage 1 at all and always
@@ -232,14 +249,11 @@ SEQ=1   # $CID came from the §0 preamble; do NOT rebuild it from $$
 R=$("${CURL[@]}" -G "$API/api/v1/sessions/$SID/wait-output" \
     --data-urlencode 'match=shift+tab' --data-urlencode 'from=buffer' --data-urlencode 'timeout=5000')
 if ! jq -e '.data.wait.matched' <<<"$R" >/dev/null; then
-  # composer never appeared, so the trust dialog is probably still up; accept it once
-  T=$("${CURL[@]}" -G "$API/api/v1/sessions/$SID/wait-output" \
-      --data-urlencode 'match=trust' --data-urlencode 'from=buffer' --data-urlencode 'timeout=2000')
-  if jq -e '.data.wait.matched' <<<"$T" >/dev/null; then
-    "${CURL[@]}" -X POST "$API/api/v1/sessions/$SID/input" -H 'Content-Type: application/json' \
-      -d '{"input":"\r","useMux":true,"clientId":"'"$CID"'","seq":'$SEQ'}' >/dev/null
-    SEQ=$((SEQ+1))
-  fi
+  # Composer never appeared, so the trust dialog is probably still up. NEVER a blind
+  # Enter here: the highlighted option is "No, exit". _accept_trust (§0 preamble) reads
+  # the marker off the pane, arrows onto the trust option, re-reads, then confirms. It
+  # carries its OWN clientId, so it spends none of $SEQ's numbers.
+  _accept_trust "$SID"
   R=$("${CURL[@]}" -G "$API/api/v1/sessions/$SID/wait-output" \
       --data-urlencode 'match=shift+tab' --data-urlencode 'from=buffer' --data-urlencode 'timeout=45000')
 fi
@@ -248,8 +262,10 @@ if ! jq -e '.data.wait.matched' <<<"$R" >/dev/null; then
   # of a broken worker, and answering is proof that it works. Split the token (your
   # keystrokes echo into the stream) and keep it unique per call. This costs the worker
   # one billed turn, so it runs only after the fast path missed. It must stay AFTER
-  # stage 2, which is the only thing that clears the trust dialog: free text plus \r
-  # into a dialog still up answers it blind, the same footgun as the up-front Enter.
+  # stage 2, which is the only thing that clears the trust dialog: the typed text is
+  # swallowed by the select widget and the \r then answers whatever is highlighted,
+  # which since 2.1.252 is "No, exit" -- the same footgun as the up-front Enter, except
+  # that it kills the worker rather than wasting a turn.
   TOK="${RANDOM}_$$"
   "${CURL[@]}" -X POST "$API/api/v1/sessions/$SID/input" -H 'Content-Type: application/json' \
     -d '{"input":"reply with the word READY immediately followed by _'"$TOK"' and nothing else\r","useMux":true,"clientId":"'"$CID"'","seq":'$SEQ'}' >/dev/null
@@ -357,7 +373,7 @@ recovered by submitting it with `{"input":"\r"}`.
 only when the workspace actually has them, see [§5.1](#51-where-to-spawn)) **and for
 `deepseek`** — the one external CLI that reports its own lifecycle, so its `stop` is a
 real end-of-turn signal rather than a guess. On
-`shell`/`opencode`/`codex`/`gemini`/`antigravity`/`pi`/`grok`, requesting them explicitly is a
+`shell`/`opencode`/`codex`/`gemini`/`antigravity`/`pi`/`grok`/`omp`, requesting them explicitly is a
 400, and lifecycle transitions there are coarse (a short shell command may emit **no**
 `idle` transition at all, verified live), so synchronize those with markers.
 
@@ -399,7 +415,7 @@ from the transcript file, which is flushed slightly *after* the `stop` hook fire
 single read taken the instant send-and-wait returns comes back `""` even though the
 turn finished (verified live: empty on the first call, full text seconds later). `text`
 is also `""` before the worker's first completed turn, and always `""` for modes with
-no transcript (`shell`, `opencode`, `gemini`, `antigravity`, `pi`, `grok`; the first four
+no transcript (`shell`, `opencode`, `gemini`, `antigravity`, `pi`, `grok`, `omp`; the first four
 verified live, pi from the same source path), which is
 why the loop above is bounded rather than open-ended. A dsh worker lags too, for its own
 reason: the harness finalizes the assistant message just after it reports `idle`. Fall back to the terminal buffer
@@ -485,7 +501,7 @@ turn), and both better than diffing terminal samples:
 ```
 
 ⚠️ `active-tools` is parsed out of Claude's own output format, so it is **empty for
-`opencode`/`codex`/`gemini`/`antigravity`/`pi`/`grok`/`deepseek`** (those parsers are skipped wholesale) and
+`opencode`/`codex`/`gemini`/`antigravity`/`pi`/`grok`/`deepseek`/`omp`** (those parsers are skipped wholesale) and
 in practice empty for `shell`. Source-verified, not measured live.
 
 Only if neither helps: sample `terminal?tail=` twice a few seconds apart. A changing

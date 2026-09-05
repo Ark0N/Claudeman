@@ -18,7 +18,9 @@ import {
   removeDockerContainer,
   checkDockerConfigDrift,
   dockerConfigHash,
+  dockerAdoptProbeModes,
 } from '../src/docker-hosts.js';
+import { enabledCliIds, getCli } from '../src/config/cli-registry/index.js';
 import {
   buildDockerLaunchCommand,
   buildDockerStopCommand,
@@ -201,15 +203,17 @@ describe('adopted container: claude as root', () => {
 describe('adopted container: the host is not required to have the CLI', () => {
   const src = readFileSync(new URL('../src/tmux-manager.ts', import.meta.url), 'utf8');
 
-  it('skips every host CLI requirement for a docker session', () => {
+  it('skips the host CLI requirement for a docker session', () => {
     // A docker session runs its CLI inside the container. Demanding it on the
     // host threw, the catch fell back to a direct PTY, and that PTY tried to
     // exec the CLI on the HOST — surfacing as a bare `execvp(3) failed` with
     // nothing naming the real cause.
-    const guarded = src.match(/!cliRunsInContainer && mode === '/g) || [];
-    const unguarded = src.match(/\n    if \(mode === '[a-z]+' && !cliDir\)/g) || [];
-    expect(guarded.length).toBeGreaterThanOrEqual(7);
-    expect(unguarded).toHaveLength(0);
+    //
+    // The CLI registry collapsed the old per-mode `mode === 'claude' && !cliDir` chain
+    // into ONE `missingCliMessage(mode)` gate, so the guarantee is now that the single
+    // gate carries the docker exemption and that no per-mode arm has grown back.
+    expect(src).toContain('if (!cliRunsInContainer && !cliDir) {');
+    expect(src.match(/if \(mode === '[a-z]+' && !cliDir\)/g)).toBeNull();
   });
 
   it('derives the flag from the docker metadata the session already carries', () => {
@@ -362,5 +366,25 @@ describe('adopted container: drift is not evaluated', () => {
     // comparison would always report drift and the launch gate would 409 forever.
     const status = await checkDockerConfigDrift(toSessionDocker(HOST, caseFor(false)));
     expect(status.drifted).toBe(false);
+  });
+});
+
+describe('adopted container: probe modes come from the CLI registry', () => {
+  it('probes every enabled CLI, so a newly-enabled one needs no second list', () => {
+    // A hand-written list here silently froze: `omp` shipped in 1.24.0 and was
+    // missing from it, which hid the omp run mode on EVERY docker case — owned
+    // ones included, since the run menu gates on this same probe.
+    const modes = dockerAdoptProbeModes();
+    expect(modes).toEqual(enabledCliIds());
+    expect(modes).toContain('omp');
+    expect(modes).toContain('shell');
+  });
+
+  it('resolves the real binary name, not the mode name', () => {
+    // `antigravity` ships as `agy` and `deepseek` as `dsh`, so a mode-name probe
+    // would report both as missing on a container that has them.
+    expect(getCli('antigravity')?.discovery.binaries[0]).toBe('agy');
+    expect(getCli('deepseek')?.discovery.binaries[0]).toBe('dsh');
+    expect(getCli('shell')?.discovery.binaries[0]).toBeUndefined();
   });
 });

@@ -20,6 +20,7 @@ import { isAntigravityAvailable } from '../src/utils/antigravity-cli-resolver.js
 import { isPiAvailable } from '../src/utils/pi-cli-resolver.js';
 import { isGrokAvailable } from '../src/utils/grok-cli-resolver.js';
 import { isDeepSeekAvailable, isDeepSeekRunnable } from '../src/utils/deepseek-cli-resolver.js';
+import { isOmpAvailable } from '../src/utils/omp-cli-resolver.js';
 import { isCloudflaredAvailable } from '../src/utils/cloudflared-resolver.js';
 import { isGitAvailable } from '../src/git-clone.js';
 
@@ -65,6 +66,10 @@ vi.mock('../src/utils/deepseek-cli-resolver.js', () => ({
   getDeepSeekCliVersion: vi.fn(() => null),
   listDeepSeekProfiles: vi.fn(() => []),
   resolveDefaultDeepSeekProfile: vi.fn(() => null),
+}));
+vi.mock('../src/utils/omp-cli-resolver.js', () => ({
+  isOmpAvailable: vi.fn(() => false),
+  resolveOmpDir: vi.fn(() => null),
 }));
 vi.mock('../src/utils/cloudflared-resolver.js', () => ({
   isCloudflaredAvailable: vi.fn(() => false),
@@ -156,6 +161,9 @@ describe('WebServer.renderIndexHtml', () => {
     vi.mocked(isAntigravityAvailable).mockReturnValue(false);
     vi.mocked(isPiAvailable).mockReturnValue(true);
     vi.mocked(isGrokAvailable).mockReturnValue(false);
+    vi.mocked(isDeepSeekAvailable).mockReturnValue(false);
+    vi.mocked(isDeepSeekRunnable).mockReturnValue(false);
+    vi.mocked(isOmpAvailable).mockReturnValue(true);
     vi.mocked(isCloudflaredAvailable).mockReturnValue(true);
     vi.mocked(isGitAvailable).mockReturnValue(true);
     const { server } = makeServer({});
@@ -173,6 +181,7 @@ describe('WebServer.renderIndexHtml', () => {
       grok: false,
       deepseek: false,
       deepseekBinary: false,
+      omp: true,
       cloudflared: true,
       git: true,
     });
@@ -191,6 +200,7 @@ describe('WebServer.renderIndexHtml', () => {
       isGrokAvailable,
       isDeepSeekAvailable,
       isDeepSeekRunnable,
+      isOmpAvailable,
       isCloudflaredAvailable,
       isGitAvailable,
     ]) {

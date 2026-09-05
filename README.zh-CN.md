@@ -58,7 +58,7 @@ curl -fsSL https://getcodeman.com/install | bash
 - **重跑即更新。** 再次运行同一条命令即可原地更新已完成的安装：`~/.codeman/app` 中的本地改动会被 stash（绝不丢弃），运行中的服务会自动重启并校验。若首次安装中途失败，重跑会继续完成完整的安装流程。也可以使用 `install.sh update` 与 `install.sh uninstall`。
 - **CI / 无终端环境：** 没有终端时，涉及系统改动的步骤会带着说明中止，而不是静默执行；在自动化场景设置 `CODEMAN_NONINTERACTIVE=1` 即可批准这些步骤。
 
-你至少需要安装一个 AI 编程 CLI —— [Claude Code](https://docs.anthropic.com/en/docs/claude-code)、[OpenCode](https://opencode.ai)、[Codex](https://developers.openai.com/codex/cli)、[Antigravity](https://antigravity.google)、[Gemini CLI](https://github.com/google-gemini/gemini-cli)、[Pi](https://pi.dev) 或 [Grok Build](https://github.com/xai-org/grok-build)（任意组合均可；自 Google 面向消费者停售后，Gemini CLI 仅限企业版，Antigravity 是其继任者）。安装器会自动检测这七个中已安装的任意一个；若一个都没有，会提供安装 Claude Code 或 OpenCode 的选项，也可以选择跳过、稍后自行安装。安装完成后：
+你至少需要安装一个 AI 编程 CLI —— [Claude Code](https://docs.anthropic.com/en/docs/claude-code)、[OpenCode](https://opencode.ai)、[Codex](https://developers.openai.com/codex/cli)、[Antigravity](https://antigravity.google)、[Gemini CLI](https://github.com/google-gemini/gemini-cli)、[Pi](https://pi.dev)、[Grok Build](https://github.com/xai-org/grok-build)、[DeepSeek Harness](https://github.com/deepseek-ai/deepseek-harness) 或 [OMP](https://github.com/can1357/oh-my-pi)（任意组合均可；自 Google 面向消费者停售后，Gemini CLI 仅限企业版，Antigravity 是其继任者）。安装器会自动检测这九个中已安装的任意一个；若一个都没有，会提供安装 Claude Code 或 OpenCode 的选项，也可以选择跳过、稍后自行安装。安装完成后：
 
 ```bash
 codeman web
@@ -141,7 +141,7 @@ launchctl bootstrap gui/$(id -u) ~/Library/LaunchAgents/com.codeman.web.plist
 wsl bash -c "curl -fsSL https://getcodeman.com/install | bash"
 ```
 
-Codeman 依赖 tmux，因此 Windows 用户需要 [WSL](https://learn.microsoft.com/en-us/windows/wsl/install)。如果还没装 WSL：在管理员 PowerShell 中运行 `wsl --install`，重启，打开 Ubuntu，然后在 WSL 内安装你偏好的 AI 编程 CLI（[Claude Code](https://docs.anthropic.com/en/docs/claude-code)、[OpenCode](https://opencode.ai)、[Codex](https://developers.openai.com/codex/cli)、[Antigravity](https://antigravity.google)、[Gemini CLI](https://github.com/google-gemini/gemini-cli)、[Pi](https://pi.dev) 或 [Grok Build](https://github.com/xai-org/grok-build)）。安装完成后，即可从 Windows 浏览器访问 `http://localhost:3000`。
+Codeman 依赖 tmux，因此 Windows 用户需要 [WSL](https://learn.microsoft.com/en-us/windows/wsl/install)。如果还没装 WSL：在管理员 PowerShell 中运行 `wsl --install`，重启，打开 Ubuntu，然后在 WSL 内安装你偏好的 AI 编程 CLI（[Claude Code](https://docs.anthropic.com/en/docs/claude-code)、[OpenCode](https://opencode.ai)、[Codex](https://developers.openai.com/codex/cli)、[Antigravity](https://antigravity.google)、[Gemini CLI](https://github.com/google-gemini/gemini-cli)、[Pi](https://pi.dev)、[Grok Build](https://github.com/xai-org/grok-build)、[DeepSeek Harness](https://github.com/deepseek-ai/deepseek-harness) 或 [OMP](https://github.com/can1357/oh-my-pi)）。安装完成后，即可从 Windows 浏览器访问 `http://localhost:3000`。
 
 </details>
 

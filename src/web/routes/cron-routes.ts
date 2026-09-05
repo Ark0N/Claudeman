@@ -7,6 +7,7 @@
  */
 
 import { FastifyInstance } from 'fastify';
+import { getCli } from '../../config/cli-registry/registry.js';
 import { ApiErrorCode, createErrorResponse } from '../../types.js';
 import { CronJobSchema, CronJobUpdateSchema, CronJobEnabledSchema } from '../schemas.js';
 import { canAccessOwned, getAuthUser, isWorkingDirAllowed, ownerFor, parseBody } from '../route-helpers.js';
@@ -45,7 +46,7 @@ export function registerCronRoutes(app: FastifyInstance, ctx: CronPort): void {
     // Resolve the owner's grant from the store (AuthUser.role alone can't tell a GRANTED
     // regular user from a plain one); mirrors session-routes + the cron fire-time re-check.
     if (
-      (body.agentType === 'shell' || body.launchCommand) &&
+      (getCli(body.agentType)?.capabilities.privilegedCommandGate || body.launchCommand) &&
       !(await canUsernameRunPrivilegedCommands(ownerFor(req)))
     ) {
       return createErrorResponse(
@@ -72,7 +73,7 @@ export function registerCronRoutes(app: FastifyInstance, ctx: CronPort): void {
       return createErrorResponse(ApiErrorCode.FORBIDDEN, 'workingDir is outside your workspace');
     }
     if (
-      (body.agentType === 'shell' || body.launchCommand) &&
+      (getCli(body.agentType ?? 'claude')?.capabilities.privilegedCommandGate || body.launchCommand) &&
       !(await canUsernameRunPrivilegedCommands(ownerFor(req)))
     ) {
       return createErrorResponse(

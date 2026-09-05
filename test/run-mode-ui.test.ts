@@ -81,6 +81,16 @@ describe('run mode UI', () => {
     expect(app.runMode).toBe('antigravity');
     expect(runBtnLabel.textContent).toBe('Run AG');
   });
+
+  it('accepts OMP mode from server sync and updates the run button label', async () => {
+    const { app, storage, runBtnLabel } = loadRunModeHarness();
+
+    storage.set('codeman_runMode', 'claude');
+    await app.loadAppSettingsFromServer(Promise.resolve({ runMode: 'omp' }));
+
+    expect(app.runMode).toBe('omp');
+    expect(runBtnLabel.textContent).toBe('Run OMP');
+  });
 });
 
 describe('Run launch synchronization', () => {
@@ -367,12 +377,13 @@ describe('Codex quick start settings', () => {
         'welcomeGeminiBtn',
         'welcomePiBtn',
         'welcomeGrokBtn',
+        'welcomeOmpBtn',
         'welcomeTunnelBtn',
       ]) {
         welcomeBtns[id] = { style: { display: 'PRISTINE' } };
       }
       const modeBtns: Record<string, { style: { display: string } }> = {};
-      for (const mode of ['claude', 'opencode', 'codex', 'gemini', 'antigravity', 'pi', 'grok', 'shell']) {
+      for (const mode of ['claude', 'opencode', 'codex', 'gemini', 'antigravity', 'pi', 'grok', 'omp', 'shell']) {
         modeBtns[mode] = { style: { display: 'PRISTINE' } };
       }
       const menu = {
@@ -405,6 +416,7 @@ describe('Codex quick start settings', () => {
       antigravity: false,
       pi: false,
       grok: false,
+      omp: false,
       cloudflared: false,
     };
 
@@ -442,16 +454,23 @@ describe('Codex quick start settings', () => {
       withAgy.app.applyWelcomeCliVisibility();
       expect(withAgy.welcomeBtns.welcomeAntigravityBtn.style.display).toBe('flex');
       expect(withAgy.welcomeBtns.welcomeClaudeBtn.style.display).toBe('none');
+
+      // OMP is a first-class welcome action, gated on `omp` like the rest.
+      const withOmp = loadUi({ ...ALL_OFF, omp: true });
+      withOmp.app.applyWelcomeCliVisibility();
+      expect(withOmp.welcomeBtns.welcomeOmpBtn.style.display).toBe('flex');
+      expect(withOmp.welcomeBtns.welcomeClaudeBtn.style.display).toBe('none');
     });
 
     it('gates every run mode in the dropdown, antigravity included, and never shell', () => {
-      const { app, modeBtns, menu } = loadUi({ ...ALL_OFF, claude: true, antigravity: true });
+      const { app, modeBtns, menu } = loadUi({ ...ALL_OFF, claude: true, antigravity: true, omp: true });
       app._refreshRunModeAvailability(menu);
       expect(modeBtns.claude.style.display).toBe('flex');
       expect(modeBtns.antigravity.style.display).toBe('flex');
       expect(modeBtns.opencode.style.display).toBe('none');
       expect(modeBtns.codex.style.display).toBe('none');
       expect(modeBtns.gemini.style.display).toBe('none');
+      expect(modeBtns.omp.style.display).toBe('flex');
       // Shell needs no external CLI, and leaving it alone is what guarantees the
       // menu is never empty on a box with nothing installed.
       expect(modeBtns.shell.style.display).toBe('PRISTINE');
@@ -468,6 +487,7 @@ describe('Codex quick start settings', () => {
       expect(offered).toContain('antigravity');
       expect(offered).toContain('pi');
       expect(offered).toContain('grok');
+      expect(offered).toContain('omp');
       const src = readFileSync(resolve(import.meta.dirname, '../src/web/public/session-ui.js'), 'utf8');
       // Anchor on the DEFINITION, not the earlier call site in toggleRunModeMenu.
       const fn = src.slice(src.indexOf('_refreshRunModeAvailability(menu) {'));

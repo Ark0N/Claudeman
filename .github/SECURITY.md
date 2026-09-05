@@ -69,10 +69,18 @@ shared-host, multi-user, or tunneled deployments.
 - **Multi-instance tmux socket is process-wide.** Two Codeman instances on the same `CODEMAN_INSTANCE` share a tmux socket and can attach each other's live sessions — isolate with distinct `CODEMAN_INSTANCE` values.
 - **The live log-tail route reads `/var/log` and `~/logs`** in addition to the session working directory (read-only) — a deliberate choice for tailing system/app logs. On a password-protected remote deployment an authenticated user can therefore read those roots outside their session. See `docs/security-architecture.md` §5.
 
-Recent hardening (this release): web-push subscription endpoints are restricted
-to https public hosts (SSRF guard — rejects internal/metadata IPs, validated at
-subscribe and send time), and tmux session names discovered on the shared socket
-are validated against the safe-name pattern before reaching any shell call site.
+- **The web-tab proxy fetches from the server's network position.** Any authenticated user can save a dashboard URL on loopback or a private range and have Codeman relay to it; that is the feature. Link-local and cloud-metadata addresses are the only refused targets (see below). On a shared host, restrict who holds an account.
+
+Recent hardening (2026-09-04): the web-tab proxy, its "Test" probe and its
+WebSocket relay refuse link-local and cloud-metadata targets (`169.254.0.0/16`,
+`fe80::/10`, `fd00:ec2::254`, `168.63.129.16`, `100.100.100.200`,
+`metadata.google.internal`), judged on the RESOLVED address so a DNS name pointing
+there is refused too; proxy capabilities are revoked on logout, admin logout and
+user deletion; proxied responses carry `Referrer-Policy: same-origin`. Earlier:
+web-push subscription endpoints are restricted to https public hosts (SSRF guard,
+rejects internal/metadata IP literals, validated at subscribe and send time), and
+tmux session names discovered on the shared socket are validated against the
+safe-name pattern before reaching any shell call site.
 
 For the detailed rationale, defenses, and recommended secure setups, see
 [`docs/security-architecture.md`](../docs/security-architecture.md).

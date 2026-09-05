@@ -1,5 +1,185 @@
 # aicodeman
 
+## 1.24.7
+
+### Patch Changes
+
+- The web-tab proxy refuses link-local and cloud-metadata targets. Its Test probe, the proxy itself and the WebSocket relay accepted any http(s) host, so a saved dashboard URL could reach `169.254.169.254` (in decimal, hex, IPv6-mapped or DNS-name form) through a capability and no cookie. Loopback and RFC1918 addresses stay allowed on purpose, since a localhost Grafana is the feature; only link-local and the fixed cloud-metadata addresses are refused, at the schema, at every connect site, and through a DNS lookup hook that judges the resolved addresses, which is what closes DNS rebinding. Adds `undici` so the proxy runs its fetch through its own agent.
+
+  Proxy capabilities are revoked on logout. `revokeOwner()` had shipped with no caller, so a leaked proxy URL stayed valid for as long as anything kept polling it. `POST /api/logout`, the admin forced logout and user deletion now revoke the capabilities they should, and proxied responses carry `Referrer-Policy: same-origin` with the upstream's own policy dropped, so a dashboard on a loose referrer policy cannot hand the capability to a third-party host it links to.
+
+  The Docker Compose deployment updates itself from App Settings again (#373, @opticon454). The checkout Compose builds from is bind-mounted at `/opt/codeman`, so an update's `git checkout` and rebuild land on the host and survive container recreation; build artefacts live in named volumes so container-compiled native modules never enter the host checkout; the image keeps devDependencies and a build toolchain; and the restart is the server exiting under `restart: unless-stopped`. An in-place update applies code only, so the updater refuses a release that changes `server.Dockerfile` or `docker-compose.yaml`, or that adds keys to `.env.example` the user's `.env` has no value for (Compose interpolates an unset variable to the empty string and starts anyway), and points at `docker/Start-Codeman.sh` on the host instead. The four global agent CLIs in the image are pinned. A follow-up makes the final step fail safe: the server exits only when the Compose file declares `CODEMAN_RESTART_BY_EXIT=1` or the daemon confirms an auto-restart policy, and otherwise the build is staged for a manual restart, so a container nothing would restart is never taken down. Details in `docs/docker-self-update.md`.
+
+  The test suite strips `CODEMAN_INSTANCE`, `CODEMAN_DATA_DIR` and `CODEMAN_TMUX_SOCKET` before any application module loads (#371, @opticon454), with a two-half test whose static half reads `test/setup.ts` so a dropped line fails everywhere. This replaces the throwaway data dir #356 had set for the same variable.
+
+  ### Thanks
+  - @opticon454 for the Compose self-update (#373) and the test isolation fix (#371).
+
+## 1.24.6
+
+### Patch Changes
+
+- CLI backends are now a data-driven registry (#347, @opticon454). Every run mode (Claude Code, Terminal/Shell, OpenCode, Codex, Gemini, Antigravity, Pi, Grok, DeepSeek Harness and OMP) is a `CliEntry` in `src/config/cli-registry/`: binary discovery (search dirs, version and identity probes), the launch argv template, environment handling, the multi-user privileged-parameter and privileged-env-key clamps, the remote and Docker pane commands, and the capability flags the rest of the app reads instead of branching on a CLI's name. `~/.codeman/clis.json` can override any stock entry or add a custom CLI; it is read-only in this release, must be mode 0600, and every reason it was ignored is now logged once on first load (`docs/cli-registry.md`). Config never contains shell text: entries declare typed argv tokens, literals are validated at load time, and values resolve through patterns named in code. Registry data resolves at call time rather than at module import, so a CLI enabled while the server runs moves every surface at once, and a guard test fails the build if per-CLI-id branching reappears outside the stock catalog.
+
+  This is an internal refactor. The spawn command every CLI receives is byte-identical to the previous hand-written builders, verified by pinned golden strings in the test suite and by diffing both implementations across 11,602 option combinations for all ten modes. Five small deliberate changes ride along: the in-container version probe derives the binary from the registry (`antigravity` runs `agy`), the remote version probe now covers Grok and DeepSeek, `codeman doctor`'s CLI rows are generated from the registry (Claude's install hint is the install command, five CLIs gain hints, the row order follows the catalog), OMP now requires tmux like its siblings instead of silently falling back to a direct PTY, and an OMP session's attach client now receives `COLORTERM=truecolor` like the other truecolor CLIs.
+
+  Remote sessions are no longer auto-revived after a clean agent exit (#355, @timkjr). The reconnect watcher could not tell a transport drop from a Ctrl-C, Ctrl-D or `exit` inside the remote CLI, so a clean exit relaunched a fresh agent (OpenCode and OMP started a new conversation every time; Claude only looked fine because its `--resume` fallback masked it). The watcher now revives a dead pane only when the durable remote tmux session is verifiably still alive, via a `has-session` probe over ssh, and an unreachable host means do not revive. A follow-up classifies that probe by exit status, since `tmux has-session` prints nothing on success and reading its stdout had marked every live session as gone, forgets the cached answer whenever the pane is seen alive again so a stale result cannot revive a later clean exit, and caps the probe at one in flight per session.
+
+  The test suite can no longer reach the production `~/.codeman` data dir (#356, @timkjr). `test/setup.ts` now points `CODEMAN_DATA_DIR` at a throwaway directory, which is the absolute override that bypasses the suite's temporary HOME when inherited from the shell, and every test that deletes a case tree goes through a containment gate that refuses paths outside the temporary HOME. A bare suite run had overwritten a real `remote-hosts.json` with a route test's fixture. The comments around it and CLAUDE.md's testing section now name that variable as the cause; `os.homedir()` itself does follow `$HOME`.
+
+  ### Thanks
+  - @opticon454 for the CLI registry (#347), the phased resubmission of #343, and the review rounds that hardened it.
+  - @timkjr for the remote auto-revive fix (#355) and the test-isolation sweep (#356).
+
+## 1.24.5
+
+### Patch Changes
+
+- Fable 5.1 is selectable in App Settings.
+
+  `claude-fable-5-1` is in Claude Code's model catalog (display name "Fable 5.1", June 2026 knowledge cutoff), but the model picker only went up to Fable 5, so pinning it meant hand-editing a case's `.claude/settings.local.json`. It now appears as a card under **App Settings -> Models -> New Claude sessions**, and as an option in **Task routing** (Default for tasks, plus the Explore / Implement / Test / Review overrides).
+
+  It is offered exactly the way Fable 5 already is: the "1M capable" badge, the 1M context window switch stays live for it, and base + switch compose into `claude-fable-5-1[1m]`. Both strings are accepted by the CLI.
+
+  Deliberately not claimed: that a 1M window is what sets Fable 5.1 apart. The CLI's model catalog marks both fable entries as natively 1M with the same window, so an always-on window for 5.1 next to a switchable one for 5 would encode a difference the models do not have.
+
+  ### Thanks
+  - @shenlvkang-collab for #370, which surfaced that Fable 5.1 was missing from the picker.
+
+## 1.24.4
+
+### Patch Changes
+
+- The Compose deployment image ships the Docker CLI instead of the whole Docker engine.
+
+  `docker/server.Dockerfile` installed Debian's `docker.io` to get a client for the mounted
+  host socket. That package is the full **engine**: even with `--no-install-recommends` it
+  pulls 15 packages including containerd, runc, dmsetup and iptables, none of which a
+  container that only talks to a socket can use. It also ships Docker 20.10.24, from 2023.
+
+  The CLI and the buildx plugin are now copied from the official `docker:29-cli` image
+  instead. Measured on the same `node:22-bookworm-slim` base: **266 MB → 108 MB**, a 158 MB
+  saving, with the current CLI (29.7.2) in place of a two-year-old one.
+
+  Verified by building the real image and running it: the binaries are static Go builds, so
+  they work on this glibc image even though they come from an Alpine one, and `docker
+--version`, `docker ps` and `docker build` all succeed against a mounted host socket as
+  the unprivileged runtime user. buildx is copied deliberately — `scripts/build-agent-image.mjs`
+  shells out to `docker build` and Codeman auto-builds the agent image on the first Docker
+  case, which without the plugin falls back to the classic builder Docker has deprecated.
+  `docker-compose` is not copied; Codeman never shells out to it.
+
+## 1.24.3
+
+### Patch Changes
+
+- Docker Compose deployment, and the plan-usage chip stops losing its 5-hour window.
+
+  **Run Codeman itself in a container** (#349, @opticon454). `docker/` now carries a
+  local-image Compose deployment: copy `docker/.env.example` to `docker/.env`, set
+  `CODEMAN_PASSWORD`, run `bash docker/Start-Codeman.sh`. Docker cases then start as
+  **sibling** containers through the mounted host socket rather than nested ones, which
+  inverts an assumption the bare-host path takes for granted: the daemon no longer shares
+  Codeman's filesystem, so a bind source that is valid inside Codeman means nothing to it.
+  `CODEMAN_DOCKER_HOST_HOME` translates sources under HOME into the daemon's namespace and
+  `CODEMAN_CASES_PATH` points the cases dir at a host-absolute bind mount, so a workspace
+  resolves to the same absolute path on both sides. `CODEMAN_DOCKER_DISABLE_SWAP_LIMIT=1`
+  drops `--memory-swap` for hosts without swap accounting (`--memory` still applies) and
+  filters only that one kernel warning. Guides: `docs/docker-compose.md`, `docker/README.md`.
+
+  Three things were fixed while landing it:
+  - **`docker/.env` was being baked into the image.** A `.dockerignore` pattern matches the
+    whole context-relative path, so the bare `.env` line excluded only the root file while
+    `COPY . .` picked up `docker/.env` — the file the deployment's own README tells you to
+    fill with `CODEMAN_PASSWORD` and provider API keys — and left it at
+    `/opt/codeman/docker/.env`. Now excluded via `**/.env`, verified in both directions
+    against a real build context with a canary secret.
+  - **`codeman skill install --case <name>` could not find a case under Compose.**
+    `CODEMAN_CASES_PATH` moved the server's cases dir but not the CLI's, which still
+    hardcoded `~/codeman-cases`. Both now resolve through one place.
+  - **A Docker case handed its Claude conversation id to every other CLI.** `resumeOnStart`
+    seeded `dockerResumeId` from `lastClaudeSessionId` regardless of mode, and
+    `appendResumeFlag()` maps a resume id onto codex/gemini/pi/grok/deepseek/omp/antigravity.
+    This one is a plain master bug, unrelated to Compose.
+
+  **The plan-usage chip keeps its 5-hour slot.** It silently shrank from `5h 4% · 7d 52%`
+  to a lone `7d 52%`, which reads as half the feature breaking. Nothing was broken: Claude
+  Code ships `rate_limits.five_hour` "only while the API reports it and its resets_at has
+  not passed", so between 5-hour session windows the key simply leaves the statusline
+  payload. The slot now stays with a dimmed em dash and the tooltip says "no active session
+  window". Claude only — a missing Codex bucket means that plan has no such limit, so those
+  stay omitted.
+
+  ### Thanks
+  - @opticon454 for #349, and for a write-up that made an infrastructure PR quick to review
+
+## 1.24.2
+
+### Patch Changes
+
+- Fix every new claude session dying on Claude Code 2.1.252's rewritten folder-trust dialog.
+
+  That dialog used to offer `❯ 1. Yes, I trust this folder` / `2. No, exit`, so Codeman
+  answered it by pressing Enter on the highlighted default. 2.1.252 dropped the numbers,
+  reversed the options and highlights `No, exit`, so the same Enter now answers _exit_: a
+  session in any directory claude had not seen before died (`Pane is dead (status 1)`)
+  about six seconds after it started, before the agent ever drew a composer.
+  - `trustDialogNextKey()` (`src/session-trust-dialog.ts`) now reads the `❯` marker off
+    the rendered pane and returns ONE keystroke at a time: an arrow while the cursor is on
+    the wrong option, Enter only once the screen shows it on the trust option. A frame it
+    cannot read presses nothing. Both the 2.1.252 and the older numbered layout are
+    handled, and the direction is derived from the frame rather than assumed, so a further
+    reordering costs a repaint instead of a session.
+  - The scan schedules its own follow-up read. It had only ever run from the PTY data
+    handler, which was enough while one Enter answered the dialog; the arrow that moves the
+    cursor is the last output the pane produces, so a two-keystroke answer would otherwise
+    stall with the cursor sitting on the right option forever. The keystroke cap goes from
+    3 to 6 for the same reason.
+  - The bundled `codeman` agent skill gets the same treatment (preamble 1.21.0): its
+    `_accept_trust` fallback reads `terminal?full=1`, steers onto the trust option and
+    confirms only after re-reading, instead of posting a blind `\r`. It sends those
+    keystrokes under its own `clientId`, because input sequence numbers are monotonic per
+    client and spending prompt numbers on dialog keys would make the next send-and-wait
+    look like a stale duplicate and vanish silently.
+  - Readiness recipes in `docs/extending-codeman.md`, `docs/api-reference.md` and the
+    skill's own reference carry the corrected answer and a new symptom-table entry for a
+    worker whose pane is dead seconds after the spawn.
+
+  Also included: a CLAUDE.md audit against the tree, correcting counted drift (route
+  modules, handler counts, frontend module count and app.js size, install.sh size) and
+  documenting several subsystems that had no entry.
+
+## 1.24.1
+
+### Patch Changes
+
+- The Docker agent base image builds again.
+
+  **`docker/agent.Dockerfile` could not be built from a fresh checkout** (#352, fix in #350): the DeepSeek Harness step died with `dsh: pnpm not found on PATH` and exit 127, which took the whole image with it and, because Codeman auto-builds this image on the first Docker case, left Docker mode unusable on a clean host. `dsh plugin` does not bundle a package manager; it spawns a literal `pnpm` with no npm fallback, so pnpm is now installed alongside `dsh` and the layer proves it with `pnpm --version`.
+
+  The profile install also passes `--config.dangerouslyAllowAllBuilds=true`, because pnpm, unlike npm, refuses dependency lifecycle scripts by default and fails the install over it (`ERR_PNPM_IGNORED_BUILDS`, exit 1). Which packages that hits moves between rebuilds, since the terminal profile is resolved by dist-tag rather than pinned: the tree that broke the build in August pulled `@google/genai`, today's does not. An allowlist of those names would have gone stale rather than prevented the next break, and running those scripts is the same exposure the image already accepts three layers up, where `npm install -g` runs the install scripts of every transitive dependency of the five CLIs above it with no gate at all.
+
+  Documentation caught up with two things it had wrong: the image smoke test in `docs/docker-cases.md` now covers `dsh` and `omp`, and checks the dsh **profile** rather than only the binary (`dsh` is a launcher, so `dsh --version` says nothing about whether a session can start), and `docs/deepseek-integration.md` names pnpm as a prerequisite for installing a terminal profile at all, by hand or through the UI button. A comment in the `/api/deepseek/install-profile` route claimed the opposite of what this bug proved, and is corrected; the route's behaviour was already right, surfacing dsh's own "pnpm not found on PATH" line as the install error.
+
+  ### Thanks
+  - @opticon454 for #350, with a reproduction that made this a confirmation rather than a hunt
+  - @timkjr for reporting #352, and for finding it while verifying Docker support for someone else's PR
+
+## 1.24.0
+
+### Minor Changes
+
+- OMP (Oh My Pi) as a tenth run mode, mode-faithful Resume for external CLIs, and a cleaner plan-usage chip.
+
+  **OMP (`omp`) run mode** (#353): Oh My Pi joins Claude Code, shell, OpenCode, Codex, Gemini, Antigravity, Pi, Grok Build and DeepSeek Harness as a run mode, in local, Docker and remote-SSH sessions: toolbar dropdown, welcome button, phone overview, command palette, clone-repo brain picker, cron agent types, tab badges and per-mode colours, plus `GET /api/omp/status`, a `codeman doctor` entry, install.sh detection and the docker agent image. The resolver leads with `~/.local/bin` (the upstream installer's real target) and demands `omp/<semver>` from `--version`, so an unrelated binary with the same three-letter name is never spawned. Past omp conversations appear in Past Sessions, read from omp's own session files (the header line carries the real working directory, so nothing has to reverse-engineer omp's directory mangling), and a respawned or resumed omp session is pinned to an exact conversation with `--resume <id>` instead of omp's newest-file `--continue`. Review hardening before merge: the pin is resolved only at the moment a respawn is actually confirmed (an eager resolve on boot recovery used to alias two omp tabs in one case directory onto one conversation), candidates are verified against their own header `cwd` and claimed process-wide so siblings cannot double-pin; `OMP_*` joins the env-override allowlist and `OMP_AUTH_BROKER_URL`/`OMP_AUTH_BROKER_TOKEN` are clamped for non-granted owners in multi-user mode, the same shape as `DEEPSEEK_BASE_URL`. Known and documented: omp's own knobs are mostly `PI_*` (it is a pi fork), its default `tools.approvalMode` is `yolo`, and in-container `--resume` pinning does not reach a Docker omp pane.
+
+  **Resume keeps the row's own CLI** (#353): clicking Resume on an OpenCode, Pi, Grok, DeepSeek or OMP row used to create a plain Claude session, since the create request never carried the row's mode. Resume now relaunches in the row's own mode with that CLI's continue flag, and retires the stale row it came from so three clicks no longer leave three copies of the same name. Codex, Gemini and Antigravity rows have no continuation wired yet, so their rows are deliberately left in place. `DELETE /api/sessions/:id` accepts a persisted-only session (ownership enforced through the same helper as live lookups, 404 rather than 403 so nothing leaks) and broadcasts `session_deleted` so other tabs drop the row too.
+
+  **Plan-usage chip drops the provider label when there is only one**: a machine with only Claude limits rendered `CLAUDE 5H 60% 7D 23%`, a 46px label naming the only thing it could be. The name exists to tell two rows apart, so it now appears only when both Claude and Codex have windows; the tooltip still names the provider either way.
+
+  ### Thanks
+  - @timkjr for #353, and for turning every review finding around within a day
+
 ## 1.23.2
 
 ### Patch Changes

@@ -5,6 +5,7 @@
  */
 
 import { FastifyInstance } from 'fastify';
+import { getCli } from '../../config/cli-registry/registry.js';
 import { join, dirname } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { existsSync, mkdirSync, readdirSync } from 'node:fs';
@@ -389,6 +390,9 @@ export function registerSystemRoutes(
       'in-flight': { http: 409, api: ApiErrorCode.ALREADY_EXISTS },
       'up-to-date': { http: 409, api: ApiErrorCode.ALREADY_EXISTS },
       'not-git': { http: 400, api: ApiErrorCode.INVALID_INPUT },
+      // A container release that changes the ENVIRONMENT: not a client error to
+      // retry, it needs a host-side rebuild (docs/docker-self-update.md).
+      'env-blocked': { http: 409, api: ApiErrorCode.INVALID_INPUT },
       disabled: { http: 403, api: ApiErrorCode.INVALID_INPUT },
       'bad-tag': { http: 400, api: ApiErrorCode.INVALID_INPUT },
       error: { http: 500, api: ApiErrorCode.INTERNAL_ERROR },
@@ -614,8 +618,13 @@ export function registerSystemRoutes(
           // same negative-pid signal as runGit() in git-clone.ts, which is the
           // synchronous-spawn precedent this endpoint is modelled on.
           detached: true,
-          // dsh bundles its own package manager, so no system pnpm is required —
-          // but it still needs a HOME to resolve $DSH_HOME against.
+          // Inherit the environment: this needs a HOME to resolve $DSH_HOME
+          // against, and a PATH carrying `pnpm`. ⚠️ `dsh plugin` does NOT bundle a
+          // package manager — it `spawnSync`s a literal `pnpm` with no npm
+          // fallback, so on a host without one this exits 127 and dsh's own
+          // stderr ("pnpm not found on PATH") is what reaches the caller through
+          // the OPERATION_FAILED detail below. That is the same missing
+          // dependency that broke the docker agent image in issue #352.
           env: process.env,
         });
       } catch (err) {
@@ -691,6 +700,17 @@ export function registerSystemRoutes(
       runnable: isDeepSeekRunnable(),
       defaultProfile: resolveDefaultDeepSeekProfile(),
       profiles: listDeepSeekProfiles(),
+    };
+  });
+
+  // ========== OMP ==========
+
+  app.get('/api/omp/status', async () => {
+    const { isOmpAvailable, resolveOmpDir, getOmpCliVersion } = await import('../../utils/omp-cli-resolver.js');
+    return {
+      available: isOmpAvailable(),
+      path: resolveOmpDir(),
+      version: getOmpCliVersion(),
     };
   });
 
@@ -1024,7 +1044,8 @@ export function registerSystemRoutes(
       if (statusLineTelemetry === true) {
         const dirs = new Set<string>();
         for (const session of ctx.sessions.values()) {
-          if (session.mode === 'claude' && session.workingDir) dirs.add(session.workingDir);
+          if (getCli(session.mode)?.capabilities.statusLineTelemetry && session.workingDir)
+            dirs.add(session.workingDir);
         }
         await Promise.all([...dirs].map((dir) => applyStatusLineConfig(dir, true).catch(() => {})));
       }

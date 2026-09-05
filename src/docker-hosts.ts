@@ -23,7 +23,8 @@
 
 import { existsSync, mkdirSync, readFileSync, writeFileSync } from 'node:fs';
 import fs from 'node:fs/promises';
-import { join, dirname } from 'node:path';
+import { dirname, isAbsolute, join, relative, resolve } from 'node:path';
+import { enabledCliIds, getCli } from './config/cli-registry/registry.js';
 import { fileURLToPath } from 'node:url';
 import { homedir } from 'node:os';
 import { createHash } from 'node:crypto';
@@ -32,7 +33,6 @@ import { promisify } from 'node:util';
 import { dataPath } from './config/instance.js';
 import type {
   DockerCase,
-  DockerCommandMode,
   DockerEngine,
   DockerHost,
   DockerNetworkMode,
@@ -56,29 +56,28 @@ export const DEFAULT_AGENT_IMAGE = 'codeman/agent:base';
 export const CONTAINER_HOME = '/home/agent';
 
 /**
- * Modes the adoption preflight probes for inside an existing container. `shell`
- * is omitted deliberately: it needs no CLI binary and is always available, so it
- * is reported as available without a `command -v` lookup.
+ * Modes the adoption preflight probes for inside an existing container, derived from the
+ * CLI registry so a newly-enabled CLI is probed without a second list to remember.
+ *
+ * No arm for `shell` here: it declares no binary, so `probeAdoptableContainer` drops it
+ * from the `command -v` list and reports it available unconditionally, which is the same
+ * answer a special case would have produced.
  */
-export const DOCKER_ADOPT_PROBE_MODES = [
-  'claude',
-  'codex',
-  'opencode',
-  'gemini',
-  'antigravity',
-  'pi',
-  'grok',
-  'deepseek',
-  'shell',
-] as const satisfies readonly SessionMode[];
+export function dockerAdoptProbeModes(): SessionMode[] {
+  return enabledCliIds() as SessionMode[];
+}
 
 /**
- * The BINARY a mode looks for inside a container. Not always the mode name:
+ * The BINARY a mode looks for inside a container. ⚠️ NOT always the mode name:
  * `antigravity` ships as `agy` and `deepseek` as `dsh`, so probing by mode name
- * would report those two as missing on a container that has them. Single source
- * with `defaultDockerCommandForMode`, which launches the same binaries.
+ * would report those two as missing on a container that has them. Same source
+ * `probeDockerCliVersion` reads, and the same one `defaultDockerCommandForMode`
+ * launches from — a local table here duplicated the registry with nothing
+ * keeping the two in step.
  */
-const MODE_BINARIES: Partial<Record<SessionMode, string>> = { antigravity: 'agy', deepseek: 'dsh' };
+function containerBinaryFor(mode: SessionMode): string | undefined {
+  return getCli(mode)?.discovery.binaries[0];
+}
 
 /** Per-case container name prefix. The `case` letters deliberately do NOT matter to
  * tmux; this is a DOCKER name (`^[a-zA-Z0-9][a-zA-Z0-9_.-]+$`), and case names are
@@ -159,26 +158,30 @@ export function dockerContainerName(caseName: string): string {
   return `${CONTAINER_NAME_PREFIX}${caseName}`;
 }
 
-/** Default pane command per CLI mode (mirror of defaultRemoteCommandForMode). */
+/**
+ * Default in-container pane command per CLI mode (mirror of defaultRemoteCommandForMode).
+ *
+ * ⚠️ Read from the registry (`overlays.docker`), not from a hardcoded
+ * `Record<DockerCommandMode, string>`. That table duplicated the registry exactly with
+ * nothing keeping the two in step. `shell` is the one arm still written here, because it is
+ * the entry that declares `docker: { disabled: true }` — a container has no per-user login
+ * shell to resolve, so it gets a plain `bash -l` rather than a CLI invocation.
+ *
+ * ⚠️ `runsAsRoot` selects the overlay's `rootCommand` when it declares one. Claude Code
+ * REFUSES `--dangerously-skip-permissions` under uid 0 ("cannot be used with root/sudo
+ * privileges", still true in 2.1.261), and the refusal is only visible INSIDE the
+ * container, so the pane just dies. Our own base image runs a non-root user and never hits
+ * it; an ADOPTED container's user belongs to its owner and is frequently root. Which flag
+ * to drop is a per-CLI fact, so it lives in the registry rather than in a branch here.
+ */
 export function defaultDockerCommandForMode(mode: SessionMode, runsAsRoot = false): string {
-  const commands: Record<DockerCommandMode, string> = {
-    shell: 'exec bash -l',
-    // Mirror the LOCAL claude default so the in-container agent runs
-    // non-interactively — EXCEPT as root, where Claude Code refuses the flag
-    // outright ("cannot be used with root/sudo privileges"). Our base image runs
-    // a non-root user so an owned container never hits this; an adopted
-    // container's user belongs to its owner and is frequently root, and keeping
-    // the flag there kills the pane with a message only visible inside it.
-    claude: runsAsRoot ? 'exec claude' : 'exec claude --dangerously-skip-permissions',
-    opencode: 'exec opencode',
-    codex: 'exec codex',
-    gemini: 'exec gemini',
-    antigravity: 'exec agy',
-    pi: 'exec pi',
-    grok: 'exec grok',
-    deepseek: 'exec dsh',
-  };
-  return commands[mode as DockerCommandMode] || commands.shell;
+  const entry = getCli(mode);
+  const overlay = entry?.overlays.docker;
+  if (!entry || (overlay && 'disabled' in overlay)) return 'exec bash -l';
+  // Mirrors the LOCAL default for each CLI; claude's carries
+  // `--dangerously-skip-permissions` so the in-container agent runs non-interactively.
+  const cli = (runsAsRoot ? overlay?.rootCommand : undefined) ?? overlay?.command ?? entry.discovery.binaries[0];
+  return cli ? `exec ${cli}` : 'exec bash -l';
 }
 
 /** `container:/workdir` display string (mirror of remoteDisplayPath's `user@host:path`). */
@@ -322,6 +325,24 @@ export interface DockerMount {
 }
 
 /**
+ * Resolve a bind source into the Docker daemon's filesystem namespace.
+ *
+ * A bare-host Codeman process and its Docker daemon see the same HOME, so the
+ * source is returned unchanged. In Docker-outside-of-Docker deployments,
+ * `runtimeHome` is the path inside Codeman while `daemonHome` is the host path
+ * bind-mounted there. Sources beneath HOME must therefore be translated before
+ * they are sent through the Docker socket.
+ */
+export function resolveDockerDaemonMountSource(source: string, runtimeHome: string, daemonHome?: string): string {
+  const configuredDaemonHome = daemonHome?.trim();
+  if (!configuredDaemonHome) return source;
+
+  const relativeSource = relative(resolve(runtimeHome), resolve(source));
+  if (relativeSource.startsWith('..') || isAbsolute(relativeSource)) return source;
+  return resolve(configuredDaemonHome, relativeSource);
+}
+
+/**
  * Resolved, IO-free context for buildDockerCreateArgs. The caller (tmux-manager)
  * resolves the environment-dependent bits (host uid, existing cred mounts, the
  * derived api url, Desktop detection) so this builder stays pure and unit-testable.
@@ -344,6 +365,8 @@ export interface DockerCreateContext {
   addHostGateway: boolean;
   /** Engine host-gateway alias (host.docker.internal / host.containers.internal). */
   gatewayAlias: string;
+  /** Omit --memory-swap when the host kernel cannot enforce swap limits. */
+  disableSwapLimit?: boolean;
 }
 
 /**
@@ -361,12 +384,15 @@ function mountSpec(m: DockerMount): string {
   return `type=bind,src=${m.src},dst=${m.dst}${m.readonly ? ',readonly' : ''}`;
 }
 
-function resourceFlags(resources?: DockerResourceLimits): string[] {
+function resourceFlags(resources?: DockerResourceLimits, disableSwapLimit = false): string[] {
   if (!resources) return [];
   const flags: string[] = [];
   if (resources.memory) {
-    // memory-swap == memory disables swap, making --memory a REAL OOM cap.
-    flags.push('--memory', resources.memory, '--memory-swap', resources.memory);
+    flags.push('--memory', resources.memory);
+    // memory-swap == memory disables swap where the daemon supports swap
+    // accounting. Some kernels, including the deployed Unraid host, do not;
+    // requesting it there emits a warning and Docker ignores the value.
+    if (!disableSwapLimit) flags.push('--memory-swap', resources.memory);
   }
   if (resources.cpus) flags.push('--cpus', resources.cpus);
   if (resources.pidsLimit) flags.push('--pids-limit', String(resources.pidsLimit));
@@ -431,7 +457,7 @@ export function buildDockerCreateArgs(ctx: DockerCreateContext): string[] {
   if (addHostGateway) args.push('--add-host', `${gatewayAlias}:host-gateway`);
 
   args.push(
-    ...resourceFlags(docker.resources),
+    ...resourceFlags(docker.resources, ctx.disableSwapLimit),
     // GPU passthrough (needs the NVIDIA container toolkit on the host). No storage
     // cap is set, so the container's writable layer + volumes grow elastically as
     // data flows in (bounded only by host disk).
@@ -684,6 +710,22 @@ const CRED_STORES: CredStorePolicy[] = [
   },
   { rel: '.config/gcloud', seedWhole: true },
   { rel: '.config/opencode', seedWhole: true },
+  // OMP keeps its config in `~/.omp/agent` (config.yml/mcp.json/models.yml/
+  // settings.yml — small, no bigger than grok's config.toml/pager.toml), but
+  // that dir ALSO holds agent.db/history.db/models.db (SQLite caches) and
+  // terminal-sessions/blobs/cache (large, regenerable), so seed only the
+  // config files. UNLIKE pi/grok, `sessions/` is SHARED (RW), not
+  // host-invisible: Codeman reads `~/.omp/agent/sessions/**/*.jsonl`
+  // HOST-SIDE for history recovery and --resume pinning
+  // (omp-transcript.ts, omp-session-resolver.ts) — the same reason codex's
+  // `sessions/` is shared rather than seeded. Without this, an in-container
+  // OMP conversation would be invisible to Codeman's own history-scan/resume
+  // logic, silently breaking the kill-survival feature for Docker cases.
+  {
+    rel: '.omp/agent',
+    shareDirs: ['sessions'],
+    seedFiles: ['config.yml', 'mcp.json', 'models.yml', 'settings.yml'],
+  },
 ];
 
 /**
@@ -1171,9 +1213,10 @@ export async function probeAdoptableContainer(
   }
   // One exec resolves tmux plus every requested CLI, so adoption costs a single
   // round trip. Binaries are fixed mode names, never user input.
-  const wanted = modes.filter((m) => m !== 'shell');
-  const binaryFor = (mode: SessionMode) => MODE_BINARIES[mode] ?? mode;
-  const probes = ['tmux', ...wanted.map(binaryFor)];
+  // A mode with no binary of its own (`shell`) is dropped: there is nothing to look up,
+  // and `command -v ''` would make the whole probe meaningless.
+  const wanted = modes.filter((m) => !!containerBinaryFor(m));
+  const probes = ['tmux', ...wanted.map((m) => containerBinaryFor(m) as string)];
   // `; exit 0` is load-bearing: the script's status is its LAST command's, so a
   // missing final CLI made the whole `sh -lc` exit 1 and the probe reported
   // "could not exec into the container" for a container that was perfectly fine.
@@ -1229,7 +1272,10 @@ export async function probeAdoptableContainer(
       running: true,
       image,
       tmuxPath: 'tmux',
-      availableModes: modes.filter((m) => m === 'shell' || found.has(binaryFor(m))),
+      availableModes: modes.filter((m) => {
+        const bin = containerBinaryFor(m);
+        return bin ? found.has(bin) : true; // `shell` needs no binary
+      }),
       workdirExists,
       runsAsRoot: found.has('__root__'),
     };
@@ -1389,8 +1435,13 @@ export async function probeDockerCliVersion(
   mode: SessionMode
 ): Promise<string | undefined> {
   if (IS_TEST_MODE) return undefined;
-  const bin = mode === 'shell' ? null : mode;
-  if (!bin) return undefined;
+  // ⚠️ The MODE NAME IS NOT ALWAYS THE BINARY NAME — `antigravity` runs `agy`. This used
+  // to pass the mode straight through as the command, which would have probed a binary that
+  // does not exist. Only claude reaches this today (it is the one CLI with a version gate),
+  // so nothing was actually broken, but the registry is what makes it correct for the next
+  // CLI that needs a version.
+  const bin = getCli(mode)?.discovery.binaries[0];
+  if (!bin) return undefined; // `shell` has no binary of its own
   const argv = dockerEngineArgv(docker);
   try {
     const { stdout } = await execFileAsync(

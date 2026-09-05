@@ -237,7 +237,7 @@ minutes, never retry the credential.
 flushed slightly *after* the `stop` hook fires, so a read taken the instant the wait
 returns is too early (verified live: empty on the first call, full prose seconds later).
 It is also `""` before the worker's first completed turn, and permanently `""` for
-`shell`, `opencode`, `gemini`, `antigravity`, `pi` and `grok`, which write no transcript at
+`shell`, `opencode`, `gemini`, `antigravity`, `pi`, `grok` and `omp`, which write no transcript at
 all. `deepseek` is NOT one of those — it is read from `$DSH_HOME/sessions/**` and lags
 for the same reason claude does (the harness finalizes the assistant message just after
 it reports `idle`), so poll it the same way.
@@ -339,20 +339,20 @@ ESC=$(printf '\033')
 
 `POST /api/v1/quick-start` body (all optional):
 `{"caseName":"worker-1","mode":"claude","sessionName":"w9-worker","effort":"high"}`
-,  `mode` ∈ `claude|shell|opencode|codex|gemini|antigravity|pi|grok|deepseek`; response is
+,  `mode` ∈ `claude|shell|opencode|codex|gemini|antigravity|pi|grok|deepseek|omp`; response is
 `.data.{sessionId, caseName, casePath}`. Creates the case directory (a real directory
 on the user's disk) if missing, do not retry it in a loop, and remember the name.
 
 ⚠️ A `mode` whose CLI is **not installed on the server** fails the spawn with
 `OPERATION_FAILED`; it never falls back to claude. Probe first whenever you did not pick
 the mode yourself: `GET /api/v1/claude/status`, `GET /api/v1/opencode/status`,
-`GET /api/v1/codex/status`, `GET /api/v1/gemini/status`, `GET /api/v1/antigravity/status`, `GET /api/v1/grok/status`, `GET /api/v1/deepseek/status`
-and `GET /api/v1/pi/status` each return `.data.{available, path}` (no session needed).
-Pi's and grok's also carry `.data.version`, because `pi` is a short generic name and
-`grok` is a name with npm squatters, so an unrelated binary on `$PATH` can shadow either:
-the resolver rejects one whose `--version` is not version-shaped, so `available:false`
-there can mean "a different `pi`/`grok` is in front" rather than "nothing is installed".
-`shell` has no CLI to probe.
+`GET /api/v1/codex/status`, `GET /api/v1/gemini/status`, `GET /api/v1/antigravity/status`, `GET /api/v1/grok/status`, `GET /api/v1/deepseek/status`,
+`GET /api/v1/pi/status` and `GET /api/v1/omp/status` each return `.data.{available, path}` (no session needed).
+Pi's, grok's and OMP's also carry `.data.version`, because `pi` is a short generic name,
+`grok` is a name with npm squatters, and `omp` is a similarly short name, so an unrelated
+binary on `$PATH` can shadow any of them: the resolver rejects one whose `--version` is
+not version-shaped, so `available:false` there can mean "a different program of the same
+name is in front" rather than "nothing is installed". `shell` has no CLI to probe.
 
 ⚠️ **Branch on `.success` before reading `.data.sessionId`.** On any failure the field
 is absent, `jq -r` prints the literal string `null`, and every later call then targets
@@ -466,9 +466,9 @@ Quirks that will bite you:
   session answers with an empty timeline rather than a 404.
 - ⚠️ **`active-tools` proves presence, never absence.** It is fed by the BashToolParser,
   which reads Claude's rendered `● Bash(…)` lines, and `_processExpensiveParsers`
-  returns early for every external CLI mode (`session.ts:2261`), so it is permanently
-  `[]` on `opencode`/`codex`/`gemini`/`antigravity`/`pi`/`grok`/`deepseek`. ⚠️ **`shell` is NOT one of those**
-  (`isExternalCliMode`, `session.ts:174-183`, lists only those six), so the parser does
+  returns early for every external CLI mode (`session.ts:~2225`), so it is permanently
+  `[]` on `opencode`/`codex`/`gemini`/`antigravity`/`pi`/`grok`/`deepseek`/`omp`. ⚠️ **`shell` is NOT one of those**
+  (`isExternalCliMode`, `session.ts:176-187`, lists only those seven), so the parser does
   run on a shell worker, and `TEXT_COMMAND_PATTERN` (`bash-tool-parser.ts:89`) matches
   bare `tail|cat|head|less|grep|watch|multitail <path>` lines with no `● Bash(` wrapper:
   a shell worker running `cat build.log` really does populate this. In practice it stays
@@ -800,7 +800,8 @@ for environment and setup problems.
 | wait routes 404 on a valid session id | read the `.error` text: a `Route ...` prefix means the server predates the wait endpoints (< 1.13.0; a dev build can serve them while reporting an older version, so probe, never version-compare), poll `terminal?tail=` and say so. `Session ... not found` means your id is wrong, not the server |
 | wait on `stop` never resolves | a mode with no hook signals, or hooks not reaching the server (Docker/remote), or a case created by Codeman < 1.13.0 against an `--https` install (its hook curls lacked `-k` and TLS-failed silently; a 1.13.0+ server rewrites them the next time a session starts in that case). Use markers or `idle,exit` |
 | wait on `stop` never resolves, on a **dsh** worker whose pane clearly finished | that profile does not implement the harness's supervisor contract, which Codeman cannot detect at request time (an unrecognized profile is treated as launchable on purpose). The wait is accepted and then times out. Drive that worker with markers, or switch to a profile that reports — `@deepseek-harness-tui/dsh-tui` does |
-| new claude worker ignores its first prompt | it was showing the first-run trust dialog and Codeman's auto-accept did not fire (it is bounded by a 90 s window and an attempt cap); use the readiness recipe in SKILL.md, wait for `shift+tab` first, accept the dialog only as the bounded fallback |
+| new claude worker ignores its first prompt | it was showing the first-run trust dialog and Codeman's auto-accept did not fire (it is bounded by a 90 s window and a keystroke cap); use the readiness recipe in SKILL.md, wait for `shift+tab` first, answer the dialog only as the bounded fallback |
+| a brand-new claude worker's pane is DEAD (`status 1`) seconds after the spawn | something pressed Enter at the first-run trust dialog. Since claude-cli 2.1.252 its options are unnumbered, reversed, and the highlighted default is `No, exit`, so a blind `\r` — an up-front Enter, or a task prompt typed into the dialog — quits the CLI. Answer it by reading the `❯` marker off `terminal?full=1` and arrowing onto `Yes, I trust this folder` first: `_accept_trust` in the §0 preamble |
 | readiness burns its whole budget, then the worker answers fine anyway | you matched `bypass`, which is the statusline of ONE permission mode. Codeman spawns `--dangerously-skip-permissions` by default, but the server's `claudeMode` setting also has `auto` (`auto mode on`), `allowedTools` and `normal` (both `don't ask on`), and the effective per-session value is not exposed on `GET /api/v1/sessions/:id`. Match **`shift+tab`** instead: every mode's status bar ends `(shift+tab to cycle)` (measured per mode against claude-cli 2.1.226). Expect `blocked` signals mid-turn on the non-default modes |
 | ANSI escapes survive the strip pipeline | `sed -e 's/\x1b…'` on macOS: `\x1b` is GNU-only, BSD sed matches nothing and strips nothing. Use the `ESC=$(printf '\033')` form above |
 | `wait-output` times out although the pane shows the text | multi-word match against a TUI screen; the stream has no spaces there, match one token |

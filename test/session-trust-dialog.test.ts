@@ -8,10 +8,23 @@
  *
  * RAW_DIALOG_CHUNK below is a verbatim slice of the PTY stream from a live
  * session parked on that dialog (Claude Code 2.1.220).
+ *
+ * The second bug this pins: Claude Code 2.1.252 dropped the option numbers, put
+ * "No, exit" first and highlights IT, so the blind Enter that answered the old
+ * layout selects *exit* and the pane dies seconds after the session starts.
+ * RENDERED_DIALOG_2_1_252 is a verbatim `capture-pane -p` of that screen.
  */
 import { describe, expect, it, vi, afterEach } from 'vitest';
 import { Session } from '../src/session.js';
-import { isTrustDialogScreen, compactScreenText, TRUST_DIALOG_MAX_ATTEMPTS } from '../src/session-trust-dialog.js';
+import {
+  isTrustDialogScreen,
+  compactScreenText,
+  trustDialogNextKey,
+  TRUST_KEY_CONFIRM,
+  TRUST_KEY_DOWN,
+  TRUST_KEY_UP,
+  TRUST_DIALOG_MAX_ATTEMPTS,
+} from '../src/session-trust-dialog.js';
 
 /** Verbatim from the wire: note the `\x1b[C` where every space should be. */
 const RAW_DIALOG_CHUNK =
@@ -28,6 +41,25 @@ const RENDERED_DIALOG = [
   '',
   ' Enter to confirm · Esc to cancel',
 ].join('\n');
+
+/**
+ * Verbatim `capture-pane -p` from Claude Code 2.1.252 on a fresh case: no
+ * numbers, the options reversed, and the cursor parked on the one that quits.
+ */
+const RENDERED_DIALOG_2_1_252 = [
+  ' Accessing workspace:',
+  ' /home/arkon/codeman-cases/trustprobe1',
+  ' Quick safety check: Is this a project you created or one you trust? (Like your own code, a well-known open source',
+  " project, or work from your team). If not, take a moment to review what's in this folder first.",
+  " Claude Code'll be able to read, edit, and execute files here.",
+  ' Security guide',
+  ' ❯ No, exit',
+  '   Yes, I trust this folder',
+  ' Enter to confirm · Esc to cancel',
+].join('\n');
+
+/** The same screen after one arrow press: the cursor has moved onto "yes". */
+const RENDERED_DIALOG_2_1_252_ON_YES = RENDERED_DIALOG_2_1_252.replace(' ❯ No, exit\n   Yes,', '   No, exit\n ❯ Yes,');
 
 /** An ordinary working session: no dialog anywhere. */
 const RENDERED_MAIN_UI = [
@@ -61,9 +93,51 @@ describe('isTrustDialogScreen', () => {
     expect(isTrustDialogScreen('press Enter to confirm the release')).toBe(false);
   });
 
+  it('sees the 2.1.252 dialog, whose options lost their numbers', () => {
+    // '2.no,exit' is gone from this layout, so the confirm affordance is now the
+    // only thing carrying the match.
+    expect(isTrustDialogScreen(RENDERED_DIALOG_2_1_252)).toBe(true);
+  });
+
   it('compacts away both real spaces and the escapes tmux sends instead', () => {
     expect(compactScreenText('I\x1b[Ctrust\x1b[Cthis\x1b[Cfolder')).toBe('itrustthisfolder');
     expect(compactScreenText('I trust this folder')).toBe('itrustthisfolder');
+  });
+});
+
+describe('trustDialogNextKey', () => {
+  it('confirms straight away when the trust option is already highlighted', () => {
+    expect(trustDialogNextKey(RENDERED_DIALOG)).toBe(TRUST_KEY_CONFIRM);
+    expect(trustDialogNextKey(RENDERED_DIALOG_2_1_252_ON_YES)).toBe(TRUST_KEY_CONFIRM);
+  });
+
+  it('moves DOWN instead of confirming when 2.1.252 parks the cursor on "No, exit"', () => {
+    // The regression in one line: Enter here answers *exit* and kills the pane.
+    expect(trustDialogNextKey(RENDERED_DIALOG_2_1_252)).toBe(TRUST_KEY_DOWN);
+  });
+
+  it('moves UP when the trust option is the one above, as in the numbered layout', () => {
+    const numberedOnNo = RENDERED_DIALOG.replace(' ❯ 1. Yes,', '   1. Yes,').replace(
+      '   2. No, exit',
+      ' ❯ 2. No, exit'
+    );
+    expect(trustDialogNextKey(numberedOnNo)).toBe(TRUST_KEY_UP);
+  });
+
+  it('reads the LAST frame in an append-only buffer, not the first', () => {
+    // The direct-PTY fallback has no pane to capture, so it reads a buffer that
+    // still holds every repaint since launch. The freshest frame is the truth.
+    const buffer = `${RENDERED_DIALOG_2_1_252}\n${RENDERED_DIALOG_2_1_252_ON_YES}`;
+    expect(trustDialogNextKey(buffer)).toBe(TRUST_KEY_CONFIRM);
+  });
+
+  it('presses nothing when the screen does not say which option is selected', () => {
+    // A layout this cannot read is a dialog for the human, not a coin flip: the
+    // wrong guess exits Claude.
+    const noMarker = RENDERED_DIALOG_2_1_252.replace(' ❯ No, exit', '   No, exit');
+    expect(trustDialogNextKey(noMarker)).toBe(null);
+    expect(trustDialogNextKey(RENDERED_MAIN_UI)).toBe(null);
+    expect(trustDialogNextKey('')).toBe(null);
   });
 });
 
@@ -100,6 +174,32 @@ describe('Session trust-dialog auto-accept', () => {
     const { writes, tick } = sessionShowing(() => RENDERED_DIALOG);
     tick();
     expect(writes).toEqual(['\r']);
+  });
+
+  it('walks the 2.1.252 dialog onto the trust option before it confirms', () => {
+    vi.useFakeTimers();
+    // The whole point: no Enter goes out while "No, exit" is highlighted.
+    let screen = RENDERED_DIALOG_2_1_252;
+    const { writes, tick } = sessionShowing(() => screen);
+    tick();
+    expect(writes).toEqual([TRUST_KEY_DOWN]);
+
+    screen = RENDERED_DIALOG_2_1_252_ON_YES;
+    vi.advanceTimersByTime(2000);
+    tick();
+    expect(writes).toEqual([TRUST_KEY_DOWN, TRUST_KEY_CONFIRM]);
+  });
+
+  it('never presses Enter while the cursor sits on "No, exit"', () => {
+    vi.useFakeTimers();
+    // A dialog that never moves (a dropped arrow, a wedged pane) must run out of
+    // attempts pressing arrows, not answer *exit* on the way.
+    const { writes, tick } = sessionShowing(() => RENDERED_DIALOG_2_1_252);
+    for (let i = 0; i < 20; i++) {
+      tick();
+      vi.advanceTimersByTime(2000);
+    }
+    expect(writes).toEqual(Array(TRUST_DIALOG_MAX_ATTEMPTS).fill(TRUST_KEY_DOWN));
   });
 
   it('retries a dropped keystroke, then gives up rather than typing forever', () => {

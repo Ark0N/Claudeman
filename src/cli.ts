@@ -15,6 +15,7 @@ import { existsSync, readFileSync } from 'node:fs';
 import { isAbsolute, join } from 'node:path';
 import { homedir } from 'node:os';
 import { dataPath } from './config/instance.js';
+import { casePath } from './config/cases-dir.js';
 import { installAgentSkillInto, removeAgentSkillFrom, type AgentSkillApplyResult } from './hooks-config.js';
 import { getSessionManager } from './session-manager.js';
 import { getTaskQueue } from './task-queue.js';
@@ -146,7 +147,9 @@ export function resolveCliCasePath(name: string): string {
   } catch {
     // no registry yet, or unreadable/invalid JSON: fall through to the cases dir
   }
-  return join(homedir(), 'codeman-cases', name);
+  // Same resolver the server uses, so CODEMAN_CASES_PATH (Docker Compose) moves
+  // the CLI's idea of a case with it instead of leaving it on the home default.
+  return casePath(name);
 }
 
 /**
@@ -1254,7 +1257,7 @@ program
   .action(async (options) => {
     const { createRealHost, checkAll } = await import('./utils/dependency-checker.js');
     const { renderTable, renderJson, computeExitCode } = await import('./utils/dependency-report.js');
-    const { DEPENDENCY_REGISTRY, TOOL_CATEGORIES } = await import('./config/dependency-registry.js');
+    const { dependencyRegistry, TOOL_CATEGORIES } = await import('./config/dependency-registry.js');
 
     if (options.category && !(TOOL_CATEGORIES as readonly string[]).includes(options.category)) {
       console.error(`Unknown category "${options.category}". Valid categories: ${TOOL_CATEGORIES.join(', ')}`);
@@ -1262,9 +1265,8 @@ program
     }
 
     const host = createRealHost();
-    const registry = options.category
-      ? DEPENDENCY_REGISTRY.filter((t) => t.category === options.category)
-      : DEPENDENCY_REGISTRY;
+    const allTools = dependencyRegistry();
+    const registry = options.category ? allTools.filter((t) => t.category === options.category) : allTools;
     const results = checkAll(registry, host);
 
     if (options.json) {

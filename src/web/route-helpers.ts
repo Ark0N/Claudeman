@@ -8,11 +8,10 @@
 import { join, resolve, relative, isAbsolute } from 'node:path';
 import { realpathSync, existsSync, mkdirSync } from 'node:fs';
 import fs from 'node:fs/promises';
-import { homedir } from 'node:os';
 import type { z } from 'zod';
 import type { FastifyReply, FastifyRequest } from 'fastify';
 import { Session } from '../session.js';
-import { ApiErrorCode, createErrorResponse, type AuthUser } from '../types.js';
+import { ApiErrorCode, createErrorResponse, type AuthUser, type SessionState } from '../types.js';
 import { MAX_CONCURRENT_SESSIONS } from '../config/map-limits.js';
 import { parseRalphLoopConfig, extractCompletionPhrase } from '../ralph-config.js';
 import { SseEvent } from './sse-events.js';
@@ -21,12 +20,15 @@ import type { EventPort } from './ports/event-port.js';
 import type { AuthSessionRecord } from './ports/auth-port.js';
 import type { StaleExpirationMap } from '../utils/index.js';
 import { dataPath } from '../config/instance.js';
+import { getCasesDir } from '../config/cases-dir.js';
 import { isMultiUserMode, maxSessionsPerUser, userCasesDir } from '../config/multiuser.js';
 import { SYNTHETIC_ADMIN, findUser } from '../user-store.js';
 
 // Shared path constants used across route modules. CASES_DIR (project folders)
 // stays shared across instances; SETTINGS_PATH is per-instance runtime state.
-export const CASES_DIR = join(homedir(), 'codeman-cases');
+// The cases dir is resolved in ONE place (config/cases-dir.ts) because the CLI
+// resolves it too, and CODEMAN_CASES_PATH must move both or neither.
+export const CASES_DIR = getCasesDir();
 export const SETTINGS_PATH = dataPath('settings.json');
 
 /**
@@ -265,6 +267,18 @@ export function revokeUserSessions(
 }
 
 /**
+ * The 404 both session-lookup helpers below throw. A missing session and one
+ * the caller isn't allowed to see get the IDENTICAL error (never 403), so
+ * existence of another user's session is never leaked.
+ */
+function sessionNotFoundError(sessionId: string): Error & { statusCode: number; body: unknown } {
+  return Object.assign(new Error(`Session ${sessionId} not found`), {
+    statusCode: 404,
+    body: createErrorResponse(ApiErrorCode.NOT_FOUND, `Session ${sessionId} not found`),
+  });
+}
+
+/**
  * Look up a session by ID or throw a structured error.
  * Replaces the pattern: `const session = sessions.get(id); if (!session) return createErrorResponse(...)`.
  *
@@ -274,13 +288,29 @@ export function revokeUserSessions(
  */
 export function findSessionOrFail(ctx: SessionPort, sessionId: string, req?: FastifyRequest): Session {
   const session = ctx.sessions.get(sessionId);
-  if (!session || (req && !canAccessOwned(getAuthUser(req), session.owner))) {
-    throw Object.assign(new Error(`Session ${sessionId} not found`), {
-      statusCode: 404,
-      body: createErrorResponse(ApiErrorCode.NOT_FOUND, `Session ${sessionId} not found`),
-    });
-  }
+  if (!session) throw sessionNotFoundError(sessionId);
+  if (req && !canAccessOwned(getAuthUser(req), session.owner)) throw sessionNotFoundError(sessionId);
   return session;
+}
+
+/**
+ * Like {@link findSessionOrFail}, for a session that exists ONLY in persisted
+ * state — a resumed-but-never-reattached row (e.g. a non-claude "Resume" that
+ * relaunched into a new session and wants to retire the row it can no longer
+ * reattach to) has no live `Session` instance for `findSessionOrFail` to
+ * return, so this returns the persisted record instead. Same ownership
+ * enforcement, same 404-not-403 leak protection — this is that function's
+ * missing other half, not a separate check reimplemented inline.
+ */
+export function findPersistedSessionOrFail(
+  store: { getSession(id: string): SessionState | null },
+  sessionId: string,
+  req?: FastifyRequest
+): SessionState {
+  const persisted = store.getSession(sessionId);
+  if (!persisted) throw sessionNotFoundError(sessionId);
+  if (req && !canAccessOwned(getAuthUser(req), persisted.owner)) throw sessionNotFoundError(sessionId);
+  return persisted;
 }
 
 /** Shortest prefix accepted for a parent session id (see resolveParentSessionId). */

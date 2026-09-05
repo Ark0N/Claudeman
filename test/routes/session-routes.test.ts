@@ -341,6 +341,36 @@ describe('session-routes', () => {
       const body = JSON.parse(res.body);
       expect(body.success).toBe(false);
     });
+
+    it('removes a persisted-only session (not live) via the state store, without touching cleanupSession', async () => {
+      vi.mocked(harness.ctx.store.getSession).mockReturnValueOnce({
+        id: 'ghost-session',
+        owner: undefined,
+      } as never);
+      const res = await harness.app.inject({
+        method: 'DELETE',
+        url: '/api/sessions/ghost-session',
+      });
+      expect(res.statusCode).toBe(200);
+      const body = JSON.parse(res.body);
+      expect(body.success).toBe(true);
+      expect(harness.ctx.store.demoteOrRemoveSession).toHaveBeenCalledWith('ghost-session');
+      expect(harness.ctx.cleanupSession).not.toHaveBeenCalled();
+      // Ark0N/Codeman#353 review: the persisted-only branch used to demote/remove
+      // with no broadcast, so other open tabs kept showing the retired row until
+      // their next unrelated fetch.
+      expect(harness.ctx.broadcast).toHaveBeenCalledWith('session:deleted', { id: 'ghost-session' });
+    });
+
+    it('404s a persisted-only session id the state store does not recognize either', async () => {
+      vi.mocked(harness.ctx.store.getSession).mockReturnValueOnce(null);
+      const res = await harness.app.inject({
+        method: 'DELETE',
+        url: '/api/sessions/truly-nonexistent',
+      });
+      expect(res.statusCode).toBe(404);
+      expect(harness.ctx.store.demoteOrRemoveSession).not.toHaveBeenCalled();
+    });
   });
 
   // ========== DELETE /api/sessions (delete all) ==========

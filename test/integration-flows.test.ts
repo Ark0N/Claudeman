@@ -1,8 +1,8 @@
 import { describe, it, expect, beforeAll, afterAll, afterEach } from 'vitest';
 import { WebServer } from '../src/web/server.js';
-import { existsSync, rmSync } from 'node:fs';
 import { join } from 'node:path';
 import { homedir } from 'node:os';
+import { safeRmHomeTree } from './mocks/index.js';
 
 const TEST_PORT = 3115;
 const CASES_DIR = join(homedir(), 'codeman-cases');
@@ -24,13 +24,11 @@ describe('Integration Flows', () => {
   });
 
   afterEach(() => {
-    // Clean up cases created during this test
+    // Clean up cases created during this test (containment-gated: never
+    // delete a case dir outside the temp HOME, e.g. prod ~/codeman-cases on
+    // platforms where os.homedir() ignores $HOME).
     while (createdCases.length > 0) {
-      const caseName = createdCases.pop()!;
-      const casePath = join(CASES_DIR, caseName);
-      if (existsSync(casePath)) {
-        rmSync(casePath, { recursive: true, force: true });
-      }
+      safeRmHomeTree(join(CASES_DIR, createdCases.pop()!));
     }
   });
 
@@ -296,10 +294,7 @@ describe('SSE Event Flow', () => {
       } catch {}
     }
     for (const caseName of createdCases) {
-      const casePath = join(CASES_DIR, caseName);
-      if (existsSync(casePath)) {
-        rmSync(casePath, { recursive: true, force: true });
-      }
+      safeRmHomeTree(join(CASES_DIR, caseName));
     }
     await server.stop();
   }, 60000);

@@ -16,6 +16,7 @@ import { registerWebviewRoutes } from '../../src/web/routes/webview-routes.js';
 import { installRouteErrorHandler } from '../../src/web/route-error-handler.js';
 import { webviewCapabilities } from '../../src/webview-capabilities.js';
 import { capabilityFromProxyPath } from '../../src/web/webview-proxy.js';
+import { writeWebviews } from '../../src/webview-store.js';
 import { TabLayoutService } from '../../src/tab-layout-service.js';
 import type { TabLayout } from '../../src/tab-layout.js';
 
@@ -284,5 +285,61 @@ describe('POST /api/webviews/probe', () => {
   it('rejects an invalid URL up front', async () => {
     const res = await app.inject({ method: 'POST', url: '/api/webviews/probe', payload: { url: 'file:///etc' } });
     expect(res.statusCode).toBe(400);
+  });
+});
+
+describe('egress policy: link-local and cloud-metadata targets', () => {
+  it('refuses to SAVE a metadata address, in every spelling, with a message that says why', async () => {
+    for (const url of [
+      'http://169.254.169.254/latest/meta-data/',
+      'http://2852039166/', // decimal form of 169.254.169.254
+      'http://[fd00:ec2::254]/',
+      'http://metadata.google.internal/computeMetadata/v1/',
+    ]) {
+      const res = await create({ name: 'IMDS', url });
+      expect(res.statusCode, url).toBe(400);
+      expect(res.body, url).toMatch(/Blocked URL/);
+    }
+  });
+
+  it('still saves the loopback dashboards the feature exists for', async () => {
+    expect((await create({ name: 'Grafana', url: 'http://127.0.0.1:4000/' })).statusCode).toBe(200);
+    expect((await create({ name: 'Local', url: 'http://localhost:3080/' })).statusCode).toBe(200);
+  });
+
+  it('the probe refuses the same targets up front, before any connection is attempted', async () => {
+    const res = await app.inject({
+      method: 'POST',
+      url: '/api/webviews/probe',
+      payload: { url: 'http://169.254.169.254/' },
+    });
+    expect(res.statusCode).toBe(400);
+    expect(res.body).toMatch(/Blocked URL/);
+  });
+
+  it('the proxy refuses a record saved before the rule existed with a 403, never a relay', async () => {
+    // Written straight to the store: the schema would refuse it today, which is
+    // exactly why the proxy must judge the target again at connect time.
+    await writeWebviews(tmpDir, [
+      {
+        id: 'legacy-imds',
+        name: 'legacy',
+        url: 'http://169.254.169.254/',
+        embedMode: 'proxy',
+        trusted: false,
+        createdAt: Date.now(),
+      },
+    ]);
+    const cap = webviewCapabilities.mint('legacy-imds', undefined);
+    const warn = vi.spyOn(console, 'warn').mockImplementation(() => {});
+    try {
+      const res = await app.inject({ method: 'GET', url: `/webview/${cap}/latest/meta-data/` });
+      expect(res.statusCode).toBe(403);
+      expect(res.body).toMatch(/link-local or cloud-metadata/);
+      expect(warn).toHaveBeenCalledWith(expect.stringContaining('refused by egress policy'));
+    } finally {
+      warn.mockRestore();
+      webviewCapabilities.revokeWebview('legacy-imds');
+    }
   });
 });

@@ -7,18 +7,25 @@
 # the repo (the server stages it at ~/.codeman/self-update-runner.sh) — `git
 # checkout` rewrites the in-repo copy and bash reads scripts lazily.
 #
+# ⚠️ The `docker-compose` supervisor is the exception to "outlives": there the
+# restart IS the container exiting, which kills this script too. That is safe
+# because the terminal "restarting" marker is written before the kill and the
+# rebooted server reconciles it — but nothing may be added after that kill.
+#
 # Reports progress by writing ~/.codeman/update-status.json atomically; the
 # browser polls GET /api/system/update/status across the restart drop. The
 # freshly-booted server reconciles the final "restarting" → "completed"/"failed".
 #
-# Cross-platform: restarts via systemd (Linux), launchd (macOS), or prints a
-# manual command (foreground installs). Linux launches inside a transient
-# systemd scope so `systemctl restart codeman-web` can't kill it mid-build.
+# Cross-platform: restarts via systemd (Linux), launchd (macOS), a container exit
+# under Docker Compose (the restart policy relaunches it), or prints a manual
+# command (foreground installs). Linux launches inside a transient systemd scope
+# so `systemctl restart codeman-web` can't kill it mid-build.
 #
 # Args (all from the server, never user input — tag is validated server-side):
-#   --repo <dir> --tag <codeman@X.Y.Z> --supervisor <systemd|launchd|none>
+#   --repo <dir> --tag <codeman@X.Y.Z> --supervisor <systemd|launchd|docker-compose|none>
 #   --status-file <path> --update-id <uuid> --from-version <ver> --node <path>
-#   --log <path> [--prev-sha <sha>] [--stash]
+#   --log <path> [--prev-sha <sha>] [--stash] [--server-pid <pid>]
+#   [--restart-by-exit 0|1]   (docker-compose only: may we exit the server?)
 #
 set -uo pipefail
 
@@ -32,6 +39,7 @@ REPO=""
 TAG=""
 SUPERVISOR="none"
 SERVER_PID=""
+RESTART_BY_EXIT="0"
 STATUS_FILE=""
 UPDATE_ID=""
 FROM_VERSION=""
@@ -52,6 +60,7 @@ while [[ $# -gt 0 ]]; do
     --log) LOG="$2"; shift 2 ;;
     --prev-sha) PREV_SHA="$2"; shift 2 ;;
     --server-pid) SERVER_PID="$2"; shift 2 ;;
+    --restart-by-exit) RESTART_BY_EXIT="$2"; shift 2 ;;
     --stash) DO_STASH=1; shift ;;
     *) shift ;;
   esac
@@ -144,7 +153,7 @@ rollback_and_fail() {
   echo "[self-update] $msg — rolling back to ${PREV_SHA:-<none>}"
   if [[ -n "$PREV_SHA" ]]; then
     git checkout --force "$PREV_SHA" >/dev/null 2>&1 || true
-    npm install --no-fund --no-audit >/dev/null 2>&1 || true
+    npm install --no-fund --no-audit --include=dev >/dev/null 2>&1 || true
     npm run build >/dev/null 2>&1 || true
   fi
   fail "$msg — rolled back to the previous version" "$msg"
@@ -176,7 +185,9 @@ write_status "checkout" "Checking out $TAG…"
 git -c advice.detachedHead=false checkout --force "$TAG" || rollback_and_fail "Could not check out $TAG"
 
 # 4) Install dependencies (heartbeat keeps the UI live during this slow step).
-run_step "installing" "Installing dependencies" npm install --no-fund --no-audit \
+# --include=dev: tsc and esbuild are devDependencies, and the Compose image sets
+# NODE_ENV=production, which would otherwise omit them and fail the build below.
+run_step "installing" "Installing dependencies" npm install --no-fund --no-audit --include=dev \
   || rollback_and_fail "Dependency install failed"
 
 # 5) Build (gate the restart on success — never restart into a torn dist/).
@@ -199,6 +210,43 @@ case "$SUPERVISOR" in
       launchctl load "$PLIST" 2>/dev/null \
         || fail "Build succeeded but launchd restart failed" "launchctl"
     }
+    ;;
+  docker-compose)
+    # In the Compose deployment there is no init system to ask: the "restart" is
+    # the server EXITING, so the container's `restart: unless-stopped` policy
+    # relaunches it on the dist/ we just built. The repo and dist/ live on host
+    # mounts, so the new build survives the container being replaced.
+    #
+    # ⚠️ This script dies WITH the container it is restarting — it is a child of
+    # the server process, not a survivor like the systemd-scope path. That is
+    # fine, and load-bearing: the terminal "restarting" marker is already written
+    # above, and the freshly-booted server reconciles it. Nothing may be appended
+    # after the kill that the update depends on.
+    #
+    # ⚠️ The server is signalled by PID rather than `docker restart`: this
+    # container's own Docker CLI talks to the HOST daemon, and a self-directed
+    # restart there races the client's own death. Exiting is the one path that
+    # needs no cooperation from anything outside the container.
+    #
+    # ⚠️ Only when the SERVER said the container comes back (`--restart-by-exit 1`:
+    # the Compose file declared it, or the daemon reported an auto-restart policy).
+    # An unknown policy stages the build and asks for a restart instead. Exiting
+    # blind would take a container the daemon does not restart down for good,
+    # with no UI left to recover it from.
+    if [[ "$RESTART_BY_EXIT" != "1" ]]; then
+      MANUAL_CMD="docker restart \$(hostname)  # from the Docker host"
+      write_status "completed-needs-manual-restart" "Update built — restart the Codeman container to apply v$TO_VERSION."
+      echo "[self-update] docker-compose: restart-by-exit not confirmed — not exiting; manual restart required"
+      exit 0
+    fi
+    if [[ -n "$SERVER_PID" ]] && kill "$SERVER_PID" 2>/dev/null; then
+      : # container exit + restart policy take it from here
+    else
+      MANUAL_CMD="docker restart \$(hostname)  # from the Docker host"
+      write_status "completed-needs-manual-restart" "Update staged — restart the Codeman container to apply v$TO_VERSION."
+      echo "[self-update] docker-compose: could not signal server pid '$SERVER_PID' — manual restart required"
+      exit 0
+    fi
     ;;
   launchd-daemon)
     # System-level KeepAlive LaunchDaemon (headless Mac): kickstarting the system

@@ -32,6 +32,7 @@ import {
   resolveClaudeJsonSeedMount,
   resolveDockerClaudeArtifacts,
   resolveDockerCredentialArtifacts,
+  resolveDockerDaemonMountSource,
   toSessionDocker,
   writeDockerCases,
   writeDockerHosts,
@@ -267,6 +268,32 @@ describe('buildDockerCreateArgs', () => {
     expect(s).not.toContain('--storage-opt');
     expect(buildDockerCreateArgs(ctx()).join(' ')).not.toContain('--gpus');
   });
+
+  it('omits the unsupported swap limit while retaining the memory limit when disabled', () => {
+    const s = buildDockerCreateArgs(ctx({ disableSwapLimit: true })).join(' ');
+    expect(s).toContain('--memory 4g');
+    expect(s).not.toContain('--memory-swap');
+  });
+});
+
+describe('resolveDockerDaemonMountSource', () => {
+  const runtimeHome = join(tmpdir(), 'codeman-runtime-home');
+  const daemonHome = join(tmpdir(), 'codeman-daemon-home');
+
+  it('maps paths beneath the runtime HOME into the daemon-visible HOME', () => {
+    const source = join(runtimeHome, '.codeman', 'docker-seeds', 'codeman-case-test1.json');
+    expect(resolveDockerDaemonMountSource(source, runtimeHome, daemonHome)).toBe(
+      join(daemonHome, '.codeman', 'docker-seeds', 'codeman-case-test1.json')
+    );
+  });
+
+  it('preserves direct-host and non-HOME sources', () => {
+    const source = join(runtimeHome, '.claude', 'settings.json');
+    expect(resolveDockerDaemonMountSource(source, runtimeHome)).toBe(source);
+
+    const outsideHome = join(tmpdir(), 'codeman-cases', 'test1');
+    expect(resolveDockerDaemonMountSource(outsideHome, runtimeHome, daemonHome)).toBe(outsideHome);
+  });
 });
 
 describe('resolveDockerCredentialArtifacts (isolated codex/gemini/gcloud/opencode)', () => {
@@ -328,6 +355,32 @@ describe('resolveDockerCredentialArtifacts (isolated codex/gemini/gcloud/opencod
     const { mounts, seedCopies } = resolveDockerCredentialArtifacts(home);
     expect(mounts).toEqual([]);
     expect(seedCopies).toEqual([]);
+  });
+
+  it('omp: shares sessions/ RW (host-side history/resume reads), seeds config files only', () => {
+    mkdirSync(join(home, '.omp', 'agent', 'sessions'), { recursive: true });
+    writeFileSync(join(home, '.omp', 'agent', 'config.yml'), '');
+    writeFileSync(join(home, '.omp', 'agent', 'mcp.json'), '{}');
+    writeFileSync(join(home, '.omp', 'agent', 'models.yml'), '');
+    writeFileSync(join(home, '.omp', 'agent', 'settings.yml'), '');
+    // Regenerable local state that must NOT be seeded (mirrors the pi/grok exclusions).
+    writeFileSync(join(home, '.omp', 'agent', 'agent.db'), '');
+    mkdirSync(join(home, '.omp', 'agent', 'terminal-sessions'), { recursive: true });
+
+    const { mounts, seedCopies } = resolveDockerCredentialArtifacts(home);
+    expect(mounts).toContainEqual({
+      src: join(home, '.omp', 'agent', 'sessions'),
+      dst: '/home/agent/.omp/agent/sessions',
+    });
+    const dests = seedCopies.map((s) => s.to);
+    expect(dests).toContain('/home/agent/.omp/agent/config.yml');
+    expect(dests).toContain('/home/agent/.omp/agent/mcp.json');
+    expect(dests).toContain('/home/agent/.omp/agent/models.yml');
+    expect(dests).toContain('/home/agent/.omp/agent/settings.yml');
+    expect(dests).not.toContain('/home/agent/.omp/agent/agent.db');
+    expect(mounts.some((m) => m.dst === '/home/agent/.omp/agent/terminal-sessions')).toBe(false);
+    // seed copies of individual files are NOT recursive
+    expect(seedCopies.filter((s) => s.to.startsWith('/home/agent/.omp')).every((s) => !s.recursive)).toBe(true);
   });
 });
 

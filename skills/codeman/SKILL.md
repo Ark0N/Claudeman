@@ -47,7 +47,7 @@ later call opens with, and your first REAL call performs them anyway:
 
 ```bash
 . "${XDG_CACHE_HOME:-$HOME/.cache}/codeman-agent-$CODEMAN_SESSION_ID.sh" 2>/dev/null
-[ "${CODEMAN_PREAMBLE:-}" = 1.20.0 ] || { echo "preamble missing or stale; run the full §0 block"; exit 1; }
+[ "${CODEMAN_PREAMBLE:-}" = 1.21.0 ] || { echo "preamble missing or stale; run the full §0 block"; exit 1; }
 ```
 
 ⚠️ **Never spend a Bash call on this check alone.** §1's block opens with this same
@@ -75,8 +75,8 @@ PRE="${XDG_CACHE_HOME:-$HOME/.cache}/codeman-agent-$CODEMAN_SESSION_ID.sh"
 mkdir -p "$(dirname "$PRE")"
 # Rewrite unless the file already ends with THIS version's stamp, so a stale or a
 # half-written file self-heals here instead of costing you a round trip to rm it.
-grep -qs '^CODEMAN_PREAMBLE=1.20.0$' "$PRE" || (umask 077; cat > "$PRE" <<'PREAMBLE'
-# ---- Codeman agent preamble 1.20.0 (seeded by Codeman at session spawn; the SKILL.md §0 bootstrap rewrites it when missing or stale) ----
+grep -qs '^CODEMAN_PREAMBLE=1.21.0$' "$PRE" || (umask 077; cat > "$PRE" <<'PREAMBLE'
+# ---- Codeman agent preamble 1.21.0 (seeded by Codeman at session spawn; the SKILL.md §0 bootstrap rewrites it when missing or stale) ----
 API="${CODEMAN_API_URL:?CODEMAN_API_URL not set; refusing to guess}"
 SELF="${CODEMAN_SESSION_ID:?CODEMAN_SESSION_ID not set}"
 # Credentials, cheapest first. Your session has usually INHERITED the server's
@@ -126,6 +126,43 @@ _dsh_up() {        # <sid> <timeoutMs> -> "true"/"false". The DeepSeek Harness T
   "${CURL[@]}" -G "$API/api/v1/sessions/$1/wait-output" \
     --data-urlencode "match=${DSH_READY_MARK:-❯}" --data-urlencode 'from=buffer' \
     --data-urlencode "timeout=$2" | jq -r '.data.wait.matched // false'
+}
+# ---- the workspace-trust dialog: READ the screen, never press Enter blind ----
+# Claude Code 2.1.252 dropped the option numbers, REVERSED them, and highlights
+# "No, exit" by default:
+#     Security guide
+#   ❯ No, exit
+#     Yes, I trust this folder
+#   Enter to confirm . Esc to cancel
+# so the bare \r that answered the old layout now answers *exit* and the pane is
+# dead (`status 1`) seconds after the spawn -- measured on a live 2.1.252 case.
+# These two read the rendered pane and steer onto the trust option instead.
+_trust_key() {     # <sid> -> "confirm" | "move" | "" (nothing safe to press)
+  # full=1 returns the RENDERED pane; a claude pane keeps no tmux history, so that
+  # is the current frame rather than every repaint since launch. tail -1 anyway,
+  # because the freshest marked row is the only one still true.
+  "${CURL[@]}" -G "$API/api/v1/sessions/$1/terminal" --data-urlencode 'full=1' \
+    | jq -r '.data.terminalBuffer // empty' \
+    | sed -e "s/$(printf '\033')\[[0-9;?]*[a-zA-Z]//g" -e "s/$(printf '\033')[()][AB0]//g" \
+    | tr -d ' \t' | grep -i '❯[0-9.]*\(yes,itrustthisfolder\|no,exit\)' | tail -1 \
+    | sed -e 's/.*[Yy]es,.*/confirm/' -e 's/.*[Nn]o,.*/move/'
+}
+_accept_trust() {  # <sid> -> 0 once it has answered the dialog, 1 if it could not
+  local sid="$1" k i=1
+  while [ "$i" -le 6 ]; do
+    k=$(_trust_key "$sid")
+    [ -n "$k" ] || return 1   # no dialog on screen, or a layout this cannot read
+    # A SEPARATE clientId for these keys. seq is monotonic per clientId, so
+    # spending prompt numbers here would make the next sendwait -- whose default
+    # seq is the epoch second -- look like a stale duplicate and vanish silently.
+    "${CURL[@]}" -X POST "$API/api/v1/sessions/$sid/input" -H 'Content-Type: application/json' \
+      -d "$(jq -nc --arg k "$([ "$k" = confirm ] && printf '\r' || printf '\033[B')" \
+              --arg c "$CID-trust-$sid" --argjson s "$i" \
+              '{input:$k,useMux:true,clientId:$c,seq:$s}')" >/dev/null
+    [ "$k" = confirm ] && return 0
+    sleep 1; i=$((i+1))   # re-read: the arrow is CONFIRMED before Enter goes out
+  done
+  return 1
 }
 # spawn_worker <caseName> [mode] -> session id on stdout, diagnostics on stderr.
 # quick-start AND readiness in one call, with a strict contract: NON-EMPTY stdout means
@@ -177,19 +214,16 @@ spawn_worker() {
   grep -qs '/api/hook-event' "$cp/.claude/settings.local.json" || {
     echo "case '$name' resolved to '$cp', which has no Codeman hooks (workspaceHooksEnabled off, remote, or an older server?): turn the setting on, or work §5.1+§5.5 by hand with markers" >&2
     delete_session "$sid" >/dev/null; return 1; }
-  # Short composer wait FIRST, then the trust-dialog probe: a case still showing the
-  # dialog can never pass the composer wait, so probing early keeps a cold case from
+  # Short composer wait FIRST, then the trust dialog: a case still showing the
+  # dialog can never pass the composer wait, so acting early keeps a cold case from
   # paying the whole long wait before the fallback even runs (§5.2). A warm case
-  # matches in under a second and never reaches the probe.
+  # matches in under a second and never reaches it, and _accept_trust returns in a
+  # blink when there is no dialog, so this costs nothing in the ordinary slow case.
   r=$(_composer_up "$sid" 5000)
   if [ "$r" != true ]; then
-    if "${CURL[@]}" -G "$API/api/v1/sessions/$sid/wait-output" \
-         --data-urlencode 'match=trust' --data-urlencode 'from=buffer' --data-urlencode 'timeout=2000' \
-       | jq -e '.data.wait.matched' >/dev/null; then
-      # Codeman's own auto-accept gives up after 90 s / 3 tries; this is that bounded fallback.
-      "${CURL[@]}" -X POST "$API/api/v1/sessions/$sid/input" -H 'Content-Type: application/json' \
-        -d "$(jq -nc --arg c "$CID-$sid" '{input:"\r",useMux:true,clientId:$c,seq:1}')" >/dev/null
-    fi
+    # Codeman answers this dialog itself and normally wins the race; this is the
+    # bounded fallback for when its 90 s window / 6-keystroke cap has run out.
+    _accept_trust "$sid"
     r=$(_composer_up "$sid" 45000)
   fi
   [ "$r" = true ] || { echo "worker $sid never drew a composer; deleted it. Retry by hand via the §5.2 ladder (its billed stage-4 probe included)" >&2
@@ -288,10 +322,10 @@ last_text() {
 # The stamp is the LAST line on purpose (a truncated write leaves it unset) and is kept
 # bare on purpose: the write condition above anchors on it with $, so an inline comment
 # here would fail that match and rewrite this file on every single bootstrap.
-CODEMAN_PREAMBLE=1.20.0
+CODEMAN_PREAMBLE=1.21.0
 PREAMBLE
 )
-. "$PRE"; [ "${CODEMAN_PREAMBLE:-}" = 1.20.0 ] || { echo "preamble at $PRE is stale or truncated: rm it and re-run this block"; exit 1; }
+. "$PRE"; [ "${CODEMAN_PREAMBLE:-}" = 1.21.0 ] || { echo "preamble at $PRE is stale or truncated: rm it and re-run this block"; exit 1; }
 ```
 
 Every later Bash call that touches the API starts with the same two loader lines from
@@ -342,7 +376,7 @@ and no per-call body to hand-build.
 
 ```bash
 . "${XDG_CACHE_HOME:-$HOME/.cache}/codeman-agent-$CODEMAN_SESSION_ID.sh" 2>/dev/null   # §0 loader
-[ "${CODEMAN_PREAMBLE:-}" = 1.20.0 ] || { echo "preamble missing or stale; run the full §0 block"; exit 1; }
+[ "${CODEMAN_PREAMBLE:-}" = 1.21.0 ] || { echo "preamble missing or stale; run the full §0 block"; exit 1; }
 N=(alpha beta)                    # INVENT one fresh case name per worker; never list cases first
                                   # (a name may carry a mode: `beta:deepseek`, see below)
 T=('reply with one line: the absolute path of your working directory'
@@ -422,7 +456,7 @@ Harness TUI reports `idle`/`working`/`blocked` to Codeman over the supervisor co
 implements, so dsh is the one external CLI with definitive `stop`/`blocked` signals
 instead of guessed-from-silence ones — and it writes a structured transcript, which is
 what `last-response` reads for it. `shell`, `opencode`, `codex`, `gemini`, `antigravity`,
-`pi` and `grok` have neither and still need markers ([§5.5](reference/verbs.md#55-markers-for-hook-less-workers)).
+`pi`, `grok` and `omp` have neither and still need markers ([§5.5](reference/verbs.md#55-markers-for-hook-less-workers)).
 
 Three things to know before you spawn one:
 

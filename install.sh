@@ -149,6 +149,17 @@ ANTIGRAVITY_SEARCH_PATHS=(
     "$HOME/bin/agy"
 )
 
+# OMP CLI search paths (from src/utils/omp-cli-resolver.ts's OMP_SEARCH_DIRS —
+# ~/.local/bin leads, omp.sh's installer target; ~/.omp/bin is a fallback only)
+OMP_SEARCH_PATHS=(
+    "$HOME/.local/bin/omp"
+    "$HOME/.omp/bin/omp"
+    "/usr/local/bin/omp"
+    "$HOME/.bun/bin/omp"
+    "$HOME/.npm-global/bin/omp"
+    "$HOME/bin/omp"
+)
+
 # ============================================================================
 # Color Output
 # ============================================================================
@@ -685,6 +696,37 @@ get_grok_path() {
     fi
 
     for path in "${GROK_SEARCH_PATHS[@]}"; do
+        if [[ -x "$path" ]]; then
+            echo "$path"
+            return
+        fi
+    done
+}
+
+# `omp` is a short name too, so like grok/pi the server-side resolver
+# additionally probes `omp --version`. Detection here only feeds the
+# "you have no AI CLI" hint, so a plain executable test is enough.
+check_omp() {
+    if command -v omp &>/dev/null; then
+        return 0
+    fi
+
+    for path in "${OMP_SEARCH_PATHS[@]}"; do
+        if [[ -x "$path" ]]; then
+            return 0
+        fi
+    done
+
+    return 1
+}
+
+get_omp_path() {
+    if command -v omp &>/dev/null; then
+        command -v omp
+        return
+    fi
+
+    for path in "${OMP_SEARCH_PATHS[@]}"; do
         if [[ -x "$path" ]]; then
             echo "$path"
             return
@@ -2335,6 +2377,7 @@ main() {
     local has_pi=false
     local has_grok=false
     local has_dsh=false
+    local has_omp=false
 
     info "Checking AI CLI tools..."
     if check_claude; then
@@ -2369,17 +2412,21 @@ main() {
         has_dsh=true
         success "DeepSeek Harness found at $(get_dsh_path)"
     fi
+    if check_omp; then
+        has_omp=true
+        success "OMP CLI found at $(get_omp_path)"
+    fi
 
-    if [[ "$has_claude" == "false" && "$has_opencode" == "false" && "$has_codex" == "false" && "$has_gemini" == "false" && "$has_antigravity" == "false" && "$has_pi" == "false" && "$has_grok" == "false" && "$has_dsh" == "false" ]]; then
+    if [[ "$has_claude" == "false" && "$has_opencode" == "false" && "$has_codex" == "false" && "$has_gemini" == "false" && "$has_antigravity" == "false" && "$has_pi" == "false" && "$has_grok" == "false" && "$has_dsh" == "false" && "$has_omp" == "false" ]]; then
         echo ""
-        warn "No AI CLI found. Codeman needs at least one: Claude Code, OpenCode, Codex, Antigravity, Gemini, Pi, Grok, or DeepSeek Harness."
+        warn "No AI CLI found. Codeman needs at least one: Claude Code, OpenCode, Codex, Antigravity, Gemini, Pi, Grok, DeepSeek Harness, or OMP."
         headless_guard "install an AI CLI (curl | bash from its vendor)"
         echo ""
         echo -e "  ${BOLD}Which AI CLI would you like to install?${NC}"
         echo -e "    ${CYAN}1)${NC} Claude Code  (Anthropic)"
         echo -e "    ${CYAN}2)${NC} OpenCode     (open-source)"
         echo -e "    ${CYAN}3)${NC} Both"
-        echo -e "    ${CYAN}4)${NC} Skip         (I'll install one myself, e.g. Codex, Antigravity, Pi or Grok)"
+        echo -e "    ${CYAN}4)${NC} Skip         (I'll install one myself, e.g. Codex, Antigravity, Gemini, Pi, Grok, DeepSeek Harness or OMP)"
         echo ""
 
         local cli_choice=""
@@ -2728,7 +2775,7 @@ main() {
     echo -e "    https://github.com/Ark0N/Codeman"
     echo ""
 
-    if ! check_claude && ! check_opencode && ! check_codex && ! check_gemini && ! check_antigravity && ! check_pi && ! check_grok && ! check_dsh; then
+    if ! check_claude && ! check_opencode && ! check_codex && ! check_gemini && ! check_antigravity && ! check_pi && ! check_grok && ! check_dsh && ! check_omp; then
         echo -e "  ${YELLOW}${BOLD}Reminder:${NC} Install at least one AI CLI to start using Codeman:"
         echo -e "    ${CYAN}curl -fsSL https://claude.ai/install.sh | bash${NC}                # Claude Code"
         echo -e "    ${CYAN}curl -fsSL https://opencode.ai/install | bash${NC}                 # OpenCode"
@@ -2736,7 +2783,11 @@ main() {
         echo -e "    ${CYAN}curl -fsSL https://antigravity.google/cli/install.sh | bash${NC}   # Antigravity"
         echo -e "    ${CYAN}npm install -g --ignore-scripts @earendil-works/pi-coding-agent${NC}  # Pi"
         echo -e "    ${CYAN}curl -fsSL https://x.ai/cli/install.sh | bash${NC}                 # Grok"
+        echo -e "    ${CYAN}curl -fsSL https://omp.sh/install | sh${NC}                        # OMP"
         echo ""
+        echo -e "  DeepSeek Harness has no vendor one-liner — install it from within Codeman"
+        echo -e "  once the server is up (Run dropdown → Install DeepSeek Profile, or see"
+        echo -e "  docs/deepseek-integration.md)."
     fi
 
     # Security notice — last informational block so it stays visible (when not

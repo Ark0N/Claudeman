@@ -76,9 +76,32 @@ RUN curl -fsSL https://x.ai/cli/install.sh | bash \
 # Codeman deliberately does NOT seed `profiles/` from the host: it is a
 # per-profile node_modules tree, host-arch-specific and far too large to copy on
 # every container start.
-RUN npm install -g @deepseek-ai/dsh \
+# ⚠️ `pnpm` is a HARD dependency of `dsh plugin`, not optional tooling: the
+# subcommand is a thin forwarder that `spawnSync`s a literal `pnpm` with no
+# fallback to npm, so on an image without it the profile install below dies
+# with `dsh: pnpm not found on PATH` / exit 127 and takes the whole build with
+# it (issue #352). It stays on PATH at runtime too, so a container user can run
+# `dsh plugin add` themselves.
+RUN npm install -g @deepseek-ai/dsh pnpm \
  && npm cache clean --force \
- && dsh --version
+ && dsh --version \
+ && pnpm --version
+
+# OMP (Oh My Pi) is NOT on npm: a standalone binary via omp.sh's installer, which
+# targets $HOME/.local/bin with no --dir override (verified 2026-08-27 — the
+# resolver's OMP_SEARCH_DIRS lists ~/.omp/bin first, which turned out to be the
+# WRONG guess for the installer's actual target; build this step for real
+# rather than trust that ordering). At build time $HOME is root's home and
+# unreachable by the `agent` user, so copy the binary into /usr/local/bin and
+# drop root's ~/.local/bin/omp in the same layer so the image does not carry
+# the download twice.
+RUN curl -fsSL https://omp.sh/install | sh \
+ && cp -L /root/.local/bin/omp /usr/local/bin/omp.real \
+ && rm -f /usr/local/bin/omp \
+ && mv /usr/local/bin/omp.real /usr/local/bin/omp \
+ && chmod 755 /usr/local/bin/omp \
+ && rm -f /root/.local/bin/omp \
+ && omp --version
 
 # `agent` user (gid 0) with an arbitrary-uid-writable HOME. The uid is
 # auto-assigned (node:22-slim already occupies uid 1000 with its `node` user); at
@@ -106,12 +129,27 @@ ENV HOME=/home/agent
 # writable by the arbitrary uid the container actually runs as, and a profile
 # installed after it would miss that fixup. DSH_HOME points the launcher at the
 # agent's dir while this still runs as root.
+# ⚠️ `dangerouslyAllowAllBuilds` is what keeps that profile install from becoming
+# the next #352. pnpm (unlike npm) blocks dependency lifecycle scripts by default
+# and FAILS the install over it — `ERR_PNPM_IGNORED_BUILDS`, exit 1, measured on
+# pnpm 11.24 — so any package in the tui's tree that ships one stops the build
+# dead. An allowlist of the offenders rots: `@deepseek-harness-tui/dsh-tui` is
+# resolved by dist-tag, not pinned, and 0.9.3 pulled `@google/genai` (a
+# `preinstall: no-op`) where 0.10.0-beta.x does not, so the names to allow move
+# under us between rebuilds. Allowing them wholesale is also the SAME exposure
+# this image already accepts three layers up: `npm install -g` runs the install
+# scripts of every transitive dep of the five CLIs above it, with no gate at all.
+# `.omp/agent` is pre-created for the same reason `.codex` is: it is a MIXED
+# store (per-file config seeds PLUS a shared `sessions/` RW bind mount for
+# Codeman's own host-side history/resume reads), and neither kind of artifact
+# creates its own parent directory.
 RUN useradd -g 0 -m -d /home/agent -s /bin/bash agent \
  && mkdir -p /home/agent/.npm /home/agent/.cache /home/agent/.config /home/agent/.codeman \
       /home/agent/.claude/projects /home/agent/.codex/sessions /home/agent/.pi/agent /home/agent/.grok \
-      /home/agent/.dsh \
+      /home/agent/.dsh /home/agent/.omp/agent \
  && DSH_HOME=/home/agent/.dsh HOME=/home/agent \
-      dsh plugin --profile dsh-tui add @deepseek-harness-tui/dsh-tui \
+      dsh plugin --profile dsh-tui add --config.dangerouslyAllowAllBuilds=true \
+      @deepseek-harness-tui/dsh-tui \
  && test -f /home/agent/.dsh/profiles/dsh-tui/package.json \
  && chgrp -R 0 /home/agent \
  && chmod -R g=u /home/agent

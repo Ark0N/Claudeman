@@ -13,7 +13,8 @@
  *
  * - 128 bits of `randomBytes` entropy, base64url, never derived from anything.
  * - Held in memory only. A restart invalidates every outstanding capability.
- * - Rolling TTL: refreshed on use, expired after inactivity.
+ * - Rolling TTL: refreshed on use, expired after inactivity, and revoked outright
+ *   on logout, admin logout and user deletion (`revokeOwner`).
  * - Bound to the minting user, so multi-user ownership survives the exemption.
  * - Grants exactly one thing: relaying bytes to that one saved URL. It reaches no
  *   session, no file, no API surface.
@@ -81,15 +82,33 @@ export class WebviewCapabilityStore {
     }
   }
 
-  /** Revoke every capability minted by a user (called on logout / user deletion). */
-  revokeOwner(owner: string): void {
+  /**
+   * Revoke every capability bound to an identity. Called from `POST /api/logout`
+   * (the caller's own identity, which in single-user mode is `undefined`, i.e.
+   * every capability there is), from the admin logout route, and from user
+   * deletion.
+   *
+   * ⚠️ This method shipped for two releases with NO caller while its docstring
+   * claimed logout invoked it. The rolling TTL is refreshed on every use, so a
+   * proxy URL that leaked (browser history, a shared screenshot, a dashboard with
+   * a loose referrer policy) stayed valid indefinitely as long as something kept
+   * polling it. Logging out is the user's one deliberate "invalidate what I
+   * opened" gesture, and it has to reach here; `test/webview-capability-revocation.test.ts`
+   * pins each call site.
+   *
+   * @returns how many capabilities were revoked (for the admin audit line).
+   */
+  revokeOwner(owner: string | undefined): number {
+    let revoked = 0;
     for (const [webviewId, token] of [...this.byWebview]) {
       const record = this.capabilities.peek(token);
       if (record?.owner === owner) {
         this.capabilities.delete(token);
         this.byWebview.delete(webviewId);
+        revoked++;
       }
     }
+    return revoked;
   }
 
   get size(): number {

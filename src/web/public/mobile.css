@@ -1003,6 +1003,20 @@ html.mobile-init .file-browser-panel {
     border-color: rgba(150, 170, 255, 0.55) !important;
   }
 
+  /* OMP mode colors on mobile. Same `!important` rationale as the pi/grok/deepseek blocks above. */
+  .btn-toolbar.btn-run.mode-omp,
+  .btn-toolbar.btn-run-gear.mode-omp {
+    background: #312e81 !important;
+    border-color: rgba(129, 140, 248, 0.3) !important;
+    color: #e0e7ff !important;
+  }
+
+  .btn-toolbar.btn-run.mode-omp:active,
+  .btn-toolbar.btn-run-gear.mode-omp:active {
+    background: #4f46e5 !important;
+    border-color: rgba(129, 140, 248, 0.5) !important;
+  }
+
   /* Run mode dropdown menu — positioned above toolbar on mobile */
   .run-mode-menu {
     bottom: 100%;
@@ -3083,6 +3097,12 @@ html:is([data-skin="paper-gray"], [data-skin="solarized-light"], [data-skin="cat
 html:is([data-skin="paper-gray"], [data-skin="solarized-light"], [data-skin="catppuccin-latte"], [data-skin="rose-pine-dawn"]) :is(.btn-toolbar.btn-run.mode-pi, .btn-toolbar.btn-run-gear.mode-pi) {
   background: linear-gradient(135deg, #be185d, #db2777);
   border-color: #9d174d;
+  color: #ffffff;
+}
+
+html:is([data-skin="paper-gray"], [data-skin="solarized-light"], [data-skin="catppuccin-latte"], [data-skin="rose-pine-dawn"]) :is(.btn-toolbar.btn-run.mode-omp, .btn-toolbar.btn-run-gear.mode-omp) {
+  background: linear-gradient(135deg, #4f46e5, #6366f1);
+  border-color: #4338ca;
   color: #ffffff;
 }
 

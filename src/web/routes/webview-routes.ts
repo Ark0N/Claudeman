@@ -33,7 +33,8 @@ import { randomUUID } from 'node:crypto';
 import { Readable } from 'node:stream';
 import type { FastifyInstance, FastifyReply, FastifyRequest } from 'fastify';
 import { WebSocket as WsClient } from 'ws';
-import type { WebSocket } from 'ws';
+import type { ClientOptions as WsClientOptions, WebSocket } from 'ws';
+import type { Response as UndiciResponse } from 'undici';
 import { getDataDir } from '../../config/instance.js';
 import {
   MAX_LIVE_WEBVIEW_FRAMES,
@@ -47,6 +48,8 @@ import {
 } from '../../config/webview-limits.js';
 import { readWebviews, writeWebviews } from '../../webview-store.js';
 import { webviewCapabilities } from '../../webview-capabilities.js';
+import { egressBlockedReason, webviewEgressLookup, webviewFetch, type EgressLookup } from '../webview-egress.js';
+import { blockedWebviewHostReason } from '../webview-egress-policy.js';
 import { ApiErrorCode, createErrorResponse } from '../../types.js';
 import type { Webview, WebviewOpenData, WebviewProbe } from '../../types.js';
 import { AUTH_COOKIE_NAME } from '../middleware/auth.js';
@@ -293,7 +296,7 @@ async function probeUrl(url: string): Promise<WebviewProbe> {
   }
 
   try {
-    const response = await fetch(target.href, {
+    const response = await webviewFetch(target, {
       method: 'GET',
       redirect: 'manual',
       signal: AbortSignal.timeout(WEBVIEW_PROBE_TIMEOUT_MS),
@@ -326,6 +329,12 @@ async function probeUrl(url: string): Promise<WebviewProbe> {
       reason,
     };
   } catch (err) {
+    const blocked = egressBlockedReason(err);
+    if (blocked) {
+      // Refused by policy, not unreachable: say so, or the user reads it as a
+      // network problem and starts debugging their firewall.
+      return { reachable: false, framable: false, recommendedMode: 'proxy', reason: blocked };
+    }
     const message = err instanceof Error ? err.message : String(err);
     return {
       reachable: false,
@@ -476,25 +485,32 @@ async function proxyRequest(
   // string (it can carry the dashboard's tokens).
   const logTarget = `${req.method} ${upstream.origin}${upstream.pathname}`;
 
-  let response: Response;
+  let response: UndiciResponse;
   try {
-    response = await fetch(upstream.href, {
+    response = await webviewFetch(upstream, {
       method: req.method,
       headers,
       body: hasBody ? (req.body as Readable) : undefined,
       // Required by undici whenever the body is a stream.
-      ...(hasBody ? { duplex: 'half' } : {}),
+      ...(hasBody ? { duplex: 'half' as const } : {}),
       // Redirects are rewritten into the proxy prefix instead of followed, so the
       // browser's URL stays inside the frame and relative assets keep resolving.
       redirect: 'manual',
       signal: abort.signal,
-    } as RequestInit);
+    });
   } catch (err) {
     const elapsed = Date.now() - startedAt;
     if (clientGone) {
       // Nobody is listening; the abort was ours and intentional. Not an upstream
       // failure, so no warn (it would read as the dashboard being broken).
       return reply;
+    }
+    const blocked = egressBlockedReason(err);
+    if (blocked) {
+      // Policy refusal, distinct from "unreachable": a record saved before the
+      // egress rule existed, or a name that now resolves into a blocked range.
+      console.warn(`[Webview] refused by egress policy: ${logTarget} (webview "${webview.name}"): ${blocked}`);
+      return reply.code(403).type('text/plain').send(`Forbidden: ${blocked}`);
     }
     if (headerTimedOut) {
       console.warn(
@@ -644,6 +660,13 @@ function proxyWebSocket(socket: WebSocket, req: FastifyRequest<{ Params: ProxyPa
       return;
     }
 
+    // An IP literal never reaches the lookup hook (net.connect skips DNS for it),
+    // so the literal form is judged here and the resolved form in the lookup.
+    if (blockedWebviewHostReason(upstream.hostname)) {
+      socket.close(4003, 'Forbidden');
+      return;
+    }
+
     socketCounts.set(webview.id, live + 1);
     let released = false;
     const release = () => {
@@ -655,16 +678,21 @@ function proxyWebSocket(socket: WebSocket, req: FastifyRequest<{ Params: ProxyPa
     };
 
     const protocols = req.headers['sec-websocket-protocol'];
+    // `lookup` is absent from ws's ClientOptions typings but flows through
+    // http.request to net.connect untouched, which is where the resolved
+    // address is judged (see webview-egress.ts).
+    const upstreamOptions: WsClientOptions & { lookup: EgressLookup } = {
+      headers: {
+        origin: upstream.origin,
+        ...(webview.trusted && req.headers.cookie ? { cookie: String(req.headers.cookie) } : {}),
+      },
+      handshakeTimeout: WEBVIEW_WS_HANDSHAKE_TIMEOUT_MS,
+      lookup: webviewEgressLookup,
+    };
     const upstreamSocket = new WsClient(
       upstreamWebSocketUrl(upstream),
       protocols ? String(protocols).split(/,\s*/) : [],
-      {
-        headers: {
-          origin: upstream.origin,
-          ...(webview.trusted && req.headers.cookie ? { cookie: String(req.headers.cookie) } : {}),
-        },
-        handshakeTimeout: WEBVIEW_WS_HANDSHAKE_TIMEOUT_MS,
-      }
+      upstreamOptions
     );
 
     // Buffer anything the browser sends before the upstream handshake completes,
@@ -703,9 +731,14 @@ function proxyWebSocket(socket: WebSocket, req: FastifyRequest<{ Params: ProxyPa
     socket.on('close', (code: number, reason: Buffer) => closeBoth(code, reason?.toString()));
     upstreamSocket.on('close', (code: number, reason: Buffer) => closeBoth(code, reason?.toString()));
     socket.on('error', () => closeBoth());
-    upstreamSocket.on('error', () => {
+    upstreamSocket.on('error', (err: Error) => {
       release();
-      if (socket.readyState === socket.OPEN) socket.close(1011, 'Upstream error');
+      if (socket.readyState !== socket.OPEN) return;
+      // A name that resolved into a blocked range fails inside the connect, so it
+      // surfaces here rather than at the sync check above; report it as the same
+      // policy refusal, not as the dashboard being broken.
+      if (egressBlockedReason(err)) socket.close(4003, 'Forbidden');
+      else socket.close(1011, 'Upstream error');
     });
   })();
 }

@@ -1,6 +1,6 @@
 {
   "name": "aicodeman",
-  "version": "1.23.2",
+  "version": "1.24.7",
   "description": "Mission control for AI coding agents - run 20 autonomous agents with real-time monitoring and session persistence",
   "type": "module",
   "main": "dist/index.js",
@@ -102,6 +102,7 @@
     "jpeg-js": "^0.4.4",
     "node-pty": "^1.1.0",
     "qrcode": "^1.5.4",
+    "undici": "^6.28.0",
     "uuid": "^14.0.0",
     "web-push": "^3.6.7",
     "ws": "^8.21.0",

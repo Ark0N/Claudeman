@@ -204,11 +204,16 @@ turn.
 The reliable sequence is: poll `GET /api/v1/sessions/:id` until `.data.pid` is
 non-null, then `wait-output` for the composer's own marker (`bypass`, the status
 bar of a CLI spawned in bypass mode) with a short timeout, handling the trust
-dialog only as the bounded fallback (`trust` matched → send `\r` → wait for
-`bypass` again). Do not probe `trust` first and Enter blindly: the dialog text
-stays in the terminal buffer for the life of the session, so a `trust` probe with
-`from=buffer` keeps matching on every later run and the Enter lands in a ready
-composer. A worked version is in
+dialog only as the bounded fallback.
+
+⚠️ **The fallback is not a bare `\r`.** Claude Code 2.1.252 unnumbered the dialog's
+options, reversed them and highlights `No, exit`, so an Enter sent blind quits the
+CLI and the pane dies seconds after the spawn. Read the `❯` marker off the current
+frame (`GET /api/v1/sessions/:id/terminal?full=1`), send `ESC [ B` while it is on
+`No, exit`, re-read, and confirm only once it is on `Yes, I trust this folder`.
+Reading the current frame is also what keeps this correct on later runs: the dialog
+text stays in the terminal buffer for the life of the session, so a `trust` probe
+with `from=buffer` keeps matching long after the dialog is gone. A worked version is in
 [`extending-codeman.md`](extending-codeman.md#seam-3-http-api-and-cli).
 
 ### `GET /api/v1/sessions/:id/wait`

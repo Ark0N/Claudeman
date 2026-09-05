@@ -47,6 +47,14 @@ By hand, or to pick a different front door:
 dsh plugin --profile dsh-tui add @deepseek-harness-tui/dsh-tui
 ```
 
+⚠️ **`pnpm` has to be on PATH for either route.** `dsh plugin` is a thin forwarder
+that spawns a literal `pnpm` with no npm fallback, so without one it exits 127 with
+`dsh: pnpm not found on PATH` — both by hand and behind the UI button, which
+surfaces that same line as the install error. `npm install -g pnpm` (or
+`corepack enable pnpm`) is the fix. This is what broke the Docker agent image in
+[#352](https://github.com/Ark0N/Codeman/issues/352); the image now installs pnpm
+alongside `dsh`.
+
 Codeman's default is `@deepseek-harness-tui/dsh-tui` because it is by a wide
 margin the most used community TUI, it is MIT, and it implements the status
 contract described in §3. It is a **default, not a requirement**: any profile

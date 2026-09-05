@@ -7,20 +7,17 @@
  * @module utils/opencode-cli-resolver
  */
 
-import { join } from 'node:path';
-import { homedir } from 'node:os';
+import { getCli } from '../config/cli-registry/registry.js';
+import { expandHome } from './cli-resolver.js';
 import { createCliExecutableResolver, formatCliNotFoundMessage } from './cli-executable-resolver.js';
 
 /** Common directories where the OpenCode CLI binary may be installed */
-const OPENCODE_SEARCH_DIRS = [
-  join(homedir(), '.opencode', 'bin'), // Default install location
-  join(homedir(), '.local', 'bin'), // Alternative install location
-  '/usr/local/bin', // Homebrew / system
-  join(homedir(), 'go', 'bin'), // Go install
-  join(homedir(), '.bun', 'bin'), // Bun global
-  join(homedir(), '.npm-global', 'bin'), // npm global
-  join(homedir(), 'bin'), // User bin
-];
+/**
+ * Directories probed after `which`, read from this CLI's registry entry so the spawn
+ * path, `codeman doctor` and this resolver cannot disagree about where to look.
+ * `~` is expanded by `expandHome`; nothing else is interpreted.
+ */
+const OPENCODE_SEARCH_DIRS = (): string[] => (getCli('opencode')?.discovery.searchDirs ?? []).map(expandHome);
 
 const openCodeResolver = createCliExecutableResolver({ binary: 'opencode', searchDirs: OPENCODE_SEARCH_DIRS });
 const OPENCODE_NOT_FOUND = 'OpenCode CLI not found. Install with: curl -fsSL https://opencode.ai/install | bash';

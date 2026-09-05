@@ -10,6 +10,8 @@
 import { v4 as uuidv4 } from 'uuid';
 import { readFile } from 'node:fs/promises';
 import { statSync, realpathSync } from 'node:fs';
+import { getCli } from '../config/cli-registry/registry.js';
+import { resolveCliLaunchError } from '../utils/cli-launcher.js';
 import { Session } from '../session.js';
 import { applyWorkspaceHooks } from '../hooks-config.js';
 import { SseEvent } from '../web/sse-events.js';
@@ -58,9 +60,26 @@ export function clampCronExternalCliConfigs(
   ownerGranted: boolean
 ): { geminiConfig: GeminiConfig | undefined; piConfig: PiConfig | undefined } {
   if (ownerGranted) return { geminiConfig: undefined, piConfig: undefined };
+
+  // A cron job carries no per-CLI config at all, so ONLY the materialize-when-absent params
+  // can apply here — an only-if-sent clamp has nothing to clamp. Reading them off the
+  // registry rather than naming gemini and pi means a future CLI whose bare spawn is unsafe
+  // is covered the moment its entry says so, instead of silently missing this path.
+  const entry = getCli(mode);
+  const aliases = entry?.launch.legacyConfigAliases ?? {};
+  const materialized: Record<string, unknown> = {};
+  for (const { param, clampTo, materializeWhenAbsent } of entry?.capabilities.privilegedParams ?? []) {
+    // Same registry-param → legacy-wire-field hop the HTTP clamp makes. Neither gemini's
+    // `approvalMode` nor pi's `approveProjectTrust` is aliased today, so this changes nothing
+    // now — but the two are DIFFERENT namespaces, and writing the raw param here would make
+    // this path stop clamping the moment one of them gained an alias, silently.
+    if (materializeWhenAbsent) materialized[aliases[param] ?? param] = clampTo;
+  }
+  const has = Object.keys(materialized).length > 0;
+  const field = entry?.launch.legacyConfigField;
   return {
-    geminiConfig: mode === 'gemini' ? { approvalMode: 'auto_edit' } : undefined,
-    piConfig: mode === 'pi' ? { approveProjectTrust: false } : undefined,
+    geminiConfig: has && field === 'geminiConfig' ? (materialized as GeminiConfig) : undefined,
+    piConfig: has && field === 'piConfig' ? (materialized as PiConfig) : undefined,
   };
 }
 
@@ -387,7 +406,7 @@ export class CronService {
     // Section 6.3: re-resolve the owner's grant at FIRE time (it may have been revoked
     // since create). Gates shell/launchCommand AND clamps the external-CLI bypass below.
     const ownerGranted = await canUsernameRunPrivilegedCommands(job.owner);
-    if ((job.agentType === 'shell' || job.launchCommand) && !ownerGranted) {
+    if ((getCli(job.agentType)?.capabilities.privilegedCommandGate || job.launchCommand) && !ownerGranted) {
       return this.failRun(job, run, 'Owner lacks the can-bypass-permissions grant for shell/launchCommand jobs');
     }
 
@@ -395,23 +414,37 @@ export class CronService {
     let session: Session;
     try {
       const mode = job.agentType;
-      // Same two-part availability gate the HTTP create paths run: `dsh` is a
-      // profile LAUNCHER, so without this a job on a box with only the stock
-      // web/headless profiles spawns a bare `dsh` that boots a profile unable
-      // to drive a pane, and the prompt is typed into a logging server or a
-      // dead pane instead of failing the run with the actionable message.
-      if (mode === 'deepseek') {
-        const { resolveDeepSeekLaunchError } = await import('../utils/deepseek-cli-resolver.js');
-        const launchError = resolveDeepSeekLaunchError();
-        if (launchError) return this.failRun(job, run, launchError);
+      // A LAUNCHER CLI's binary is not its agent, so "installed" is not "runnable": without
+      // this, a job on a box carrying only dsh's stock web/headless profiles spawns a bare
+      // `dsh` that boots a profile unable to drive a pane, and the prompt is typed into a
+      // logging server or a dead pane instead of failing the run with an actionable message.
+      //
+      // ⚠️ Scoped to `discovery.launcherProfile`, which is byte-identical to the
+      // `mode === 'deepseek'` check this replaces (dsh is the only launcher today) and
+      // generalises to the next one. Deliberately NOT every CLI: cron has never pre-flighted
+      // a merely-missing binary, and doing so replaces tmux-manager's own not-found throw
+      // ("Session launch failed") with a different message for claude and shell. An earlier
+      // draft of this line was unscoped and did exactly that — three cron tests caught it.
+      if (getCli(mode)?.discovery.launcherProfile !== undefined) {
+        const cronLaunchError = await resolveCliLaunchError(mode);
+        if (cronLaunchError) return this.failRun(job, run, cronLaunchError);
       }
       const globalNice = await this.deps.getGlobalNiceConfig();
       const modelConfig = await this.deps.getModelConfig();
       const claudeModeConfig = await this.deps.getClaudeModeConfig();
       const effectiveClaudeMode = await resolveClaudeModeForUsername(claudeModeConfig.claudeMode, job.owner);
-      // DeepSeek's model is a composition entry in the profile's config tree,
-      // not a session flag — mirror the HTTP routes' exclusion.
-      const model = mode !== 'shell' && mode !== 'deepseek' ? modelConfig?.defaultModel || undefined : undefined;
+      // Cron carries no per-CLI config object, so the only model it can supply is the global
+      // default — and only to a CLI that takes a model at all.
+      //
+      // ⚠️ `!== 'none'` is the faithful reading of the `mode !== 'shell' && mode !== 'deepseek'`
+      // ladder this replaces: those two are exactly the entries declaring `model.source: 'none'`
+      // (shell has no model; deepseek's is a profile composition entry, not a session flag).
+      // NOT `=== 'claude-settings-file'`, which is the HTTP route's question — there, every
+      // external CLI reads its model from its own config object earlier in the chain, so only
+      // claude reaches the global default. Cron has no such config, so the same expression
+      // means something different here.
+      const model =
+        getCli(mode)?.capabilities.model.source !== 'none' ? modelConfig?.defaultModel || undefined : undefined;
       // Section 6.3: materialize the safe default for a non-granted owner (see
       // clampCronExternalCliConfigs — cron sends no per-CLI config, so the CLI's own
       // spawn default is what would otherwise apply).
@@ -560,7 +593,9 @@ export class CronService {
   private sendPromptWhenReady(sessionId: string, prompt: string, job: CronJob, run: CronJobRun): void {
     setImmediate(() => {
       const poll = async (): Promise<void> => {
-        if (job.agentType !== 'shell') {
+        // A shell pane is ready the moment it exists; an agent CLI has a TUI to paint
+        // first. That is the `kind` the registry already records, not a fact about shell.
+        if (getCli(job.agentType)?.kind !== 'shell') {
           for (let attempt = 0; attempt < CRON_READY_MAX_ATTEMPTS; attempt++) {
             await delay(500);
             const s = this.deps.sessions.get(sessionId);

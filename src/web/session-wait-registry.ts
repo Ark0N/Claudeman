@@ -65,6 +65,7 @@ import {
   MAX_SNIPPET_CONTEXT,
 } from '../config/agent-wait.js';
 import type { SessionMode, SessionStatus } from '../types.js';
+import { getCli } from '../config/cli-registry/registry.js';
 
 // ─── Signals ─────────────────────────────────────────────────────────────────
 
@@ -174,7 +175,7 @@ const HOOK_ONLY_SIGNALS: readonly WaitSignal[] = ['stop', 'blocked'];
 export interface HookCapabilityOptions {
   /**
    * `deepSeekConfig.statusReporting`, verbatim (so `undefined` means "not sent",
-   * i.e. ON). `false` is the per-session opt-out that stops `_configureDeepSeek()`
+   * i.e. ON). `false` is the per-session opt-out that stops `_configureCliEnv()`
    * exporting the `HERDR_*` triple, which is the ONLY thing that makes a dsh
    * session emit hook events at all.
    */
@@ -223,18 +224,26 @@ export interface HookCapabilityOptions {
  * function only about hook SIGNALS.
  */
 export function hooksAvailableForMode(mode: SessionMode, options: HookCapabilityOptions = {}): boolean {
-  if (mode === 'claude') return true;
-  // `deepseek` earns this the same way `claude` does — by emitting DEFINITIVE
-  // signals rather than having them inferred. The DeepSeek Harness terminal
-  // front door reports idle/working/blocked to its supervisor, and Codeman is
-  // that supervisor (see deepseek-status-shim.ts), so a dsh session really can
-  // deliver `stop` and `blocked` — unless the user turned the bridge off, in
-  // which case nothing on the box will ever post one. Every other mode is
-  // output-stabilization guesswork and must keep failing the ask.
-  if (mode === 'deepseek') {
-    return options.deepSeekStatusReporting !== false && options.deepSeekBridgeUnreachable !== true;
+  // A TRI-state capability, not a boolean, because the three answers are genuinely
+  // different questions — see CliCapabilities.hooks.
+  switch (getCli(mode)?.capabilities.hooks) {
+    case 'always':
+      // The CLI installs Codeman's own hooks block into its workspace (claude), so the
+      // signals are unconditional.
+      return true;
+    case 'supervised':
+      // The CLI REPORTS its own state to a supervisor and Codeman is that supervisor
+      // (deepseek, via deepseek-status-shim.ts) — definitive signals rather than inferred
+      // ones, which is what earns it a yes. But the user can disarm the bridge, and a
+      // docker/remote session cannot reach it at all; in either case nothing on the box
+      // will ever post one, so the answer has to come from the SESSION, not the mode.
+      return options.deepSeekStatusReporting !== false && options.deepSeekBridgeUnreachable !== true;
+    default:
+      // 'none', and an unregistered mode. Every other CLI's idle is output-stabilization
+      // guesswork, and must keep failing the ask rather than promising a signal that never
+      // arrives.
+      return false;
   }
-  return false;
 }
 
 /**

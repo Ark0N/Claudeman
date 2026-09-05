@@ -72,7 +72,7 @@ import {
   probeAdoptableContainer,
   listDockerContainers,
   browseInContainer,
-  DOCKER_ADOPT_PROBE_MODES,
+  dockerAdoptProbeModes,
   readDockerCases,
   readDockerHosts,
   removeDockerContainer,
@@ -845,11 +845,7 @@ export function registerCaseRoutes(app: FastifyInstance, ctx: EventPort & Config
       // hostWorkspacePath only because that is what an owned container's bind
       // mount guarantees; adoption mounts nothing, so the probe has to prove it.
       const adoptDocker = toSessionDocker(host, dockerCase);
-      const probe = await probeAdoptableContainer(
-        adoptDocker,
-        [...DOCKER_ADOPT_PROBE_MODES],
-        adoptDocker.containerWorkdir
-      );
+      const probe = await probeAdoptableContainer(adoptDocker, dockerAdoptProbeModes(), adoptDocker.containerWorkdir);
       if (!probe.ok) {
         return createErrorResponse(ApiErrorCode.OPERATION_FAILED, probe.error || 'container is not adoptable');
       }
@@ -930,7 +926,7 @@ export function registerCaseRoutes(app: FastifyInstance, ctx: EventPort & Config
         daemonHost: host.daemonHost,
         containerName: body.container,
       },
-      [...DOCKER_ADOPT_PROBE_MODES],
+      dockerAdoptProbeModes(),
       body.containerWorkdir
     );
     return { success: true, data: probe };

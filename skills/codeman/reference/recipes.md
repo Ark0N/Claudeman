@@ -69,9 +69,14 @@ SEQ=1               # $CID is the fixed literal from the preamble; never rebuild
 #    plus a two-marker screen match in session-trust-dialog.ts), not the output stream.
 #    It still misses two ways, and both leave the dialog up until someone answers it:
 #    it only scans in the first 90 s after the pane started (TRUST_DIALOG_WINDOW_MS),
-#    and it gives up after 3 Enter presses (TRUST_DIALOG_MAX_ATTEMPTS). So: composer
-#    marker first, dialog only as the bounded fallback (a blind Enter up front would
-#    land in an already-ready composer).
+#    and it gives up after 6 keystrokes (TRUST_DIALOG_MAX_ATTEMPTS). So: composer
+#    marker first, dialog only as the bounded fallback.
+#    ⚠️ The dialog is NOT answered with Enter. Since claude-cli 2.1.252 the options
+#    lost their numbers, swapped places, and the highlighted one is `No, exit`, so a
+#    blind \r quits the CLI and the pane is dead seconds after the spawn (measured).
+#    _accept_trust (§0 preamble) reads the ❯ marker off the rendered pane, arrows onto
+#    `Yes, I trust this folder`, re-reads to confirm the move landed, and only then
+#    presses Enter.
 #    Stage 1 is SHORT on purpose: an already-trusted case matches in <1 s, while a
 #    virgin case can never pass it (the dialog is up) and always pays it in full,
 #    the long budget belongs to stage 3, after the dialog is answered.
@@ -92,13 +97,8 @@ done
 R=$("${CURL[@]}" -G "$API/api/v1/sessions/$SID/wait-output" \
     --data-urlencode 'match=shift+tab' --data-urlencode 'from=buffer' --data-urlencode 'timeout=5000')
 if ! jq -e '.data.wait.matched' <<<"$R" >/dev/null; then
-  T=$("${CURL[@]}" -G "$API/api/v1/sessions/$SID/wait-output" \
-      --data-urlencode 'match=trust' --data-urlencode 'from=buffer' --data-urlencode 'timeout=2000')
-  if jq -e '.data.wait.matched' <<<"$T" >/dev/null; then
-    "${CURL[@]}" -X POST "$API/api/v1/sessions/$SID/input" -H 'Content-Type: application/json' \
-      -d '{"input":"\r","useMux":true,"clientId":"'"$CID"'","seq":'$SEQ'}' >/dev/null
-    SEQ=$((SEQ+1))
-  fi
+  _accept_trust "$SID"   # reads the marker and steers; never a blind \r. Own clientId,
+                         # so it spends none of $SEQ's numbers.
   R=$("${CURL[@]}" -G "$API/api/v1/sessions/$SID/wait-output" \
       --data-urlencode 'match=shift+tab' --data-urlencode 'from=buffer' --data-urlencode 'timeout=45000')
 fi
@@ -106,8 +106,8 @@ if ! jq -e '.data.wait.matched' <<<"$R" >/dev/null; then
   # stage 4, mode-agnostic and bounded: answering a trivial prompt IS readiness.
   # COSTS THE WORKER ONE BILLED TURN, so it only runs when the fast marker missed.
   # Split token (the typed line echoes into the stream) and unique per call. Must stay
-  # AFTER the dialog fallback: free text plus \r into a trust dialog still up answers
-  # it blind, the same footgun as an up-front Enter.
+  # AFTER the dialog fallback: the select widget swallows the text and the \r answers
+  # whatever is highlighted, which on a live dialog is `No, exit`.
   TOK="${RANDOM}_$$"
   "${CURL[@]}" -X POST "$API/api/v1/sessions/$SID/input" -H 'Content-Type: application/json' \
     -d '{"input":"reply with the word READY immediately followed by _'"$TOK"' and nothing else\r","useMux":true,"clientId":"'"$CID"'","seq":'$SEQ'}' >/dev/null
@@ -188,7 +188,7 @@ for _ in $(seq 1 10); do
 done
 printf '%s\n' "$TXT"
 #    (.data is {text,timestamp}; text is also "" before the first completed turn and
-#     always "" for shell/opencode/gemini/antigravity/pi/grok, which have no transcript, use
+#     always "" for shell/opencode/gemini/antigravity/pi/grok/omp, which have no transcript, use
 #     the terminal tail there, and here only to diagnose an unsubmitted prompt.)
 
 # 6. clean up: exact id, own list only, through the fail-closed preamble helper
@@ -527,9 +527,10 @@ done
   circuit breaker, which exists to stop a worker that crashes on every start from being
   restarted in a loop; clearing it unasked re-arms that loop.
 - Then run **Flow 1's readiness stages 1-3** on each SID. A path claude has never been
-  run in shows the trust dialog, and typing your task into a dialog answers it blind and
-  loses the task. Stages 1-3 cost no turn; stage 4, if it fires, costs that worker one
-  billed turn.
+  run in shows the trust dialog, and typing your task into it does not just lose the
+  task: the select widget swallows the text and the trailing `\r` answers the
+  highlighted option, which since claude-cli 2.1.252 is `No, exit`. Stages 1-3 cost no
+  turn; stage 4, if it fires, costs that worker one billed turn.
 
 ### 4. Hand out the tasks: markers, not send-and-wait
 

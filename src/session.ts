@@ -53,9 +53,11 @@ import {
   type PiConfig,
   type GrokConfig,
   type DeepSeekConfig,
+  type OmpConfig,
   type SessionRemote,
   type SessionDocker,
 } from './types.js';
+import { resolveAndClaimOmpSessionId } from './utils/omp-session-resolver.js';
 import { probeDockerCliVersion } from './docker-hosts.js';
 import { probeRemoteCliVersion } from './remote-hosts.js';
 import type { TerminalMultiplexer, MuxSession } from './mux-interface.js';
@@ -64,6 +66,8 @@ import { RalphTracker } from './ralph-tracker.js';
 import { BashToolParser } from './bash-tool-parser.js';
 import {
   isTrustDialogScreen,
+  trustDialogNextKey,
+  TRUST_KEY_CONFIRM,
   TRUST_DIALOG_WINDOW_MS,
   TRUST_DIALOG_RETRY_MS,
   TRUST_DIALOG_MAX_ATTEMPTS,
@@ -101,6 +105,8 @@ import {
 } from './config/buffer-limits.js';
 import { DEFAULT_TMUX_HISTORY_LIMIT } from './config/terminal-history.js';
 import { EXEC_TIMEOUT_MS } from './config/exec-timeout.js';
+import { getCli } from './config/cli-registry/registry.js';
+import { resolveSessionCliVersion } from './utils/cli-resolver.js';
 import {
   buildInteractiveArgs,
   buildPromptArgs,
@@ -171,40 +177,50 @@ const CTRL_L_PATTERN = /\x0c/g;
 /** Pattern to split by newlines (CR or LF) */
 const NEWLINE_SPLIT_PATTERN = /\r?\n/;
 
-/** True for external-CLI run modes (non-Claude) that use their own TUI and output format. */
+/**
+ * True for external-CLI run modes (non-Claude) that use their own TUI and output format:
+ * no Claude transcript, no hooks, no Claude-format token/BashTool parsing.
+ *
+ * ⚠️ Reads its OWN capability flag rather than being derived from `hooks` or `kind`, and
+ * that independence is load-bearing. `shell` has no hooks but is NOT external, so a
+ * predicate derived from hooks would sweep it in here; `deepseek` HAS hooks but IS
+ * external. Deriving one of these three predicates from another has already shipped a bug
+ * (see CliCapabilities' own doc comment), which is why they are three separate fields.
+ *
+ * An UNREGISTERED mode is treated as external — the conservative answer, since it disables
+ * Claude-specific parsing rather than pointing it at output that was never Claude's.
+ */
 export function isExternalCliMode(mode: SessionMode): boolean {
-  return (
-    mode === 'opencode' ||
-    mode === 'codex' ||
-    mode === 'gemini' ||
-    mode === 'antigravity' ||
-    mode === 'pi' ||
-    mode === 'grok' ||
-    mode === 'deepseek'
-  );
+  return getCli(mode)?.capabilities.external ?? true;
 }
 
+/** Display name for a run mode. Falls back to the raw id for an unregistered one. */
 function getModeLabel(mode: SessionMode): string {
-  switch (mode) {
-    case 'opencode':
-      return 'OpenCode';
-    case 'codex':
-      return 'Codex';
-    case 'gemini':
-      return 'Gemini';
-    case 'antigravity':
-      return 'Antigravity';
-    case 'pi':
-      return 'Pi';
-    case 'grok':
-      return 'Grok';
-    case 'deepseek':
-      return 'DeepSeek';
-    case 'shell':
-      return 'Shell';
-    case 'claude':
-      return 'Claude';
-  }
+  return getCli(mode)?.label ?? mode;
+}
+
+/**
+ * Does this CLI's launch spec gate anything on its own version?
+ *
+ * Only such a CLI needs its version probed at session start — probing one with no gates
+ * would spawn a `--version` subprocess whose answer nothing reads. Today that is claude
+ * (the `--name` flag, gated at 2.1.224), which is why the probe used to be written as
+ * `mode === 'claude'`.
+ */
+function cliNeedsVersionProbe(mode: SessionMode): boolean {
+  return Object.keys(getCli(mode)?.capabilities.gates ?? {}).length > 0;
+}
+
+/**
+ * Does this CLI ask for `COLORTERM=truecolor`?
+ *
+ * Read off the SAME `env.exports` list that `buildEnvExports()` emits into the tmux
+ * session, so the attach client and the pane cannot disagree about colour depth. These
+ * used to be two hand-maintained lists of mode names in two files that had to be edited
+ * together, with a comment in each asking the next person to remember.
+ */
+function cliExportsTruecolor(mode: SessionMode): boolean {
+  return (getCli(mode)?.env.exports ?? []).some((entry) => entry.name === 'COLORTERM' && entry.value === 'truecolor');
 }
 
 /**
@@ -233,7 +249,7 @@ function getModeLabel(mode: SessionMode): string {
  * vim inside a tmux `shell` session.
  */
 export function isAltScreenStripMode(mode: SessionMode): boolean {
-  return mode === 'codex' || mode === 'claude' || mode === 'gemini';
+  return getCli(mode)?.capabilities.altScreen === 'strip-full';
 }
 
 /**
@@ -450,8 +466,9 @@ export class Session extends EventEmitter {
   private _lastPaneProbeAt = 0; // Throttle for the tmux screen probe
   private _lastPaneProbeWorking: boolean | null = null; // Its last verdict (null = could not read)
   private _trustDialogAccepted: boolean = false; // Stops the trust-dialog scan (answered, or given up)
-  private _trustDialogAttempts = 0; // Enter presses sent at the trust dialog
+  private _trustDialogAttempts = 0; // Keystrokes sent at the trust dialog
   private _lastTrustDialogScanAt = 0; // Throttle for the trust-dialog screen read
+  private _trustDialogTimer: NodeJS.Timeout | null = null; // Re-read after a keystroke (see below)
   private _interactiveStartedAt = 0; // When the interactive pane launched (bounds that scan)
   private _taskTracker: TaskTracker;
 
@@ -528,6 +545,8 @@ export class Session extends EventEmitter {
 
   // DeepSeek Harness configuration (only for mode === 'deepseek')
   private _deepSeekConfig: DeepSeekConfig | undefined;
+  // OMP configuration (only for mode === 'omp')
+  private _ompConfig: OmpConfig | undefined;
   private _resumeSessionId: string | undefined;
 
   // Ephemeral env overrides (e.g., CLAUDE_CODE_EXPERIMENTAL_AGENT_TEAMS). Exported by tmux
@@ -627,6 +646,8 @@ export class Session extends EventEmitter {
       grokConfig?: GrokConfig;
       /** DeepSeek Harness configuration (only for mode === 'deepseek') */
       deepSeekConfig?: DeepSeekConfig;
+      /** OMP configuration (only for mode === 'omp') */
+      ompConfig?: OmpConfig;
       /** Resume a previous Claude conversation (used after server reboot) */
       resumeSessionId?: string;
       /** Extra env vars exported to the CLI at spawn time (no disk persistence) */
@@ -682,7 +703,13 @@ export class Session extends EventEmitter {
     this._wireActivityAt = config.lastActivityAt || Date.now();
     this._wireActivitySettleUntil = config.lastActivityAt ? Date.now() + WIRE_ACTIVITY_SETTLE_MS : 0;
     // Set claudeSessionId — when resuming, the Claude conversation ID is the resumed one.
-    this._claudeSessionId = config.resumeSessionId || this.id;
+    // For omp, `claudeSessionId` doubles as the generic "external transcript id"
+    // alias key mergeUnifiedSessions() folds a history row into its owning
+    // session by: omp mints its OWN uuid, unrelated to this Codeman id, so
+    // without this an omp conversation's Past-Sessions row (keyed by omp's
+    // id) would never merge with its own live/persisted row (keyed by this
+    // id) — it would just show up a second time.
+    this._claudeSessionId = config.resumeSessionId || config.ompConfig?.resumeSessionId || this.id;
     // Restored from state.json on boot recovery. start() resets _claudeSessionId
     // to the launch id even when re-attaching to a mux session whose CLI has
     // moved on (a `/clear` before the restart), so this anchor is what lets the
@@ -734,6 +761,10 @@ export class Session extends EventEmitter {
     // Apply Pi configuration
     if (config.piConfig) {
       this._piConfig = config.piConfig;
+    }
+    // Apply OMP configuration
+    if (config.ompConfig) {
+      this._ompConfig = config.ompConfig;
     }
 
     // Apply DeepSeek Harness configuration
@@ -1368,6 +1399,7 @@ export class Session extends EventEmitter {
       piConfig: this._piConfig,
       grokConfig: this._grokConfig,
       deepSeekConfig: this._deepSeekConfig,
+      ompConfig: this._ompConfig,
       resumeSessionId: this._resumeSessionId,
       effort: this._effort,
       // COD-118: runtime-only — surfaced so the frontend can require explicit user
@@ -1494,7 +1526,11 @@ export class Session extends EventEmitter {
     let needsNewSession = false;
     if (this._muxSession && mux.isPaneDead(this._muxSession.muxName)) {
       console.log('[Session] Dead pane detected, respawning:', this._muxSession.muxName);
-      const newPid = await mux.respawnPane(options.respawnPaneOptions);
+      // Confirmed dead — safe to resolve/pin now (see `_pinOmpRespawnId()`).
+      // `options.respawnPaneOptions` was built eagerly before this dead-pane
+      // check ran, so it still carries the pre-pin ompConfig; rebuild it.
+      this._pinOmpRespawnId();
+      const newPid = await mux.respawnPane(this._buildRespawnPaneOptions());
       if (!newPid) {
         console.error('[Session] Failed to respawn pane, will create new session');
         needsNewSession = true;
@@ -1537,16 +1573,11 @@ export class Session extends EventEmitter {
           cols: ptyCols,
           rows: ptyRows,
           cwd: resolveMuxAttachCwd(this.workingDir, this._remote, this._docker),
-          // COD-75: codex/gemini/antigravity/pi get COLORTERM=truecolor — mirrors buildEnvExports()
-          // in tmux-manager.ts so the attach client and the tmux session agree.
-          env: buildMuxAttachEnv(
-            this.mode === 'codex' ||
-              this.mode === 'gemini' ||
-              this.mode === 'antigravity' ||
-              this.mode === 'pi' ||
-              this.mode === 'grok' ||
-              this.mode === 'deepseek'
-          ),
+          // COD-75: a CLI that declares `export COLORTERM=truecolor` gets it on the ATTACH
+          // client too. Both sides read the same registry entry, which is what stops the
+          // attach client and the tmux session from disagreeing — they used to be two
+          // hand-maintained lists of mode names that had to be edited in lockstep.
+          env: buildMuxAttachEnv(cliExportsTruecolor(this.mode)),
         })
       );
     } catch (spawnErr) {
@@ -1585,6 +1616,9 @@ export class Session extends EventEmitter {
       return false;
     }
 
+    // Confirmed the mux session (and thus the pane) exists but this reattach
+    // is about to respawn it — safe to resolve/pin now.
+    this._pinOmpRespawnId();
     const newPid = await mux.respawnPane(this._buildRespawnPaneOptions());
     if (!newPid) {
       console.error('[Session] reattachRemote: respawnPane failed for', this._muxSession.muxName);
@@ -1617,6 +1651,16 @@ export class Session extends EventEmitter {
       piConfig: this._piConfig,
       grokConfig: this._grokConfig,
       deepSeekConfig: this._deepSeekConfig,
+      // OMP resolution/pinning does NOT happen here. This object is built
+      // EAGERLY — including on every boot-recovery reattach, before anyone
+      // knows whether the pane is actually dead — so resolving here mutated
+      // `_ompConfig`/`_claudeSessionId` even for a pane that was simply being
+      // reattached to, not respawned; with two omp tabs in the same case dir
+      // that mis-pinned the ALIVE session onto whichever file happened to be
+      // newest on disk (reported live in the Ark0N/Codeman#353 review). The
+      // real pin now happens in `_pinOmpRespawnId()`, called by callers ONLY
+      // once they've confirmed an actual respawn is about to happen.
+      ompConfig: this._ompConfig,
       resumeSessionId: this._resumeSessionId,
       envOverrides: this._envOverrides,
       effort: this._effort,
@@ -1625,6 +1669,47 @@ export class Session extends EventEmitter {
       docker: this._docker,
       owner: this._owner,
     };
+  }
+
+  /**
+   * OMP-only: resolve and PIN the exact conversation to continue when
+   * respawning a dead pane, so every later respawn reuses the same id
+   * instead of re-resolving (and re-risking picking up a DIFFERENT
+   * conversation that happened to touch this directory more recently). See
+   * the comment at the call site in {@link _buildRespawnPaneOptions} for why
+   * "newest file on disk" is safe here specifically. Non-omp modes and a
+   * session that already carries an explicit id pass through untouched.
+   */
+  private _pinOmpRespawnId(): void {
+    // The omp-jsonl transcript reader is what this pin exists to feed, so ask for the
+    // reader rather than for the CLI's name.
+    if (getCli(this.mode)?.capabilities.transcript !== 'omp-jsonl') return;
+    if (this._ompConfig?.resumeSessionId) return;
+    // Callers MUST call this only immediately before an ACTUAL respawn (a
+    // confirmed-dead pane, or a genuine remote reattach) — never while merely
+    // building options that might not lead to a respawn. A fresh "Run OMP"
+    // click has no _muxSession yet and must never inherit whatever omp
+    // conversation happens to be newest on disk for this working directory
+    // (reported live 2026-08-27, fixed in 13a19f79); this guard keeps that
+    // fix intact now that resolution has moved out of the eager options build.
+    if (!this._muxSession) return;
+    const resolvedId = resolveAndClaimOmpSessionId(this.workingDir);
+    if (resolvedId) {
+      this._ompConfig = { ...this._ompConfig, resumeSessionId: resolvedId };
+      // Alias omp's own session uuid to this Codeman id — see the
+      // constructor's claudeSessionId comment for why this field is the
+      // (generically-named) mechanism that folds a Past-Sessions row back
+      // into its live/persisted session instead of duplicating it.
+      this._claudeSessionId = resolvedId;
+      return;
+    }
+    // Nothing unclaimed on disk (the dying process never got far enough to
+    // write a session file, or a sibling already claimed the only candidate)
+    // — fall back to the CLI's own "most recent" heuristic.
+    console.warn(
+      `[Session] OMP: no session file found under ${this.workingDir} to pin --resume on respawn; falling back to ambiguous --continue`
+    );
+    this._ompConfig = { ...this._ompConfig, continueSession: true };
   }
 
   /**
@@ -1731,7 +1816,11 @@ export class Session extends EventEmitter {
     // `Saved to: file://...` — that scanner (and its relaxed trust policy) is
     // only enabled for codex-mode sessions. The web server applies the trust
     // boundary for each request source.
-    const attachmentRequests = parseTerminalAttachmentRequests(data, { codexArtifacts: this.mode === 'codex' });
+    // Codex is the only CLI that announces generated artifacts in its pane output, and it
+    // is also the only one whose transcript is a rollout file — one implies the other.
+    const attachmentRequests = parseTerminalAttachmentRequests(data, {
+      codexArtifacts: getCli(this.mode)?.capabilities.transcript === 'codex-rollout',
+    });
     for (const request of attachmentRequests) {
       const seenKey = `${request.source}:${request.path}`;
       if (this._attachmentMagicSeen.has(seenKey)) continue;
@@ -1765,6 +1854,10 @@ export class Session extends EventEmitter {
     this._interactiveStartedAt = Date.now();
     this._trustDialogAttempts = 0;
     this._lastTrustDialogScanAt = 0;
+    if (this._trustDialogTimer) {
+      clearTimeout(this._trustDialogTimer);
+      this._trustDialogTimer = null;
+    }
 
     // COD-118: if the PTY exit breaker has tripped (repeated non-zero exits in a
     // short window), refuse to respawn. This is the uniform choke point that stops
@@ -1791,8 +1884,8 @@ export class Session extends EventEmitter {
     // repaint/alt-screen mode; issue #154). Remote sessions run claude on
     // another host, so a local probe wouldn't reflect their version; they get
     // their own over-ssh probe below. Cached process-wide, best-effort.
-    if (this.mode === 'claude' && !this._remote && !this._docker && !this._cliVersion) {
-      const probedVersion = getClaudeCliVersion();
+    if (cliNeedsVersionProbe(this.mode) && !this._remote && !this._docker && !this._cliVersion) {
+      const probedVersion = resolveSessionCliVersion(this.mode);
       if (probedVersion) {
         this._cliVersion = probedVersion;
         this.emit('cliInfoUpdated', {
@@ -1808,7 +1901,7 @@ export class Session extends EventEmitter {
     // reports the HOST claude (wrong version, and leaving cliVersion undefined
     // silently disables wheel-forwarding, #154). Probe the IN-CONTAINER version
     // instead — deferred so the container is up after the mux attach below.
-    if (this.mode === 'claude' && this._docker && !this._cliVersion) {
+    if (cliNeedsVersionProbe(this.mode) && this._docker && !this._cliVersion) {
       const dockerMeta = this._docker;
       setTimeout(() => {
         if (this._isStopped || this._cliVersion) return;
@@ -1834,7 +1927,7 @@ export class Session extends EventEmitter {
     // is the unreliable path #154 was filed for, so remote Claude cases silently
     // never got wheel-forwarding (noted in the #205 analysis). Probe over ssh,
     // deferred so session start never waits on the ssh round-trip.
-    if (this.mode === 'claude' && this._remote && !this._cliVersion) {
+    if (cliNeedsVersionProbe(this.mode) && this._remote && !this._cliVersion) {
       const remoteMeta = this._remote;
       setTimeout(() => {
         if (this._isStopped || this._cliVersion) return;
@@ -1877,6 +1970,7 @@ export class Session extends EventEmitter {
             piConfig: this._piConfig,
             grokConfig: this._grokConfig,
             deepSeekConfig: this._deepSeekConfig,
+            ompConfig: this._ompConfig,
             resumeSessionId: this._resumeSessionId,
             envOverrides: this._envOverrides,
             effort: this._effort,
@@ -1888,8 +1982,14 @@ export class Session extends EventEmitter {
           spawnErrLabel: 'mux attachment',
         });
 
-        // Set claudeSessionId — when resuming, the Claude conversation ID is the resumed one.
-        this._claudeSessionId = this._resumeSessionId || this.id;
+        // Set claudeSessionId — when resuming, the Claude conversation ID is the
+        // resumed one. `_pinOmpRespawnId()` (called just above, inside
+        // `_setupOrAttachMuxSession()`'s dead-pane branch) may have JUST aliased
+        // this to omp's own session uuid — that already-resolved id must win
+        // over the generic `this.id` fallback, or this line clobbers it back
+        // to the Codeman id
+        // on every single respawn.
+        this._claudeSessionId = this._resumeSessionId || this._ompConfig?.resumeSessionId || this.id;
 
         // For NEW mux sessions: wait for readiness then clean buffer
         // For RESTORED mux sessions: don't do anything - client will fetch buffer on tab switch
@@ -1946,35 +2046,16 @@ export class Session extends EventEmitter {
 
     // Fallback to direct PTY if mux is not used
     if (!this.ptyProcess) {
-      // OpenCode sessions require tmux for env var injection (API keys via setenv)
-      if (this.mode === 'opencode') {
-        throw new Error('OpenCode sessions require tmux. Direct PTY fallback is not supported.');
-      }
-      // Codex sessions require tmux for OPENAI_API_KEY injection via setenv
-      if (this.mode === 'codex') {
-        throw new Error('Codex sessions require tmux. Direct PTY fallback is not supported.');
-      }
-      // Gemini sessions require tmux for Gemini/Google auth env injection via setenv
-      if (this.mode === 'gemini') {
-        throw new Error('Gemini sessions require tmux. Direct PTY fallback is not supported.');
-      }
-      // Antigravity sessions require tmux for env override injection via setenv
-      if (this.mode === 'antigravity') {
-        throw new Error('Antigravity sessions require tmux. Direct PTY fallback is not supported.');
-      }
-      // Pi sessions require tmux for env override injection via setenv
-      if (this.mode === 'pi') {
-        throw new Error('Pi sessions require tmux. Direct PTY fallback is not supported.');
-      }
-      // Grok sessions require tmux for XAI_API_KEY / GROK_* injection via setenv
-      if (this.mode === 'grok') {
-        throw new Error('Grok sessions require tmux. Direct PTY fallback is not supported.');
-      }
-      // DeepSeek sessions require tmux for DEEPSEEK_API_KEY / DSH_PERMISSION_MODE
-      // injection via setenv — and for the HERDR_* status-bridge triple, without
-      // which the mode silently loses its definitive idle/blocked signals.
-      if (this.mode === 'deepseek') {
-        throw new Error('DeepSeek Harness sessions require tmux. Direct PTY fallback is not supported.');
+      // Every external CLI requires tmux and has NO direct-PTY fallback, because its
+      // secrets are injected with socket-scoped `tmux setenv` and so must never touch a
+      // spawn command line. DeepSeek additionally needs it for the HERDR_* status-bridge
+      // triple, without which the mode silently loses its definitive idle/blocked signals.
+      //
+      // Refusing is the only safe answer: falling back to a direct PTY would start the CLI
+      // unauthenticated (or, worse, tempt a future change into passing the key as an
+      // argument, where every process on the box can read it).
+      if (getCli(this.mode)?.capabilities.requiresMux) {
+        throw new Error(`${getModeLabel(this.mode)} sessions require tmux. Direct PTY fallback is not supported.`);
       }
       try {
         // Pass --session-id to use the SAME ID as the Codeman session
@@ -2007,7 +2088,12 @@ export class Session extends EventEmitter {
     }
 
     // Set claudeSessionId — when resuming, the Claude conversation ID is the resumed one.
-    this._claudeSessionId = this._resumeSessionId || this.id;
+    // Mirrors the mux branch above and must not clobber it: this line runs
+    // unconditionally after both the mux and direct-PTY paths, so it also needs
+    // the ompConfig fallback or it stomps the mux branch's correctly-resolved
+    // OMP alias back to this.id on every mux/plain-reattach boot recovery
+    // (the "third reset point" — see DECISIONS.md).
+    this._claudeSessionId = this._resumeSessionId || this._ompConfig?.resumeSessionId || this.id;
 
     this._pid = this.ptyProcess.pid;
     console.log('[Session] Interactive PTY spawned with PID:', this._pid);
@@ -2141,6 +2227,15 @@ export class Session extends EventEmitter {
    * makes a retry safe, since the terminal buffer is append-only and keeps the
    * dialog in its tail long after it has been answered.
    *
+   * ⚠️ **The keystroke is read off the screen, never assumed.** Claude Code
+   * 2.1.252 dropped the option numbers, put "No, exit" first, and highlights IT
+   * by default, so the bare `\r` this used to send now answers *exit*: a fresh
+   * case died (`Pane is dead (status 1)`) about six seconds after spawning.
+   * `trustDialogNextKey()` returns one step at a time — an arrow while the
+   * cursor is on the wrong option, Enter only once the screen shows it on the
+   * trust option — and this method re-reads the pane between the two, so a
+   * dropped arrow costs a repaint instead of the session.
+   *
    * Three guards keep an Enter press off a live session: a startup-only window,
    * a two-marker match (isTrustDialogScreen), and an attempt cap.
    */
@@ -2161,17 +2256,39 @@ export class Session extends EventEmitter {
       this._terminalBuffer.value.slice(-TRUST_DIALOG_SCAN_BYTES);
     if (!isTrustDialogScreen(screen)) return;
 
+    // Null means the frame does not say which option is highlighted. Waiting for
+    // the next repaint is the safe move; pressing Enter blind is the bug.
+    const key = trustDialogNextKey(screen);
+    if (key === null) return;
+
     this._trustDialogAttempts++;
     if (this._trustDialogAttempts > TRUST_DIALOG_MAX_ATTEMPTS) {
       this._trustDialogAccepted = true; // leave it to the user rather than keep typing
       console.warn(`[Session] Workspace trust dialog did not clear after retries: ${this.id}`);
       return;
     }
+    const step = key === TRUST_KEY_CONFIRM ? 'confirming' : 'moving to the trust option';
     console.log(
-      `[Session] Auto-accepting workspace trust dialog for: ${this.id} (attempt ${this._trustDialogAttempts})`
+      `[Session] Auto-accepting workspace trust dialog for: ${this.id} (attempt ${this._trustDialogAttempts}, ${step})`
     );
-    // Enter confirms the highlighted default, "1. Yes, I trust this folder".
-    this.writeViaMux('\r');
+    this.writeViaMux(key);
+
+    // ⚠️ Schedule the next read; do NOT wait for more PTY output. This scan only
+    // ever ran from `onData`, which was enough while one Enter answered the
+    // dialog. It is not enough now: the arrow that moves the cursor is the LAST
+    // output the pane produces, so a dialog left sitting on the trust option
+    // never gets its Enter and the worker stays parked on it forever (measured
+    // on a live 2.1.252 spawn: cursor moved at 6 s, then nothing). The timer is
+    // one-shot and self-rearming through this same path, and every exit route
+    // goes through _clearAllTimers().
+    // The +100ms puts the re-entry OUTSIDE the scan throttle above; firing at
+    // exactly the throttle boundary would let the scan return early and break
+    // the chain with the dialog still on screen.
+    if (this._trustDialogTimer) clearTimeout(this._trustDialogTimer);
+    this._trustDialogTimer = setTimeout(() => {
+      this._trustDialogTimer = null;
+      this._maybeAcceptTrustDialog();
+    }, TRUST_DIALOG_RETRY_MS + 100);
   }
 
   /**
@@ -2298,7 +2415,33 @@ export class Session extends EventEmitter {
       this._isWorking = false;
       this._status = 'idle';
       this._lastPromptTime = Date.now();
+      if (wasWorking) this._maybeCaptureOmpSessionId();
       this.emit('idle');
+    }
+  }
+
+  /**
+   * A brand-new omp session (never yet respawned, so
+   * {@link _pinOmpRespawnId} has never run) has no captured
+   * omp-native session id: `_claudeSessionId` still defaults to this
+   * session's OWN Codeman id from the constructor. Until something aliases
+   * it, the omp history scan's row for this exact conversation (keyed by
+   * omp's own uuid) merges with nothing and shows up a second time. The
+   * first turn going idle is the first moment omp has definitely written
+   * its session file, so resolve and alias it here — best-effort, and only
+   * once (skips once `_claudeSessionId` differs from `this.id`, whether from
+   * this capture or a resume/respawn that already resolved one).
+   */
+  private _maybeCaptureOmpSessionId(): void {
+    if (getCli(this.mode)?.capabilities.transcript !== 'omp-jsonl' || this._claudeSessionId !== this.id) return;
+    try {
+      const resolvedId = resolveAndClaimOmpSessionId(this.workingDir);
+      if (resolvedId) {
+        this._claudeSessionId = resolvedId;
+        this._ompConfig = { ...this._ompConfig, resumeSessionId: resolvedId };
+      }
+    } catch {
+      // Best-effort: a failed capture just means the next respawn tries again.
     }
   }
 
@@ -2670,6 +2813,12 @@ export class Session extends EventEmitter {
   }
 
   private _clearAllTimers(): void {
+    // Clear the workspace-trust follow-up read
+    if (this._trustDialogTimer) {
+      clearTimeout(this._trustDialogTimer);
+      this._trustDialogTimer = null;
+    }
+
     // Clear activity timeout to prevent memory leak
     if (this.activityTimeout) {
       clearTimeout(this.activityTimeout);
