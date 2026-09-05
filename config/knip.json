@@ -4,6 +4,7 @@
     "scripts/*.mjs",
     "scripts/*.js",
     "scripts/watch-subagents.ts",
+    "scripts/pr-bot/main.ts",
     "scripts/remotion/Root.tsx",
     "scripts/remotion/index.ts",
     "test/**/*.test.ts",
