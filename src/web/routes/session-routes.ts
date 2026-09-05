@@ -8,7 +8,7 @@ import { FastifyInstance, type FastifyReply } from 'fastify';
 import { z } from 'zod';
 import { join, dirname, extname, basename } from 'node:path';
 import { homedir } from 'node:os';
-import { existsSync, statSync, mkdirSync, writeFileSync } from 'node:fs';
+import { existsSync, statSync, mkdirSync, writeFileSync, rmSync } from 'node:fs';
 import { execFile } from 'node:child_process';
 import fs from 'node:fs/promises';
 import { randomBytes } from 'node:crypto';
@@ -51,7 +51,10 @@ import {
   SessionOrderUpdateSchema,
   SessionWaitQuerySchema,
   SessionWaitOutputQuerySchema,
+  CustomModelSelectionSchema,
 } from '../schemas.js';
+import { readCustomModelHosts } from '../../custom-model-hosts.js';
+import { buildCustomModelInjection } from '../../custom-model-injection.js';
 import { ownerLayoutKey } from '../../tab-layout-persistence.js';
 import { TabLayoutValidationError } from '../../tab-layout.js';
 import {
@@ -1158,6 +1161,88 @@ export function registerSessionRoutes(
     session.setColor(body.color as SessionColor);
     persistAndBroadcastSession(ctx, session);
     return { color: session.color };
+  });
+
+  // ========== Custom Model Endpoint Profiles (deployment_plan.md) ==========
+  //
+  // Applies (or clears) a session's custom OpenAI-compatible endpoint selection and
+  // RESTARTS the pane's CLI process — these harnesses read endpoint config at process
+  // start, not per-turn, so a live hot-swap isn't possible (confirmed with the
+  // maintainer). Endpoints come from the admin-configured custom-model-hosts store
+  // (chunk 3's CRUD routes), never raw client-supplied env — that's what keeps this
+  // route safe to let any session owner call for their own session, unlike the
+  // generic envOverrides field the privilegedEnvKeys clamp exists to guard.
+  app.post('/api/sessions/:id/custom-model', async (req) => {
+    const { id } = req.params as { id: string };
+    const body = parseBody(CustomModelSelectionSchema, req.body, 'Invalid request body');
+    const session = findSessionOrFail(ctx, id, req);
+
+    if (session.isBusy()) {
+      return createErrorResponse(ApiErrorCode.SESSION_BUSY, 'Session is busy');
+    }
+
+    if ('clear' in body) {
+      const previousConfigDir = session.setCustomModel(undefined);
+      if (previousConfigDir) rmSync(previousConfigDir, { recursive: true, force: true });
+      const restarted = await session.restartCli();
+      persistAndBroadcastSession(ctx, session);
+      return { customModel: session.customModel, restarted };
+    }
+
+    const entry = getCli(session.mode);
+    if (!entry) {
+      return createErrorResponse(ApiErrorCode.INVALID_INPUT, `No CLI registry entry for mode ${session.mode}`);
+    }
+    if (entry.capabilities.customModelInjection.kind === 'unsupported') {
+      return createErrorResponse(ApiErrorCode.OPERATION_FAILED, `${session.mode} has no known custom-model mechanism`);
+    }
+
+    const hosts = await readCustomModelHosts(getDataDir());
+    const endpoint = hosts.find((h) => h.id === body.endpointId);
+    if (!endpoint) {
+      return createErrorResponse(ApiErrorCode.NOT_FOUND, 'Model endpoint not found');
+    }
+
+    const injection = buildCustomModelInjection(entry, endpoint, body.modelId);
+
+    let envOverrides: Record<string, string>;
+    let envKeys: string[];
+    let configDir: string | undefined;
+
+    if (injection.kind === 'env') {
+      envOverrides = injection.envOverrides;
+      envKeys = Object.keys(injection.envOverrides);
+    } else if (injection.kind === 'configDir') {
+      // Isolated per-session dir — never the user's real CLI config path.
+      configDir = join(dataPath('custom-model-configs'), session.id);
+      for (const file of injection.files) {
+        const filePath = join(configDir, file.relPath);
+        mkdirSync(dirname(filePath), { recursive: true });
+        writeFileSync(filePath, file.content, 'utf8');
+      }
+      // extraEnv: vars the written config file REFERENCES by name (codex's `env_key`
+      // convention) rather than embedding a literal value — must ride alongside
+      // dirEnvVar or the config points at a credential that was never actually set.
+      envOverrides = { [injection.dirEnvVar]: configDir, ...injection.extraEnv };
+      envKeys = [injection.dirEnvVar, ...Object.keys(injection.extraEnv ?? {})];
+    } else {
+      // 'unsupported' is already handled above; this keeps the switch exhaustive.
+      return createErrorResponse(ApiErrorCode.OPERATION_FAILED, `${session.mode} has no known custom-model mechanism`);
+    }
+
+    const previousConfigDir = session.setCustomModel(
+      { endpointId: endpoint.id, modelId: body.modelId, label: endpoint.label, envKeys, configDir },
+      envOverrides
+    );
+    // Clean up the OLD config dir on disk, unless the new one happens to reuse the same
+    // path (same session, configDir kind again) — never delete the dir we just wrote.
+    if (previousConfigDir && previousConfigDir !== configDir) {
+      rmSync(previousConfigDir, { recursive: true, force: true });
+    }
+
+    const restarted = await session.restartCli();
+    persistAndBroadcastSession(ctx, session);
+    return { customModel: session.customModel, restarted };
   });
 
   // ========== Delete Session ==========

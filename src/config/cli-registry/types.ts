@@ -441,6 +441,37 @@ export interface CliCapabilities {
   gates: Record<string, { minVersion: string; failClosed: boolean }>;
   /** Cap on a single terminal frame, when this CLI needs a tighter one than the default. */
   maxFrameBytes?: number;
+  /**
+   * How this CLI is pointed at a user-supplied custom OpenAI-compatible
+   * endpoint (local, e.g. llama.cpp, or cloud, e.g. Azure AI Foundry) — the
+   * Custom Model Endpoint Profiles feature (`deployment_plan.md`). Declared
+   * per entry, never branched on id, same as every other capability here.
+   *
+   * `env`: plain env vars (claude's `ANTHROPIC_BASE_URL`/`ANTHROPIC_API_KEY`/
+   * `ANTHROPIC_DEFAULT_*_MODEL`). `configContentEnv`: a full config blob
+   * carried in one env var (opencode's `OPENCODE_CONFIG_CONTENT`).
+   * `configDir`: a generated config file under an isolated, dir-redirect-env-
+   * pointed directory so the user's real CLI config is never touched
+   * (codex's `CODEX_HOME`/`config.toml`, pi/omp's `PI_CONFIG_DIR`).
+   * `unsupported`: no known mechanism (antigravity) — the toolbar entry
+   * stays disabled for this CLI.
+   *
+   * Every env var name this introduces that can redirect a session's
+   * traffic MUST also appear in `privilegedEnvKeys` above, exactly like
+   * `DEEPSEEK_BASE_URL` — a non-granted multi-user owner redirecting a
+   * session to their own endpoint is a credential-exfiltration path, not
+   * just a mischief redirect.
+   */
+  customModelInjection:
+    | { kind: 'env'; baseUrlVar: string; apiKeyVar: string; modelVars: string[] }
+    | { kind: 'configContentEnv'; envVar: string; template: 'opencode-json' }
+    | {
+        kind: 'configDir';
+        dirEnvVar: string;
+        fileName: string;
+        template: 'codex-toml' | 'pi-models-json' | 'omp-models-yml';
+      }
+    | { kind: 'unsupported' };
 }
 
 // ---------------------------------------------------------------------------
