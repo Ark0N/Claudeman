@@ -42,7 +42,9 @@
 
 import { open, readdir, stat } from 'node:fs/promises';
 import { homedir } from 'node:os';
-import { basename, join } from 'node:path';
+import { join } from 'node:path';
+
+import { LRUMap } from './utils/lru-map.js';
 
 /** Covers `session_meta` (~19 KiB) plus the first user message (~69 KiB behind it). */
 const HEAD_BYTES = 131072;
@@ -51,16 +53,19 @@ const HEAD_BYTES = 131072;
 const TAIL_BYTES = 65536;
 
 /**
- * Newest rollouts to report. A store this size is already far more than any list
- * shows, and the cap keeps one enormous `~/.codex` from stalling a request.
+ * Newest rollouts to REPORT. Counted in emitted rows, not files scanned: the
+ * store is mostly sub-agent threads this never returns, so capping files first
+ * would spend the budget on rows nobody sees.
  */
 const MAX_ROLLOUTS = 400;
 
 /**
- * How many of those also get a tail read for `lastPrompt`. The head read is
- * cached forever (see below) but the tail cannot be, because appending to a
- * rollout is exactly what changes it, so this is the one genuinely per-request
- * cost and it stays bounded.
+ * How many emitted rows also get a tail read for `lastPrompt`. The head read is
+ * cached (see below) but the tail cannot be, because appending to a rollout is
+ * exactly what changes it, so this is the one genuinely per-request cost and it
+ * stays bounded. Counted in emitted rows for the same reason as above — against
+ * file index a store of sub-agent threads spends the whole budget before the
+ * first row that needed it.
  */
 const MAX_TAIL_READS = 100;
 
@@ -73,6 +78,13 @@ const MIN_ROLLOUT_BYTES = 100;
 export interface CodexHistorySession {
   /** The rollout's own thread id — the token `codex resume <id>` expects. */
   sessionId: string;
+  /**
+   * `session_meta.originator`, which codex stamps from
+   * CODEX_INTERNAL_ORIGINATOR_OVERRIDE — `codeman_<sessionId>` for every pane
+   * Codeman spawns. The only link between a FRESH codex pane and the rollout it
+   * is writing, since such a pane knows no thread id of its own.
+   */
+  originator?: string;
   workingDir: string;
   sizeBytes: number;
   /** ISO timestamp, from the file's own mtime. */
@@ -87,17 +99,40 @@ interface RolloutIdentity {
   cwd?: string;
   /** `'subagent'` marks a thread codex spawned for itself. */
   threadSource?: string;
+  /** `codeman_<sessionId>` for a pane Codeman spawned; codex's own default otherwise. */
+  originator?: string;
   firstPrompt?: string;
 }
 
 /**
  * `session_meta` is written once and never rewritten — the same fact
- * `readCodexRolloutMetaCached()` in session-routes.ts relies on — and the first
- * user message cannot change either. So a path's identity is cached for the life
- * of the process, and a rescan costs a `stat` per file plus head reads for
+ * `readCodexRolloutMetaCached()` in session-routes.ts relies on — so a path's
+ * identity is cached, and a rescan costs a `stat` per file plus head reads for
  * rollouts this process has not seen before.
+ *
+ * ⚠️ The first user message is NOT written up front: codex writes it when the
+ * user submits. Caching before then pins `firstPrompt: undefined` for the life
+ * of the process, and every scan of the home screen, the command palette and the
+ * search-index refresh can land in that window — so the row reads as having no
+ * prompt until a restart. `shouldCacheIdentity()` is the guard.
+ *
+ * Bounded, unlike a plain Map: this process runs for days and every sub-agent
+ * rollout adds an entry. Same reason and same size as `codexRolloutMetaCache`.
  */
-const identityCache = new Map<string, RolloutIdentity>();
+const identityCache = new LRUMap<string, RolloutIdentity>({ maxSize: 4096 });
+
+/**
+ * Is this identity settled enough to keep?
+ *
+ * A known `firstPrompt` settles it. So does a head read that FILLED its window,
+ * which means the prompt is genuinely not in the first `HEAD_BYTES` rather than
+ * not written yet. A short file with no prompt is the ambiguous case — codex is
+ * still to write one — so that one is re-read next scan.
+ */
+function shouldCacheIdentity(identity: RolloutIdentity, fileSize: number): boolean {
+  if (!identity.threadId) return false;
+  return identity.firstPrompt !== undefined || fileSize >= HEAD_BYTES;
+}
 
 function codexSessionsRoot(): string {
   const home = process.env.CODEX_HOME || join(homedir(), '.codex');
@@ -211,6 +246,7 @@ function parseIdentity(head: string): RolloutIdentity {
         session_id?: string;
         cwd?: string;
         thread_source?: string;
+        originator?: string;
         type?: string;
         role?: string;
         content?: unknown;
@@ -228,6 +264,7 @@ function parseIdentity(head: string): RolloutIdentity {
       out.threadId ??= p.id || p.session_id;
       out.cwd ??= p.cwd;
       out.threadSource ??= p.thread_source;
+      out.originator ??= p.originator;
     } else if (entry.type === 'turn_context' && p) {
       out.cwd ??= p.cwd;
     }
@@ -294,34 +331,29 @@ async function listRollouts(root: string): Promise<Array<{ path: string; mtimeMs
  * threads that are.
  */
 export async function scanCodexSessionsHistory(): Promise<CodexHistorySession[]> {
-  const files = (await listRollouts(codexSessionsRoot())).slice(0, MAX_ROLLOUTS);
+  const files = await listRollouts(codexSessionsRoot());
   const out: CodexHistorySession[] = [];
 
-  for (const [index, file] of files.entries()) {
+  for (const file of files) {
+    if (out.length >= MAX_ROLLOUTS) break;
+
     let identity = identityCache.get(file.path);
     if (!identity) {
       identity = parseIdentity(await readHead(file.path, HEAD_BYTES));
-      // A rollout still being created may not have flushed session_meta yet;
-      // caching that would pin an empty identity for the life of the process.
-      if (identity.threadId) identityCache.set(file.path, identity);
+      if (shouldCacheIdentity(identity, file.size)) identityCache.set(file.path, identity);
     }
     if (!identity.threadId || identity.threadSource === 'subagent') continue;
-
-    // The filename ends in the thread id, so a rollout whose head window was too
-    // small to reach session_meta still yields an id worth resuming.
-    const fromName = basename(file.path)
-      .replace(/\.jsonl$/, '')
-      .split('-')
-      .slice(-5)
-      .join('-');
-    const sessionId = identity.threadId || fromName;
+    // A row with no directory has nowhere to resume INTO, and emitting an empty
+    // one makes a click post `workingDir: ''`. omp drops such a row; so does this.
+    if (!identity.cwd) continue;
 
     const lastPrompt =
-      index < MAX_TAIL_READS ? parseLastPrompt(await readTail(file.path, file.size, TAIL_BYTES)) : undefined;
+      out.length < MAX_TAIL_READS ? parseLastPrompt(await readTail(file.path, file.size, TAIL_BYTES)) : undefined;
 
     out.push({
-      sessionId,
-      workingDir: identity.cwd || '',
+      sessionId: identity.threadId,
+      originator: identity.originator,
+      workingDir: identity.cwd,
       sizeBytes: file.size,
       lastModified: new Date(file.mtimeMs).toISOString(),
       firstPrompt: identity.firstPrompt,
@@ -329,6 +361,29 @@ export async function scanCodexSessionsHistory(): Promise<CodexHistorySession[]>
     });
   }
 
+  return out;
+}
+
+/**
+ * Which codex thread each Codeman-spawned pane is writing, keyed by Codeman
+ * session id.
+ *
+ * Codeman spawns every codex pane with
+ * CODEX_INTERNAL_ORIGINATOR_OVERRIDE=codeman_<sessionId>, and codex stamps that
+ * into `session_meta.originator`. That is the ONLY link between a fresh codex
+ * pane and the rollout it is writing: such a pane knows no thread id of its own,
+ * so it cannot be folded into its own Past-Sessions row from its own side.
+ *
+ * Newest wins. `/new` typed inside the codex TUI leaves several rollouts sharing
+ * one originator, and the pane is on the most recent — so this expects `rows`
+ * newest-first, as `scanCodexSessionsHistory()` returns them.
+ */
+export function codexThreadBySessionId(rows: CodexHistorySession[]): Map<string, string> {
+  const out = new Map<string, string>();
+  for (const row of rows) {
+    const owner = /^codeman_(.+)$/.exec(row.originator ?? '')?.[1];
+    if (owner && !out.has(owner)) out.set(owner, row.sessionId);
+  }
   return out;
 }
 

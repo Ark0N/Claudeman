@@ -145,7 +145,7 @@ import {
 import { LRUMap } from '../../utils/lru-map.js';
 import { findLatestOmpSessionId } from '../../utils/omp-session-resolver.js';
 import { scanOmpSessionsHistory } from '../../omp-transcript.js';
-import { scanCodexSessionsHistory } from '../../codex-transcript.js';
+import { scanCodexSessionsHistory, codexThreadBySessionId } from '../../codex-transcript.js';
 import {
   getLastTranscriptResponse,
   isExternalCliTranscriptMode,
@@ -4062,6 +4062,13 @@ export function registerSessionRoutes(
     // Persisted sessions (state.json). resumeSessionId is the Claude
     // conversation UUID a resumed session continues — feed it to the merge's
     // alias map so its transcript row folds into this session.
+    //
+    // codex keeps its thread id in `codexConfig` instead, and state.json stores
+    // that, so read it here as well. Without it a resumed codex session that has
+    // been demoted to a persisted-only record loses its alias and duplicates: the
+    // originator fallback below cannot rescue that one, because a RESUMED rollout
+    // keeps the original session_meta (see findActiveCodexFile) and so still
+    // names whichever pane first created the thread.
     const persisted: PersistedSessionInput[] = Object.values(ctx.store.getState().sessions).map((p) => ({
       id: p.id,
       name: p.name,
@@ -4070,7 +4077,7 @@ export function registerSessionRoutes(
       workingDir: p.workingDir,
       createdAt: p.createdAt,
       lastActivityAt: p.lastActivityAt,
-      claudeSessionId: p.resumeSessionId,
+      claudeSessionId: p.resumeSessionId || p.codexConfig?.resumeSessionId,
       pinned: p.pinned,
       pinnedAt: p.pinnedAt,
     }));
@@ -4144,7 +4151,8 @@ export function registerSessionRoutes(
     // session record does. `resumeId` is the rollout's own thread id, which is
     // what `codex resume` takes; see codex-transcript.ts.
     try {
-      for (const h of await scanCodexSessionsHistory()) {
+      const codexRows = await scanCodexSessionsHistory();
+      for (const h of codexRows) {
         history.push({
           sessionId: h.sessionId,
           workingDir: h.workingDir,
@@ -4155,6 +4163,26 @@ export function registerSessionRoutes(
           mode: 'codex',
           resumeId: h.sessionId,
         });
+      }
+
+      // Fold a FRESH codex pane into its own rollout row. A resumed one already
+      // folds, because Session sets `claudeSessionId` from the resume id it was
+      // given; a fresh one has no thread id until codex writes the rollout, so
+      // the link has to come from the other side. Codeman spawns every codex pane
+      // with CODEX_INTERNAL_ORIGINATOR_OVERRIDE=codeman_<sessionId>, and codex
+      // stamps that into session_meta.originator, so the rollout names the pane.
+      //
+      // Newest rollout wins: `/new` typed inside the TUI leaves several rollouts
+      // carrying the same originator, and the pane is on the most recent one.
+      // Rows arrive newest-first, so the first match is it.
+      //
+      // Never overwrites an id a session already knows — that one came from the
+      // resume path and is authoritative.
+      const codexThreads = codexThreadBySessionId(codexRows);
+      for (const row of [...live, ...persisted]) {
+        if (row.claudeSessionId && row.claudeSessionId !== row.id) continue;
+        const threadId = codexThreads.get(row.id);
+        if (threadId) row.claudeSessionId = threadId;
       }
     } catch {
       // Best-effort, same as the two scans above.

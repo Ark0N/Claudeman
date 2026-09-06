@@ -2990,11 +2990,16 @@ Object.assign(CodemanApp.prototype, {
       // as a duplicate — click it 3 times, see the same name 3 times. Claude
       // rows are left alone: `sessionId` there is a claudeSessionId, which
       // usually has no live/persisted Codeman session of its own to delete.
-      // Gated on `continuesSomething`: for codex/gemini/antigravity (no
-      // continuation wired above), this is really a FRESH session with no
+      // Gated on `continuesSomething`: for gemini/antigravity, and for a codex
+      // row carrying no `resumeId`, this is really a FRESH session with no
       // relation to the old row's conversation, so retiring it would discard
       // the old conversation with no recovery — worse than the duplicate row
       // this guard exists to prevent for the modes that DO continue.
+      //
+      // A codex row that DOES continue passes this gate, but the DELETE is a
+      // no-op for it: `sessionId` there is codex's thread id and no Codeman
+      // session carries that id. Its duplicate is cleared from the other side
+      // instead, by the alias fold in gatherUnifiedInputs()/Session.
       if (effectiveMode !== 'claude' && continuesSomething && sessionId !== newSessionId) {
         fetch(`/api/sessions/${sessionId}?killMux=true`, { method: 'DELETE' }).catch(() => {});
       }

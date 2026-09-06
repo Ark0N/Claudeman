@@ -2,12 +2,16 @@
  * @fileoverview Pure merge/filter logic for the unified session list (COD-121).
  *
  * Combines four read-only views of a session — live (in-memory `Session`),
- * persisted (`state.json`), transcript history (`~/.claude/projects`), and the
- * lifecycle audit log — plus mux process stats, into one de-duplicated list
- * keyed by sessionId. Transcript-history rows are keyed by the Claude
- * conversation UUID (the `.jsonl` filename stem), which diverges from the
- * Codeman id for resumed sessions — an alias map (claudeSessionId → Codeman id,
- * built from the live/persisted views) folds them into the owning session item.
+ * persisted (`state.json`), transcript history, and the lifecycle audit log —
+ * plus mux process stats, into one de-duplicated list keyed by sessionId.
+ *
+ * Transcript history is not one source but three, because the CLIs keep their
+ * conversations in their own stores: Claude's `~/.claude/projects`, omp's
+ * `~/.omp/agent/sessions` and codex's `~/.codex/sessions`. Each row is keyed by
+ * whatever id that CLI names the conversation with, which diverges from the
+ * Codeman id for a resumed session and for every non-Claude one — an alias map
+ * (claudeSessionId → Codeman id, built from the live/persisted views) folds them
+ * into the owning session item.
  * Higher-precedence sources overwrite scalar fields when present
  * (history < lifecycle < persisted < live), while the `sources` array
  * always accumulates every contributing view. A "meaningfulness floor" drops

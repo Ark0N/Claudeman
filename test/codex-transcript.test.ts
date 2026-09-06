@@ -16,25 +16,29 @@
  *   outnumbered the threads a person can actually resume.
  */
 import { describe, expect, it, beforeEach, afterEach } from 'vitest';
-import { mkdtemp, mkdir, writeFile, rm, utimes } from 'node:fs/promises';
+import { appendFile, mkdtemp, mkdir, writeFile, rm, utimes } from 'node:fs/promises';
 import { join } from 'node:path';
 import { tmpdir } from 'node:os';
 
-import { scanCodexSessionsHistory, __clearCodexIdentityCache } from '../src/codex-transcript.js';
+import {
+  scanCodexSessionsHistory,
+  codexThreadBySessionId,
+  __clearCodexIdentityCache,
+} from '../src/codex-transcript.js';
 
 let home: string;
 let prevCodexHome: string | undefined;
 
 /** A rollout's opening line, as codex writes it. */
-const sessionMeta = (opts: { id: string; cwd: string; threadSource?: string }) =>
+const sessionMeta = (opts: { id: string; cwd?: string; threadSource?: string; originator?: string }) =>
   JSON.stringify({
     timestamp: '2026-09-02T07:05:37.421Z',
     type: 'session_meta',
     payload: {
       id: opts.id,
       session_id: opts.id,
-      cwd: opts.cwd,
-      originator: 'codex-tui',
+      ...(opts.cwd ? { cwd: opts.cwd } : {}),
+      originator: opts.originator ?? 'codex-tui',
       ...(opts.threadSource ? { thread_source: opts.threadSource } : {}),
       // The real thing embeds full base instructions here; padded so the file
       // clears the size floor and exercises the head window.
@@ -194,6 +198,76 @@ describe('scanCodexSessionsHistory', () => {
     expect(rows[0].firstPrompt).toBe('still found me');
   });
 
+  it('reports the originator, which is how a fresh pane finds its own rollout', async () => {
+    await writeRollout('bbbbbbbb-bbbb-7bbb-8bbb-bbbbbbbbbbbb', [
+      sessionMeta({
+        id: 'bbbbbbbb-bbbb-7bbb-8bbb-bbbbbbbbbbbb',
+        cwd: '/repo/nine',
+        originator: 'codeman_2f1c9a44-1111-2222-3333-444455556666',
+      }),
+      itemCompletedUser('hello'),
+    ]);
+
+    const rows = await scanCodexSessionsHistory();
+    expect(rows[0].originator).toBe('codeman_2f1c9a44-1111-2222-3333-444455556666');
+  });
+
+  it('drops a rollout that records no working directory', async () => {
+    // Emitting workingDir: '' would make a click post an empty directory.
+    await writeRollout('cccccccc-cccc-7ccc-8ccc-cccccccccccc', [
+      sessionMeta({ id: 'cccccccc-cccc-7ccc-8ccc-cccccccccccc' }),
+      itemCompletedUser('nowhere to resume into'),
+    ]);
+
+    expect(await scanCodexSessionsHistory()).toEqual([]);
+  });
+
+  it('picks up a prompt written after an earlier scan saw none', async () => {
+    // The bug this pins: the identity cache was written as soon as the thread id
+    // was known, but codex writes the first UserMessage only when the user
+    // submits. Any scan in that window — the home screen, the command palette,
+    // the search-index refresh — pinned `firstPrompt: undefined` until restart.
+    const id = 'dddddddd-dddd-7ddd-8ddd-dddddddddddd';
+    const path = await writeRollout(id, [sessionMeta({ id, cwd: '/repo/ten' })]);
+
+    const before = await scanCodexSessionsHistory();
+    expect(before).toHaveLength(1);
+    expect(before[0].firstPrompt).toBeUndefined();
+
+    await appendFile(path, itemCompletedUser('the prompt, typed a moment later') + '\n', 'utf-8');
+
+    const after = await scanCodexSessionsHistory();
+    expect(after[0].firstPrompt).toBe('the prompt, typed a moment later');
+  });
+
+  it('does not spend the lastPrompt budget on rollouts it never returns', async () => {
+    // The budget used to count file index, so a store whose newest files are all
+    // sub-agent threads exhausted it before the first row that needed it.
+    for (let i = 0; i < 3; i++) {
+      await writeRollout(
+        `eeeeeeee-eeee-7eee-8eee-00000000000${i}`,
+        [
+          sessionMeta({ id: `eeeeeeee-eeee-7eee-8eee-00000000000${i}`, cwd: '/repo/sub', threadSource: 'subagent' }),
+          itemCompletedUser('subagent work'),
+        ],
+        new Date('2026-09-05T00:00:00Z')
+      );
+    }
+    await writeRollout(
+      'ffffffff-ffff-7fff-8fff-ffffffffffff',
+      [
+        sessionMeta({ id: 'ffffffff-ffff-7fff-8fff-ffffffffffff', cwd: '/repo/real' }),
+        itemCompletedUser('opening'),
+        itemCompletedUser('the latest thing asked'),
+      ],
+      new Date('2026-09-04T00:00:00Z')
+    );
+
+    const rows = await scanCodexSessionsHistory();
+    expect(rows).toHaveLength(1);
+    expect(rows[0].lastPrompt).toBe('the latest thing asked');
+  });
+
   it('collapses a long prompt to a single capped line', async () => {
     await writeRollout('aaaaaaaa-aaaa-7aaa-8aaa-aaaaaaaaaaaa', [
       sessionMeta({ id: 'aaaaaaaa-aaaa-7aaa-8aaa-aaaaaaaaaaaa', cwd: '/repo/eight' }),
@@ -204,5 +278,27 @@ describe('scanCodexSessionsHistory', () => {
     expect(rows[0].firstPrompt).not.toContain('\n');
     expect(rows[0].firstPrompt!.length).toBeLessThanOrEqual(201);
     expect(rows[0].firstPrompt!.endsWith('…')).toBe(true);
+  });
+});
+
+describe('codexThreadBySessionId', () => {
+  const row = (sessionId: string, originator?: string) =>
+    ({ sessionId, originator, workingDir: '/w', sizeBytes: 1, lastModified: '2026-09-02T00:00:00.000Z' }) as never;
+
+  it('maps a Codeman-spawned pane to the thread it is writing', () => {
+    const map = codexThreadBySessionId([row('thread-a', 'codeman_sess-1')]);
+    expect(map.get('sess-1')).toBe('thread-a');
+  });
+
+  it('ignores a rollout codex started on its own', () => {
+    expect(codexThreadBySessionId([row('thread-a', 'codex-tui')]).size).toBe(0);
+    expect(codexThreadBySessionId([row('thread-a', undefined)]).size).toBe(0);
+  });
+
+  it('keeps the newest rollout when a pane has several', () => {
+    // `/new` inside the codex TUI leaves the pane's originator on more than one
+    // rollout; the pane is on the most recent, and rows arrive newest-first.
+    const map = codexThreadBySessionId([row('thread-new', 'codeman_sess-1'), row('thread-old', 'codeman_sess-1')]);
+    expect(map.get('sess-1')).toBe('thread-new');
   });
 });
