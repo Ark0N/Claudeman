@@ -12607,6 +12607,43 @@ kbd {
   background: color-mix(in srgb, var(--green) 12%, transparent);
 }
 
+/* Consecutive messages from one speaker inside one turn are segments of a
+   single utterance, not separate cards: no repeated badge, a hairline seam.
+   The role accent survives because the colour rules above match on BOTH
+   :has(.rv-role-*) and .rv-msg-* — a badge-less continuation still hits the
+   class arm. Do not drop either arm. */
+.rv-message.rv-msg-cont {
+  margin-top: -18px;
+  border-top: 0;
+  border-top-left-radius: 0;
+  border-top-right-radius: 0;
+  padding-top: 0;
+}
+
+.rv-message.rv-msg-cont > .rv-text {
+  border-top: 1px solid var(--border);
+  padding-top: 12px;
+}
+
+.rv-message:has(+ .rv-msg-cont) {
+  border-bottom-left-radius: 0;
+  border-bottom-right-radius: 0;
+  padding-bottom: 0;
+}
+
+/* A prompt the user typed while the agent was working (absorbed mid-turn).
+   A pseudo-element, not a text node, so the i18n MutationObserver cannot
+   rewrite it. */
+.rv-message[data-queued='1'] .rv-role::after {
+  content: ' ⏱';
+}
+
+.rv-notice {
+  opacity: 0.7;
+  font-style: italic;
+  margin-top: 12px;
+}
+
 /* Markdown rendered content inside response viewer.
    Prose uses a proportional font for readability; code keeps monospace. */
 .rv-text,

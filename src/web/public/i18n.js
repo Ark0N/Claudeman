@@ -86,6 +86,7 @@
     'Instance count': '实例数量',
     'No response yet': '暂无回复',
     'No response yet — send a message in this session first.': '暂无回复，请先在此会话中发送一条消息。',
+    'No full conversation history available for this session': '此会话没有可显示的完整对话历史',
     'Last Response': '最近一次回复',
     More: '更多',
     'Codeman version': '{name}版本',
