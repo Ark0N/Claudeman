@@ -1043,6 +1043,9 @@ export const HookEventSchema = z.object({
     'stop',
     'teammate_idle',
     'task_completed',
+    // Claude Code's UserPromptSubmit: a first-hand report of the pane's live
+    // conversation id. Keep in step with HookEventType in types/api.ts.
+    'prompt_submitted',
     // A turn STARTED. Unlike the others this one has no Claude Code hook behind
     // it: it is reported by the DeepSeek Harness status shim, and exists so a
     // dialog answered in the terminal resolves its Approvals Inbox item at once

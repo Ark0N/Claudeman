@@ -426,16 +426,18 @@ describe('GET /api/sessions/:id/last-response (claude conversation pinning)', ()
   }
 
   /** Replaces the pre-seeded mock session with a Claude pane in WORKDIR. */
-  function addPane(id: string, conversationId: string, lastSubmitAt: number) {
+  function addPane(id: string, conversationId: string, lastSubmitAt: number, firstHand = false) {
     const base = harness.ctx._session;
     const pane = Object.create(Object.getPrototypeOf(base)) as typeof base & {
       claudeSessionId: string;
       lastSubmitAt: number;
+      claudeSessionIdIsFirstHand: boolean;
       adoptClaudeSessionId: ReturnType<typeof vi.fn>;
     };
     Object.assign(pane, base, { id, mode: 'claude', workingDir: WORKDIR, docker: undefined });
     pane.claudeSessionId = conversationId;
     pane.lastSubmitAt = lastSubmitAt;
+    pane.claudeSessionIdIsFirstHand = firstHand;
     pane.adoptClaudeSessionId = vi.fn((newId: string) => {
       pane.claudeSessionId = newId;
     });
@@ -477,6 +479,41 @@ describe('GET /api/sessions/:id/last-response (claude conversation pinning)', ()
     writeHistory([{ sessionId: 'unrelated-conversation', timestamp: NOW }]);
 
     expect(await getLastResponse('pane-1')).toEqual({ text: 'my own answer', timestamp: expect.any(String) });
+    expect(pane.adoptClaudeSessionId).not.toHaveBeenCalled();
+  });
+
+  /**
+   * The whole point of the UserPromptSubmit hook: a pane driven by attaching to
+   * tmux directly never bumps `lastSubmitAt` (only Codeman's own write path
+   * does), so before this the correlation could not run at all for it and the
+   * viewer stayed pinned to the launch conversation for the pane's whole life.
+   */
+  it("trusts the pane's own hook over any history correlation", async () => {
+    const pane = addPane('pane-1', 'hook-conversation', 0, true);
+    writeTranscript('hook-conversation', 'the answer this pane gave', NOW - 60_000);
+    // A newer, closer entry that the correlation would otherwise have claimed.
+    writeTranscript('decoy-conversation', 'a stranger answer', NOW);
+    writeHistory([{ sessionId: 'decoy-conversation', timestamp: NOW }]);
+
+    expect(await getLastResponse('pane-1')).toEqual({
+      text: 'the answer this pane gave',
+      timestamp: expect.any(String),
+    });
+    expect(pane.adoptClaudeSessionId).not.toHaveBeenCalled();
+  });
+
+  it('never lets a correlation override a first-hand id, even a well-anchored one', async () => {
+    // Same shape as the /clear-following test above, which DOES adopt — the only
+    // difference is that this pane's id came from its own hook.
+    const pane = addPane('pane-1', 'before-clear', NOW, true);
+    writeTranscript('before-clear', 'answer before clear', NOW - 60_000);
+    writeTranscript('after-clear', 'answer after clear', NOW + 500);
+    writeHistory([{ sessionId: 'after-clear', timestamp: NOW + 120 }]);
+
+    expect(await getLastResponse('pane-1')).toEqual({
+      text: 'answer before clear',
+      timestamp: expect.any(String),
+    });
     expect(pane.adoptClaudeSessionId).not.toHaveBeenCalled();
   });
 

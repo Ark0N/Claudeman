@@ -115,6 +115,75 @@ describe('hook-event-routes', () => {
       );
     });
 
+    /**
+     * The pane's live conversation id, reported by the CLI process itself. This
+     * is what lets the response viewer stop guessing from ~/.claude/history.jsonl
+     * — a guess that could never run at all for a pane the user drives by
+     * attaching to tmux, because `lastSubmitAt` only ever saw Codeman's own
+     * write path.
+     */
+    it('adopts the conversation id first-hand from a prompt_submitted hook', async () => {
+      const session = harness.ctx._session;
+      const before = session.lastSubmitAt;
+
+      const res = await harness.app.inject({
+        method: 'POST',
+        url: '/api/hook-event',
+        payload: {
+          event: 'prompt_submitted',
+          sessionId: harness.ctx._sessionId,
+          data: { hook_event_name: 'UserPromptSubmit', session_id: 'conv-1', source: 'user' },
+        },
+      });
+
+      expect(res.statusCode).toBe(200);
+      expect(session.claudeSessionId).toBe('conv-1');
+      expect(session.claudeSessionIdIsFirstHand).toBe(true);
+      expect(session.claudeSessionChain).toEqual(['conv-1']);
+      expect(session.lastSubmitAt).toBeGreaterThan(before);
+      expect(harness.ctx.persistSessionState).toHaveBeenCalledWith(session);
+    });
+
+    it('records a /clear successor in the chain and persists it, without duplicating a repeat', async () => {
+      const session = harness.ctx._session;
+      const submit = async (conversationId: string) =>
+        harness.app.inject({
+          method: 'POST',
+          url: '/api/hook-event',
+          payload: {
+            event: 'prompt_submitted',
+            sessionId: harness.ctx._sessionId,
+            data: { hook_event_name: 'UserPromptSubmit', session_id: conversationId },
+          },
+        });
+
+      await submit('conv-1');
+      await submit('conv-1'); // every prompt in a conversation reports the same id
+      await submit('conv-2'); // the user ran /clear
+
+      expect(session.claudeSessionChain).toEqual(['conv-1', 'conv-2']);
+      expect(session.claudeSessionId).toBe('conv-2');
+      // `/clear` emits no completion event, so the successor is lost on restart
+      // unless the hook itself persists it.
+      expect(harness.ctx.persistSessionState).toHaveBeenCalledTimes(2);
+    });
+
+    it('does not leak the prompt text into the broadcast', async () => {
+      await harness.app.inject({
+        method: 'POST',
+        url: '/api/hook-event',
+        payload: {
+          event: 'prompt_submitted',
+          sessionId: harness.ctx._sessionId,
+          data: { hook_event_name: 'UserPromptSubmit', session_id: 'conv-1', prompt: 'my secret prompt' },
+        },
+      });
+
+      const broadcast = JSON.stringify(harness.ctx.broadcast.mock.calls);
+      expect(broadcast).not.toContain('my secret prompt');
+      expect(broadcast).toContain('conv-1');
+    });
+
     it('returns 404 for unknown session', async () => {
       const res = await harness.app.inject({
         method: 'POST',

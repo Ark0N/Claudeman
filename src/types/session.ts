@@ -689,6 +689,15 @@ export interface SessionState {
    */
   lastSubmitAt?: number;
   /**
+   * Claude conversations this pane has been on, oldest first, current last.
+   * Written ONLY from a first-hand `UserPromptSubmit`/`Stop` hook payload —
+   * never from the history correlation — so it cannot record a sibling pane's
+   * conversation. Persisted because `/clear` is otherwise unrecoverable: once
+   * the pane moves on, the predecessor id exists nowhere else, and the last
+   * entry is what re-pins `claudeSessionId` past `start()`'s three resets.
+   */
+  claudeSessionChain?: string[];
+  /**
    * PTY-exit circuit breaker tripped — respawn blocked until an explicit restart
    * (COD-118). Runtime-only: never restored on boot (fresh server = fresh breaker).
    */

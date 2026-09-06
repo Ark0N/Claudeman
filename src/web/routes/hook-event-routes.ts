@@ -129,7 +129,29 @@ export function registerHookEventRoutes(
     if (data && typeof data.session_id === 'string' && data.session_id) {
       const session = ctx.sessions.get(sessionId);
       const prevClaudeSessionId = session?.claudeSessionId;
-      session?.adoptClaudeSessionId(data.session_id);
+      const prevChainLength = session?.claudeSessionChain.length ?? 0;
+      // FIRST-HAND: this payload came from the CLI process itself and reached us
+      // because the pane's own $CODEMAN_SESSION_ID addressed it. No cwd, no
+      // timestamp, nothing a sibling pane on the same folder could win — so the
+      // response viewer can stop guessing entirely (see
+      // resolveActiveClaudeSessionIdFromHistory).
+      session?.adoptClaudeSessionId(data.session_id, { firstHand: true });
+      if (event === 'prompt_submitted') {
+        // Repairs `lastSubmitAt` for a pane driven straight from tmux: it was
+        // bumped only by input that flowed through Codeman's own write path, so
+        // it read 0 forever for those panes and every consumer of "when did this
+        // pane last submit" silently degraded.
+        session?.markPromptSubmitted();
+      }
+      // Persist when the conversation actually moved: `/clear` emits no
+      // completion event, so without this the successor id is lost on restart
+      // and recovery falls back to the launch conversation.
+      if (
+        session &&
+        (session.claudeSessionId !== prevClaudeSessionId || session.claudeSessionChain.length !== prevChainLength)
+      ) {
+        ctx.persistSessionState(session);
+      }
       // Docker sessions: keep the case's resume seed following the LIVE
       // conversation (post-/clear id switches), so a container stop/reboot
       // relaunch resumes the right transcript.

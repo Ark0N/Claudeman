@@ -1840,8 +1840,17 @@ export function registerSessionRoutes(
     session: Session,
     projectsDir: string
   ): Promise<string | null> {
+    // A pane whose conversation id came from its OWN hook needs no correlation:
+    // $CODEMAN_SESSION_ID (the pane's env) -> data.session_id (the CLI's own
+    // stdin JSON) is a first-hand binding that never looks at cwd, so it cannot
+    // be stolen by a sibling pane, a closed tab, or a bare `claude` in a
+    // terminal. Guessing can only be worse than the fact. This is also what
+    // closes the hole below for a pane driven straight from tmux: it never
+    // reaches `if (!submitAt)`.
+    if (session.claudeSessionIdIsFirstHand) return null;
+
     const submitAt = session.lastSubmitAt;
-    if (!submitAt) return null; // never typed through Codeman — nothing to credit
+    if (!submitAt) return null; // no anchor at all — nothing to credit
     const cached = claudeHistoryPinCache.get(session.id);
     if (cached && cached.submitAt === submitAt) return cached.claudeSessionId;
 
