@@ -80,7 +80,7 @@ try {
   const prev = localStorage.getItem('codeman-crash-diag');
   if (prev) {
     console.log('[CRASH-DIAG] Previous session breadcrumbs:\n' + prev);
-    navigator.sendBeacon('/api/crash-diag', JSON.stringify({ data: prev, id: _crashDiag._pageId + '-prev' }));
+    navigator.sendBeacon(CodemanBase.url('/api/crash-diag'), JSON.stringify({ data: prev, id: _crashDiag._pageId + '-prev' }));
   }
 } catch {}
 _crashDiag.log('PAGE LOAD');
@@ -89,7 +89,7 @@ _crashDiag.log('PAGE LOAD');
 function _crashDiagBeacon() {
   try {
     if (_crashDiag._entries.length > 0) {
-      navigator.sendBeacon('/api/crash-diag', JSON.stringify({ data: _crashDiag._entries.join('\n'), id: _crashDiag._pageId }));
+      navigator.sendBeacon(CodemanBase.url('/api/crash-diag'), JSON.stringify({ data: _crashDiag._entries.join('\n'), id: _crashDiag._pageId }));
     }
   } catch {}
 }
