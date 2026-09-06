@@ -145,6 +145,7 @@ import {
 import { LRUMap } from '../../utils/lru-map.js';
 import { findLatestOmpSessionId } from '../../utils/omp-session-resolver.js';
 import { scanOmpSessionsHistory } from '../../omp-transcript.js';
+import { scanCodexSessionsHistory } from '../../codex-transcript.js';
 import {
   getLastTranscriptResponse,
   isExternalCliTranscriptMode,
@@ -4135,6 +4136,28 @@ export function registerSessionRoutes(
       }
     } catch {
       // Best-effort, same as the claude scan above.
+    }
+
+    // Codex's own rollout store (~/.codex/sessions) — the same treatment omp
+    // gets above, and for the same reason: codex writes no Claude transcript, so
+    // without this a codex conversation disappears from the list as soon as its
+    // session record does. `resumeId` is the rollout's own thread id, which is
+    // what `codex resume` takes; see codex-transcript.ts.
+    try {
+      for (const h of await scanCodexSessionsHistory()) {
+        history.push({
+          sessionId: h.sessionId,
+          workingDir: h.workingDir,
+          sizeBytes: h.sizeBytes,
+          lastModified: h.lastModified,
+          firstPrompt: h.firstPrompt,
+          lastPrompt: h.lastPrompt,
+          mode: 'codex',
+          resumeId: h.sessionId,
+        });
+      }
+    } catch {
+      // Best-effort, same as the two scans above.
     }
 
     // Mux process stats (best-effort; guard against mocks lacking the method).

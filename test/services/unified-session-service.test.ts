@@ -14,6 +14,30 @@ import {
 } from '../../src/services/unified-session-service.js';
 
 describe('mergeUnifiedSessions', () => {
+  it("carries a transcript row's own resume token, and stamps none on a live row", () => {
+    // codex names a thread by an id in its rollout, not by Codeman's session id.
+    // The scanner sets `resumeId`; a live session never does, which is what stops
+    // a resume from asking codex for a thread whose id is really Codeman's uuid.
+    const merged = mergeUnifiedSessions({
+      live: [{ id: 'codeman-uuid', status: 'idle', mode: 'codex' }],
+      history: [
+        {
+          sessionId: 'codex-thread-id',
+          workingDir: '/w',
+          sizeBytes: 4000,
+          lastModified: '2026-09-02T00:00:00.000Z',
+          mode: 'codex',
+          resumeId: 'codex-thread-id',
+        },
+      ],
+    });
+    const fromTranscript = merged.find((m) => m.sessionId === 'codex-thread-id');
+    const fromLive = merged.find((m) => m.sessionId === 'codeman-uuid');
+    expect(fromTranscript?.resumeId).toBe('codex-thread-id');
+    expect(fromTranscript?.mode).toBe('codex');
+    expect(fromLive?.resumeId).toBeUndefined();
+  });
+
   it('dedupes the same sessionId across live + persisted into one item', () => {
     const merged = mergeUnifiedSessions({
       live: [{ id: 's1', status: 'working', isWorking: true }],
