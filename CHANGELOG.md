@@ -1,5 +1,29 @@
 # aicodeman
 
+## 1.25.0
+
+### Minor Changes
+
+- Codeman can be mounted under a sub-path behind a reverse proxy (#381, @mtiller). `--base-url /codeman` (or `CODEMAN_BASE_URL`) makes the server strip the prefix on the way in, rebase redirects on the way out, inject `<base>` and `window.__CODEMAN_BASE__` into the shell, and route web-tab proxying and WebSocket upgrades under the mount, so one TLS name can front several apps. A root install is byte-identical to before. Applied on top: the crash-diag beacon stays under the mount (sendBeacon is not fetch, so the base-aware wrapper never saw it), the test suite strips `CODEMAN_BASE_URL`, and a wiring test boots a real server under a prefix.
+
+  A case can attach to a container that is already running (#357, @dignfei). `DockerCase.owned:false` mirrors the remote-SSH attach contract: Codeman only execs into such a container, never creates, starts, stops, removes, pauses or commits it, with the refusal enforced at string-construction time so no caller bug can reach `docker stop`. The Add Case dialog gets an attach panel with a container picker, the run menu takes its mode availability from the CLIs actually present in the container, and adoption is admin-only in multi-user mode. Three gaps closed after review: export no longer pauses or commits an adopted container, a freshly linked owned case no longer hides every agent mode behind a probe of a container that does not exist yet, and multi-user gating is explicit.
+
+  The Claude response viewer renders one message per model message (#369, @shenlvkang-collab). The reader used to fuse every assistant row between two human prompts into one card and never read the attachment rows that hold a prompt typed mid-turn; measured over 57 real transcripts it now shows 1,806 messages instead of 356 and recovers 162 absorbed user prompts, with the assistant text unchanged row for row.
+
+  A Claude pane learns its live conversation from the CLI's own `UserPromptSubmit` hook (#367, @shenlvkang-collab). The conversation id used to be re-derived by correlating `~/.claude/history.jsonl` against a stamp only Codeman's own input path set, so a pane driven straight from tmux stayed pinned to its launch conversation forever. The hook reports the id first-hand, addressed by the pane's own `$CODEMAN_SESSION_ID`, and the chain of conversations is persisted so a restart re-pins the right one. The new `hook:prompt_submitted` SSE event is registered (158 = 158), and it lands in the run summary only when the conversation actually moved.
+
+  The Add Case modal can be submitted from a phone again (#368, @shenlvkang-collab). Since 1.16.4 the layout below 860px hid the modal footer, which held the only Create/Clone/Link button. A header submit button now sits beside the close button, dims while a submit is pending, and a static test pins the contract so it cannot silently disappear again.
+
+  The Link Existing case picker opens in the Codeman Cases directory instead of Home (#383, @opticon454). Under Docker the two are unrelated trees and Home holds nothing but dot directories, so the picker showed no cases at all. The fallback chain is now Current Folder, then Codeman Cases, then `/mnt/d`, then the first root.
+
+  A PR review bot for the maintainer (`scripts/pr-bot/`, guide in `docs/pr-bot.md`). It reviews every open pull request in its own Codeman session inside a private clone and reports the verdict, ranked findings and a recommendation to Telegram with action buttons; merge, close, post-comment and approve-CI happen only from a confirmed tap. Maintainer tooling, not part of the server or the CLI.
+
+  ### Thanks
+  - @mtiller for the reverse-proxy base URL (#381).
+  - @dignfei for attaching cases to running containers (#357).
+  - @shenlvkang-collab for the response viewer fix (#369), the first-hand conversation hook (#367) and the phone Add Case fix (#368).
+  - @opticon454 for the case picker default (#383).
+
 ## 1.24.7
 
 ### Patch Changes
