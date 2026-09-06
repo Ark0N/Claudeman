@@ -1,7 +1,7 @@
 /**
  * @fileoverview The PR bot: polls the repository's open pull requests, reviews each
  * one (once per head commit) in a Codeman claude session running in a private
- * worktree, and reports to the maintainer over Telegram with a verdict, the ranked
+ * clone, and reports to the maintainer over Telegram with a verdict, the ranked
  * findings, a recommendation and action buttons.
  *
  * Three rules shape everything here:
@@ -80,6 +80,8 @@ export interface PrBotDeps {
 }
 
 const CONFIRM_TTL_MS = 15 * 60_000;
+/** A head that failed this many times is left alone until /review N or a new push. */
+const MAX_AUTO_RETRIES = 3;
 const MAX_FOLLOWUPS = 2;
 const REPORT_INLINE_MAX = 3000;
 
@@ -135,6 +137,8 @@ export class PrBot {
   private reviewQueue: number[] = [];
   private readonly busy = new Set<number>();
   private readonly createdSessions = new Set<string>();
+  /** PRs the bot itself merged or closed: the scan's close notice would repeat what runConfirmed already said. */
+  private readonly selfClosed = new Set<number>();
   private followupsRunning = 0;
   private stopped = false;
   private scanning = false;
@@ -248,7 +252,9 @@ export class PrBot {
         }
         if (rec.status === 'skipped') rec.status = rec.reviewedSha ? 'reviewed' : 'new';
         const needsReview = rec.reviewedSha !== pr.headSha;
-        if (needsReview && !this.busy.has(pr.number) && !this.reviewQueue.includes(pr.number)) candidates.push(pr);
+        const gaveUp = (rec.failedAttempts ?? 0) >= MAX_AUTO_RETRIES && rec.failedSha === pr.headSha;
+        if (needsReview && !gaveUp && !this.busy.has(pr.number) && !this.reviewQueue.includes(pr.number))
+          candidates.push(pr);
       }
       if (this.cfg.autoReview && !this.store.state.paused) {
         for (const pr of orderBacklog(candidates)) {
@@ -292,6 +298,7 @@ export class PrBot {
       prNumber: rec.number,
       log: (m) => this.log(`[#${rec.number}] ${m}`),
     }).catch((err) => this.log(`worktree cleanup #${rec.number}: ${errText(err)}`));
+    if (this.selfClosed.delete(rec.number)) return; // announced by runConfirmed already
     await this.telegram
       .sendMessage(
         `${merged ? '🎉 Merged' : '🔒 Closed'} <b>#${rec.number}</b> · ${escapeHtml(rec.title)} <i>(${escapeHtml(rec.author)})</i>`
@@ -419,18 +426,21 @@ export class PrBot {
       }
 
       let report: ReviewReport | null = null;
+      let last = '';
       if (existsSync(reportJsonPath)) report = parseReport(extractJsonObject(readFileSync(reportJsonPath, 'utf8')));
       if (!report) {
-        const last = await this.pollLastResponse(sessionId);
+        last = await this.pollLastResponse(sessionId);
         report = parseReport(extractJsonObject(last));
         if (report && !existsSync(reportMdPath)) writeFileSync(reportMdPath, last);
       }
       await this.recordClaudeSessionId(sessionId, rec);
-      if (!report) throw new Error(await this.describeFailure(sessionId, outcome, started));
+      if (!report) throw new Error(await this.describeFailure(sessionId, outcome, started, last));
 
       const durationMin = Math.max(1, Math.round((Date.now() - started) / 60_000));
       Object.assign(rec, {
         status: 'reviewed',
+        failedAttempts: 0,
+        failedSha: undefined,
         reviewedSha: detail.headSha,
         reviewedAt: new Date().toISOString(),
         reviewDurationMin: durationMin,
@@ -450,8 +460,16 @@ export class PrBot {
       if (rec) {
         rec.status = 'failed';
         rec.lastError = reason;
+        rec.failedAttempts = rec.failedSha === rec.headSha ? (rec.failedAttempts ?? 0) + 1 : 1;
+        rec.failedSha = rec.headSha;
+        const givingUp = rec.failedAttempts >= MAX_AUTO_RETRIES;
         await this.telegram
-          .sendMessage(formatReviewFailure(rec, reason))
+          .sendMessage(
+            formatReviewFailure(rec, reason) +
+              (givingUp
+                ? `\n\nThat was attempt ${rec.failedAttempts}; not retrying this head on my own.`
+                : ' (retrying on the next scan)')
+          )
           .catch((e) => log(`failure notice: ${errText(e)}`));
       }
     } finally {
@@ -489,8 +507,14 @@ export class PrBot {
     return text;
   }
 
-  private async describeFailure(sessionId: string, outcome: TurnOutcome, started: number): Promise<string> {
+  private async describeFailure(
+    sessionId: string,
+    outcome: TurnOutcome,
+    started: number,
+    lastText = ''
+  ): Promise<string> {
     const minutes = Math.round((Date.now() - started) / 60_000);
+    const said = lastText.trim() ? `\nIts last message:\n${lastText.trim().slice(-900)}` : '';
     switch (outcome.kind) {
       case 'blocked': {
         const screen = stripAnsi(await this.codeman.terminalText(sessionId).catch(() => ''));
@@ -502,7 +526,7 @@ export class PrBot {
       case 'timeout':
         return `timed out after ${minutes} min without a report`;
       default:
-        return 'the session finished without writing report.json';
+        return `the session finished after ${minutes} min without writing report.json${said}`;
     }
   }
 
@@ -820,6 +844,7 @@ export class PrBot {
         return;
       }
     }
+    rec.failedAttempts = 0;
     const result = this.enqueueReview(n, { front: true });
     if (result === 'busy') await this.telegram.sendMessage(`#${n} is being reviewed right now.`);
     else {
@@ -1027,12 +1052,18 @@ export class PrBot {
       switch (pending.action) {
         case 'merge': {
           await mergePr(this.cfg.githubRepo, n);
-          await this.telegram.sendMessage(`🎉 Merged <b>#${n}</b>${rec ? ` · ${escapeHtml(rec.title)}` : ''}.`);
+          this.selfClosed.add(n);
+          const fixes =
+            rec?.verdict === 'merge-with-fixes'
+              ? ' The review listed fixes to apply at merge time; they are not applied by merging (see /report).'
+              : '';
+          await this.telegram.sendMessage(`🎉 Merged <b>#${n}</b>${rec ? ` · ${escapeHtml(rec.title)}` : ''}.${fixes}`);
           this.scheduleScan(5000);
           return;
         }
         case 'close': {
           await closePr(this.cfg.githubRepo, n, pending.reason ?? '');
+          this.selfClosed.add(n);
           await this.telegram.sendMessage(`🔒 Closed <b>#${n}</b>${rec ? ` · ${escapeHtml(rec.title)}` : ''}.`);
           this.scheduleScan(5000);
           return;

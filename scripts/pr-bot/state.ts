@@ -41,6 +41,9 @@ export interface PrRecord {
   worktreeDir?: string;
   telegramMessageId?: number;
   lastError?: string;
+  /** Consecutive failed attempts at `failedSha`; the scan stops auto-retrying at MAX_AUTO_RETRIES. */
+  failedAttempts?: number;
+  failedSha?: string;
   closedAs?: 'merged' | 'closed';
   updatedAt: string;
 }

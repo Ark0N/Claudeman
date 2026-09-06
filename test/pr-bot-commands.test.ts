@@ -134,7 +134,7 @@ describe('PrBot commands', () => {
     tg = new FakeTelegram();
     bot = new PrBot(cfg, { telegram: tg, codeman: {} as CodemanClient, log: () => undefined });
     const rec = bot.store.upsertPr(detail());
-    Object.assign(rec, { status: 'reviewed', reviewedSha: 'abc123abc123', verdict: 'merge', report });
+    Object.assign(rec, { status: 'reviewed', reviewedSha: 'abc123abc123', verdict: 'merge-with-fixes', report });
     bot.store.save();
   });
 
@@ -174,6 +174,18 @@ describe('PrBot commands', () => {
     await bot.handleUpdate(cb(data));
     expect(gh.mergePr).toHaveBeenCalledTimes(1);
     expect(tg.last()).toContain('no longer valid');
+  });
+
+  it('announces a bot-made merge once: the next scan retires the PR silently', async () => {
+    await bot.handleUpdate(msg('/merge 381'));
+    await bot.handleUpdate(cb(tg.confirmData()));
+    const merged = tg.sent.filter((s) => s.text.includes('Merged <b>#381</b>'));
+    expect(merged).toHaveLength(1);
+    expect(merged[0].text).toContain('fixes to apply at merge time'); // the verdict on the seeded record is merge-with-fixes below
+    const result = await bot.scanOnce('test'); // listOpenPrs is mocked to []: 381 is gone
+    expect(result.closed).toEqual([381]);
+    expect(bot.store.pr(381)?.closedAs).toBe('merged');
+    expect(tg.sent.filter((s) => s.text.includes('Merged <b>#381</b>'))).toHaveLength(1);
   });
 
   it('ignores a confirmation tap from a foreign chat', async () => {
@@ -232,6 +244,6 @@ describe('PrBot commands', () => {
 
   it('reports status with verdict icons', async () => {
     await bot.handleUpdate(msg('/status'));
-    expect(tg.last()).toContain('✅ <b>#381</b>');
+    expect(tg.last()).toContain('🟢 <b>#381</b>');
   });
 });
