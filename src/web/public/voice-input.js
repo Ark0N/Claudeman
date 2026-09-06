@@ -322,7 +322,7 @@ const ClaudeVoiceProvider = {
     if (opts.keyterms?.length) params.set('keyterms', opts.keyterms.join(','));
     const proto = location.protocol === 'https:' ? 'wss:' : 'ws:';
     try {
-      this._ws = new WebSocket(`${proto}//${location.host}/ws/voice/stream?${params}`);
+      this._ws = new WebSocket(`${proto}//${location.host}${window.CodemanBase?.base || ''}/ws/voice/stream?${params}`);
     } catch (err) {
       this._onError?.('Failed to open voice stream: ' + err.message);
       this._cleanup();

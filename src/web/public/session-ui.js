@@ -3364,7 +3364,7 @@ Object.assign(CodemanApp.prototype, {
           return `<div class="case-manage-item" style="display:flex; align-items:center; gap:8px; justify-content:space-between;">
             <span style="overflow:hidden; text-overflow:ellipsis; white-space:nowrap;" title="${nm}">${nm} <span class="form-hint">(${mb} MB)</span></span>
             <span style="flex-shrink:0;">
-              <a class="btn-toolbar" href="/api/docker-exports/${encodeURIComponent(e.name)}" download>Download</a>
+              <a class="btn-toolbar" href="${CodemanBase.url(`/api/docker-exports/${encodeURIComponent(e.name)}`)}" download>Download</a>
               <button class="btn-toolbar" onclick="app.importDockerBundle('${nm.replace(/'/g, "\\'")}')">Import</button>
               <button class="btn-toolbar" onclick="app.deleteDockerExport('${nm.replace(/'/g, "\\'")}')">Delete</button>
             </span>

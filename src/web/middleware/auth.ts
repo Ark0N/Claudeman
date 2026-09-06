@@ -142,7 +142,9 @@ function isPasswordChangeExempt(req: FastifyRequest): boolean {
  * match the prefix at all. The Host allowlist is NOT bypassed, so DNS-rebinding
  * protection still applies to these requests.
  */
-function hasValidWebviewCapability(req: FastifyRequest): boolean {
+function hasValidWebviewCapability(req: FastifyRequest, basePath = ''): boolean {
+  // req.url is already base-stripped by the server's rewriteUrl, so the path form
+  // needs no base; the Referer form below is browser-supplied and does.
   const url = (req.url ?? '').split('?')[0];
 
   const fromPath = capabilityFromProxyPath(url);
@@ -167,7 +169,10 @@ function hasValidWebviewCapability(req: FastifyRequest): boolean {
   // class the 404 relay could never rescue. See matchesRegisteredRoute.
   if (matchesRegisteredRoute(req, url)) return false;
 
-  const fromReferer = capabilityFromReferer(typeof req.headers.referer === 'string' ? req.headers.referer : undefined);
+  const fromReferer = capabilityFromReferer(
+    typeof req.headers.referer === 'string' ? req.headers.referer : undefined,
+    basePath
+  );
   return !!fromReferer && webviewCapabilities.resolve(fromReferer) !== undefined;
 }
 
@@ -210,7 +215,7 @@ function matchesRegisteredRoute(req: FastifyRequest, url: string): boolean {
  *
  * @returns AuthState for lifecycle management (dispose on server stop)
  */
-export function registerAuthMiddleware(app: FastifyInstance, https: boolean): AuthState {
+export function registerAuthMiddleware(app: FastifyInstance, https: boolean, basePath = ''): AuthState {
   const state: AuthState = {
     authSessions: null,
     authFailures: null,
@@ -270,7 +275,7 @@ export function registerAuthMiddleware(app: FastifyInstance, https: boolean): Au
       ttlMs: AUTH_FAILURE_WINDOW_MS,
       refreshOnGet: false,
     });
-    registerMultiUserAuthHook(app, https, authSessions, authFailures, hookSecretFailures, state.userFailures);
+    registerMultiUserAuthHook(app, https, authSessions, authFailures, hookSecretFailures, state.userFailures, basePath);
     return state;
   }
 
@@ -293,7 +298,7 @@ export function registerAuthMiddleware(app: FastifyInstance, https: boolean): Au
     }
 
     // Web-tab proxy, authenticated by the capability in the path, not the cookie.
-    if (hasValidWebviewCapability(req)) {
+    if (hasValidWebviewCapability(req, basePath)) {
       done();
       return;
     }
@@ -381,7 +386,8 @@ function registerMultiUserAuthHook(
   authSessions: StaleExpirationMap<string, AuthSessionRecord>,
   authFailures: StaleExpirationMap<string, number>,
   hookSecretFailures: StaleExpirationMap<string, number>,
-  userFailures: StaleExpirationMap<string, number>
+  userFailures: StaleExpirationMap<string, number>,
+  basePath = ''
 ): void {
   const setSessionCookie = (reply: FastifyReply, token: string) =>
     reply.setCookie(AUTH_COOKIE_NAME, token, {
@@ -432,7 +438,7 @@ function registerMultiUserAuthHook(
     // `req.authUser` stays undefined here on purpose: the proxy handler enforces
     // ownership against the identity BOUND TO THE CAPABILITY, which is stricter
     // than re-deriving it from a request that carries no credentials.
-    if (hasValidWebviewCapability(req)) return;
+    if (hasValidWebviewCapability(req, basePath)) return;
 
     const clientIp = req.ip;
 
@@ -552,7 +558,7 @@ const SAFE_HTTP_METHODS = new Set(['GET', 'HEAD', 'OPTIONS']);
  *
  * WebSocket upgrades are validated separately in the ws route handler.
  */
-export function registerHostGuard(app: FastifyInstance, getPolicy: () => HostPolicy): void {
+export function registerHostGuard(app: FastifyInstance, getPolicy: () => HostPolicy, basePath = ''): void {
   app.addHook('onRequest', (req, reply, done) => {
     const policy = getPolicy();
     if (!isAllowedRequestHost(req.headers.host, policy)) {
@@ -568,7 +574,7 @@ export function registerHostGuard(app: FastifyInstance, getPolicy: () => HostPol
     if (
       !SAFE_HTTP_METHODS.has(req.method) &&
       !isAllowedRequestOrigin(req.headers.origin, policy) &&
-      !hasValidWebviewCapability(req)
+      !hasValidWebviewCapability(req, basePath)
     ) {
       reply.code(403).send('Forbidden: cross-site request blocked');
       return;
@@ -580,7 +586,7 @@ export function registerHostGuard(app: FastifyInstance, getPolicy: () => HostPol
 /**
  * Register security headers and CORS middleware on every response.
  */
-export function registerSecurityHeaders(app: FastifyInstance, https: boolean): void {
+export function registerSecurityHeaders(app: FastifyInstance, https: boolean, basePath = ''): void {
   // Gesture-control overlay (opt-in via CODEMAN_GESTURE=1) runs MediaPipe, which
   // needs WebAssembly eval (script-src) and blob workers (worker-src). Its wasm
   // runtime + model are self-hosted under /gesture/ (same-origin, covered by
@@ -634,7 +640,7 @@ export function registerSecurityHeaders(app: FastifyInstance, https: boolean): v
     // net::ERR_FAILED while the page itself renders fine (script/css/img loads
     // are not CORS-checked). Falling through lets the proxy route reply with the
     // right headers.
-    if (req.method === 'OPTIONS' && !hasValidWebviewCapability(req)) {
+    if (req.method === 'OPTIONS' && !hasValidWebviewCapability(req, basePath)) {
       reply.code(204).send();
       done();
       return;

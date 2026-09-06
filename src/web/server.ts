@@ -41,6 +41,7 @@ import fs from 'node:fs/promises';
 import { execSync } from 'node:child_process';
 import { hostname as getHostname } from 'node:os';
 import { dataPath, getDataDir, CODEMAN_INSTANCE } from '../config/instance.js';
+import { normalizeBasePath, stripBasePath, joinBasePath } from '../config/base-path.js';
 import { GLYPH, palette } from '../cli-style.js';
 import { getHookSecret } from '../config/hook-secret.js';
 import { EventEmitter } from 'node:events';
@@ -260,6 +261,8 @@ export class WebServer extends EventEmitter {
   private port: number;
   private host: string;
   private https: boolean;
+  /** Reverse-proxy sub-path prefix (normalized: '' for root, or '/foo'). */
+  private basePath: string;
   private testMode: boolean;
   private mux: TerminalMultiplexer;
   // Centralized cleanup for standalone timers (intervals + resettable timeouts)
@@ -330,13 +333,16 @@ export class WebServer extends EventEmitter {
     testMode: boolean = false,
     host: string = '127.0.0.1',
     titleHostname?: string,
-    allowUnauthenticatedNetwork: boolean = false
+    allowUnauthenticatedNetwork: boolean = false,
+    basePath: string = ''
   ) {
     super();
     this.setMaxListeners(0);
     this.host = host;
     this.port = port;
     this.https = https;
+    // Normalize so callers may pass raw operator input; '' == mounted at root.
+    this.basePath = normalizeBasePath(basePath || process.env.CODEMAN_BASE_URL);
     this.testMode = testMode;
     this.allowUnauthenticatedNetwork =
       allowUnauthenticatedNetwork || isExplicitlyEnabled(process.env.CODEMAN_ALLOW_UNAUTHENTICATED_NETWORK);
@@ -344,7 +350,12 @@ export class WebServer extends EventEmitter {
     this.windowTitle = `codeman:${this.titleHostname}`;
     this.indexHtmlTemplate = readFileSync(join(__dirname, 'public', 'index.html'), 'utf-8');
 
-    const rewriteUrl = (req: { url?: string }): string => rewriteApiV1Url(req.url || '');
+    // Ingress: strip the reverse-proxy prefix so all internal routing stays
+    // prefix-agnostic (routes are still declared at `/api/...`, `/`, `/ws/...`).
+    // Requests that arrive WITHOUT the prefix (hooks, health checks, the docker
+    // bridge — all hitting the raw port) pass through unchanged. Then apply the
+    // existing /api/v1 alias rewrite.
+    const rewriteUrl = (req: { url?: string }): string => rewriteApiV1Url(stripBasePath(this.basePath, req.url || ''));
     if (https) {
       const { key, cert } = getOrCreateSelfSignedCert();
       this.app = Fastify({ logger: false, https: { key, cert }, rewriteUrl });
@@ -725,6 +736,21 @@ export class WebServer extends EventEmitter {
     // Cookie plugin (needed for auth session tokens)
     await this.app.register(fastifyCookie);
 
+    // Egress: when mounted under a reverse-proxy sub-path, any root-absolute
+    // `Location` we emit (redirects in system/webview/file routes, `/`, `/api/...`)
+    // must carry the prefix or the browser resolves it against the origin root and
+    // escapes the mount. One hook covers every current and future redirect, mirroring
+    // the ingress strip in `rewriteUrl`. No-op when mounted at root (basePath === '').
+    if (this.basePath) {
+      this.app.addHook('onSend', (_req, reply, payload, done) => {
+        const loc = reply.getHeader('location');
+        if (typeof loc === 'string') {
+          reply.header('location', joinBasePath(this.basePath, loc));
+        }
+        done(null, payload);
+      });
+    }
+
     // Uniform response envelope (stable HTTP contract — docs/api-reference.md):
     // wrap bare JSON payloads as { success:true, data } and map { success:false }
     // error envelopes to a conventional HTTP status (instead of 200). Skips
@@ -749,10 +775,10 @@ export class WebServer extends EventEmitter {
     // Anti-DNS-rebinding Host allowlist + cross-site (CSRF) Origin guard. Registered
     // before auth so forged cross-site / rebound requests are rejected up front, even
     // on the default no-password install. See docs/reports/security-review-2026-06-09.md.
-    registerHostGuard(this.app, () => this.getHostPolicy());
+    registerHostGuard(this.app, () => this.getHostPolicy(), this.basePath);
 
     // Auth middleware (Basic Auth + session cookies + rate limiting)
-    const authState = registerAuthMiddleware(this.app, this.https);
+    const authState = registerAuthMiddleware(this.app, this.https, this.basePath);
     if (authState) {
       this.authSessions = authState.authSessions;
       this.authFailures = authState.authFailures;
@@ -777,7 +803,7 @@ export class WebServer extends EventEmitter {
     });
 
     // Security headers + CORS
-    registerSecurityHeaders(this.app, this.https);
+    registerSecurityHeaders(this.app, this.https, this.basePath);
     this.app.get('/', async (_req, reply) => {
       return reply
         .header('Cache-Control', 'no-cache')
@@ -949,7 +975,7 @@ export class WebServer extends EventEmitter {
       // rescue. Reaching this handler at all already proves no Codeman route matched,
       // and the relay declines unless the Referer carries a live capability, so
       // genuinely unknown `/api` paths still get the envelope below.
-      if (await tryWebviewRefererFallback(req, reply)) return reply;
+      if (await tryWebviewRefererFallback(req, reply, this.basePath)) return reply;
       if (req.url.startsWith('/api')) {
         return reply.code(404).send(createErrorResponse(ApiErrorCode.NOT_FOUND, notFound));
       }
@@ -1023,7 +1049,7 @@ export class WebServer extends EventEmitter {
     registerMeRoutes(this.app, ctx);
     registerAdminRoutes(this.app, ctx);
     registerOrchestratorRoutes(this.app, ctx);
-    registerWebviewRoutes(this.app, ctx);
+    registerWebviewRoutes(this.app, ctx, this.basePath);
     registerTabLayoutRoutes(this.app, ctx);
 
     // Cron: build the service from the same context, recompute
@@ -1383,6 +1409,20 @@ export class WebServer extends EventEmitter {
       '<title>Codeman</title>',
       `<title>${escapeHtmlText(this.windowTitle)}</title>`
     );
+    // Reverse-proxy sub-path support. The template ships `<base href="/">` and all
+    // static asset refs are RELATIVE, so pointing the base at the mount prefix
+    // rewrites every asset URL for free. `window.__CODEMAN_BASE__` gives the
+    // frontend the same prefix for the root-absolute URLs it builds at runtime
+    // (fetch/SSE/WS), which `<base>` cannot touch. Injected right after `<base>`
+    // so it is set before any (deferred) script runs. ONLY when a base is set —
+    // at root ('') the template is left byte-identical to the historical output
+    // (the frontend reads a missing `__CODEMAN_BASE__` as root anyway).
+    if (this.basePath) {
+      html = html.replace(
+        '<base href="/">',
+        `<base href="${escapeHtmlText(this.basePath + '/')}">\n  <script>window.__CODEMAN_BASE__=${JSON.stringify(this.basePath)};</script>`
+      );
+    }
     // Cache-bust same-origin module scripts + stylesheets so a normal reload
     // always serves the latest (static assets carry a 1-year immutable cache).
     html = this.cacheBustAssets(html);
@@ -1492,10 +1532,9 @@ export class WebServer extends EventEmitter {
       html = html.replace('</head>', `<script>window.__codemanGestureAvailable=true;</script>\n</head>`);
       if (settings.gestureControlEnabled === true) {
         const v = this.gestureBundleVersion();
-        html = html.replace(
-          '</head>',
-          `<script type="module" src="/gesture/gesture-codeman.js${v}"></script>\n</head>`
-        );
+        // Relative src so the injected `<base href>` resolves it under the mount
+        // prefix (a root-absolute `/gesture/...` would escape a sub-path mount).
+        html = html.replace('</head>', `<script type="module" src="gesture/gesture-codeman.js${v}"></script>\n</head>`);
       }
     }
     return html;
@@ -2490,7 +2529,18 @@ export class WebServer extends EventEmitter {
     const displayHost = this.host === '0.0.0.0' ? 'localhost' : this.host;
     // The only startup banner: `codeman web` used to print its own copy of this
     // line, but the daemon and service launch paths never go through the CLI.
-    console.log(palette.ok(`${GLYPH.ok} Codeman web interface running at ${protocol}://${displayHost}:${this.port}`));
+    console.log(
+      palette.ok(
+        `${GLYPH.ok} Codeman web interface running at ${protocol}://${displayHost}:${this.port}${this.basePath}${this.basePath ? '/' : ''}`
+      )
+    );
+    if (this.basePath) {
+      console.log(
+        palette.muted(
+          `  Mounted under base path ${this.basePath} (front it with a reverse proxy that forwards ${this.basePath}/ unchanged).`
+        )
+      );
+    }
 
     // Opt-in: also serve the HOOK endpoints on the docker bridge gateway so
     // in-container hooks (permission/idle/stop callbacks) can reach a loopback-bound
@@ -3339,9 +3389,10 @@ export async function startWebServer(
   testMode: boolean = false,
   host: string = '127.0.0.1',
   titleHostname?: string,
-  allowUnauthenticatedNetwork: boolean = false
+  allowUnauthenticatedNetwork: boolean = false,
+  basePath: string = ''
 ): Promise<WebServer> {
-  const server = new WebServer(port, https, testMode, host, titleHostname, allowUnauthenticatedNetwork);
+  const server = new WebServer(port, https, testMode, host, titleHostname, allowUnauthenticatedNetwork, basePath);
   await server.start();
   return server;
 }

@@ -187,7 +187,10 @@ Object.assign(CodemanApp.prototype, {
 
   registerServiceWorker() {
     if (!('serviceWorker' in navigator)) return;
-    navigator.serviceWorker.register('/sw.js').then((reg) => {
+    // Behind a sub-path mount the worker is served at <base>/sw.js and controls
+    // <base>/ (Service-Worker-Allowed is '/', so this narrower scope is permitted).
+    const _swBase = window.CodemanBase?.base || '';
+    navigator.serviceWorker.register(_swBase + '/sw.js', { scope: _swBase + '/' }).then((reg) => {
       this._swRegistration = reg;
       // Listen for messages from service worker (notification clicks)
       navigator.serviceWorker.addEventListener('message', (event) => {

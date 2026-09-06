@@ -390,7 +390,7 @@ class NotificationManager {
     const notif = new Notification(`${this.originalTitle}: ${localizedTitle}`, {
       body: localizedBody,
       tag, // Groups same-tag notifications
-      icon: '/favicon.ico',
+      icon: (window.CodemanBase?.url || ((p) => p))('/favicon.ico'),
       silent: true, // We handle audio ourselves
     });
 

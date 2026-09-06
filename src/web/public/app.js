@@ -1268,7 +1268,11 @@ class CodemanApp {
       if (typeof window !== 'undefined' && typeof window.__CODEMAN_SOLO__ === 'string' && window.__CODEMAN_SOLO__) {
         return window.__CODEMAN_SOLO__;
       }
-      const m = location.pathname.match(/^\/session\/([^/]+)\/?$/);
+      // Strip the reverse-proxy base so the match works under a sub-path mount.
+      const base = window.CodemanBase?.base || '';
+      let path = location.pathname;
+      if (base && path.startsWith(base)) path = path.slice(base.length) || '/';
+      const m = path.match(/^\/session\/([^/]+)\/?$/);
       return m ? decodeURIComponent(m[1]) : null;
     } catch { return null; }
   }
@@ -1293,7 +1297,7 @@ class CodemanApp {
     if (this.detachedSessions.has(id) && this._raiseDetached(id)) return;
     const features = 'width=960,height=680,menubar=no,toolbar=no,location=no,status=no';
     let win = null;
-    try { win = window.open('/session/' + encodeURIComponent(id), 'codeman-session-' + id, features); } catch {}
+    try { win = window.open(CodemanBase.url('/session/' + encodeURIComponent(id)), 'codeman-session-' + id, features); } catch {}
     if (!win) {
       this.showToast?.('Pop-out blocked — allow popups for this site to detach a session', 'error');
       return;
@@ -1545,7 +1549,7 @@ class CodemanApp {
     // regardless of filter (server side).
     const _sseParams = new URLSearchParams({ clientId: this._clientId });
     if (this.activeSessionId) _sseParams.set('sessions', this.activeSessionId);
-    this.eventSource = new EventSource(`/api/events?${_sseParams.toString()}`);
+    this.eventSource = new EventSource(CodemanBase.url(`/api/events?${_sseParams.toString()}`));
 
     // Store all event listeners for cleanup on reconnect.
     //
@@ -2794,7 +2798,7 @@ class CodemanApp {
     // up to the limit).
     const cid = this._clientId ? `${this._clientId}:${this._wsTabNonce}` : '';
     const cidQuery = cid ? `?cid=${encodeURIComponent(cid)}` : '';
-    const url = `${proto}//${location.host}/ws/sessions/${sessionId}/terminal${cidQuery}`;
+    const url = `${proto}//${location.host}${CodemanBase.base}/ws/sessions/${sessionId}/terminal${cidQuery}`;
     const ws = new WebSocket(url);
     this._ws = ws;
     this._wsSessionId = sessionId;
