@@ -574,8 +574,8 @@ async function resolveFilesystemPickerPath(
   // With no explicit path (the "Link Existing" case picker, which passes no
   // sessionId and an empty initialPath until the user has typed something),
   // land on the shared cases root rather than falling through to whichever
-  // root happens to be first. `Home` is only nested under `Codeman Cases` on
-  // the native default (~/codeman-cases); a Docker deployment binds them at
+  // root happens to be first. `Codeman Cases` sits inside `Home` only on the
+  // native default (~/codeman-cases); a Docker deployment binds them at
   // unrelated host paths (CODEMAN_APPDATA_PATH vs CODEMAN_CASES_PATH), so a
   // Home-first fallback opened the picker somewhere with no cases in sight —
   // and, worse, made an OLD case folder left behind by a since-changed
