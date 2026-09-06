@@ -1,5 +1,54 @@
 # aicodeman
 
+## 1.24.8
+
+### Patch Changes
+
+- ccfda62: fix(session): learn the live Claude conversation from the CLI's own hook
+
+  Which conversation a pane is on was re-derived by correlating `~/.claude/history.jsonl`
+  against `Session.lastSubmitAt` — and `lastSubmitAt` is bumped only by input that flows
+  through Codeman's own write path. A user who attaches to the pane's tmux session directly
+  never set it, so the resolver returned at its first line for that pane's whole life and the
+  response viewer stayed pinned to the launch conversation, showing a pre-`/clear` transcript
+  indefinitely. A new `UserPromptSubmit` hook reports the live conversation id from inside the
+  CLI process, addressed by the pane's own `$CODEMAN_SESSION_ID`, so the id is a fact rather
+  than a correlation: it never consults the working directory and cannot be claimed by a
+  sibling pane on the same folder. A pane with such an id now skips the correlation entirely,
+  which strictly reduces the number of prompts eligible for cwd-based guessing. The hook also
+  stamps `lastSubmitAt`, so it finally means "a prompt was submitted" rather than "typed into
+  Codeman's web terminal". Conversations vouched for this way are persisted as a chain, whose
+  tail re-pins the conversation when a surviving tmux session is re-attached after a restart —
+  `start()` otherwise resets the id back to the launch conversation. Existing workspaces heal
+  on their next Claude spawn via the hooks staleness sweep. The hook's stdout is discarded with curl's own `-o /dev/null`:
+  Claude Code injects `UserPromptSubmit` output into the model's context, so an undiscarded
+  curl would paste the API envelope into the user's own prompt on every turn.
+
+- 3eff1fe: fix(web): render one Claude response-viewer message per model message
+
+  The Claude reader concatenated every assistant row between two human prompts into one
+  card, fusing up to 74 distinct model messages into a single card, and it never read the
+  attachment rows that hold a prompt typed while the agent was working. Measured over 57
+  real transcripts on 2026-09-01, the viewer now shows 1,806 messages instead of 356 and
+  353 user cards instead of 178, recovering the user's own words from 162 absorbed
+  prompts, with the assistant text sequence unchanged row for row and the response without
+  `?context=full` byte-identical on all 57 files. A same-speaker run inside one turn
+  renders as continuation segments under one badge, and the header reports turns as well
+  as messages instead of claiming a 1,566-row session was "6 messages".
+
+- 5969a1d: fix(mobile): give the Add Case modal a reachable submit button
+
+  `mobile.css` hides `#createCaseModal`'s `.set-foot` on phones, and unlike the Settings
+  modal that header carries no `set-head-save` — so the Create/Link button existed nowhere
+  on a phone and the modal could not be submitted at all. Adds the header button and drives
+  both together, so whichever one is pressed the other shows the same pending state and is
+  equally unclickable.
+
+  Add Case follows the Settings modal's header-save pattern, so it picks up the existing
+  `.set-head-actions:has(.set-head-save)` tray and `.set-head-save` sizing below 860px with no
+  new CSS; the `mobile.css` comment that still listed Add Case as a lone-× sheet is updated to
+  match.
+
 ## 1.24.7
 
 ### Patch Changes
