@@ -3333,8 +3333,10 @@ html:is([data-skin="paper-gray"], [data-skin="solarized-light"], [data-skin="cat
      recessed tray and matching pill geometry instead of reading as a fat
      accent pill parked beside a stray × glyph. Tray colors come from skin
      tokens, never a hardcoded black alpha, or the light skins get a grey slab.
-     `:has()` keeps the tray off the two sheets that carry a lone × (Session
-     Options and Add Case save from inside their own forms). */
+     `:has()` keeps the tray off Session Options, the one sheet left carrying a
+     lone × because it saves from inside its own per-section forms. Add Case
+     now has a header save of its own (its footer is hidden below 860px, so
+     that button is the only way to submit it there), and picks up the tray. */
   :is(#appSettingsModal, #sessionOptionsModal, #createCaseModal) .set-head-actions:has(.set-head-save) {
     padding: 3px;
     border: 1px solid var(--border);
