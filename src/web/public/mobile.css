@@ -3355,6 +3355,15 @@ html:is([data-skin="paper-gray"], [data-skin="solarized-light"], [data-skin="cat
     font-size: 0.86rem;
   }
 
+  /* Add Case's pending state has to show on the header button: below 860px it is
+     the only submit control (the footer is hidden), and the #caseModalSubmit
+     .loading rule in the phone block dims a button nobody can see. Measured at
+     390px before this: header opacity 1 for the whole clone, hidden footer 0.6. */
+  #createCaseModal .set-head-save.loading {
+    opacity: 0.6;
+    pointer-events: none;
+  }
+
   :is(#appSettingsModal, #sessionOptionsModal, #createCaseModal) .set-head-actions .modal-close {
     width: 36px;
     height: 36px;

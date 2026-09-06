@@ -126,6 +126,7 @@ export function registerHookEventRoutes(
     // Sync Claude's current conversation id. Interactive PTY mode never emits
     // `session_id` on stdout, so hooks are the only reliable way to learn that
     // the user ran `/clear` (which spins up a new conversation jsonl).
+    let conversationChanged = false;
     if (data && typeof data.session_id === 'string' && data.session_id) {
       const session = ctx.sessions.get(sessionId);
       const prevClaudeSessionId = session?.claudeSessionId;
@@ -150,6 +151,7 @@ export function registerHookEventRoutes(
         session &&
         (session.claudeSessionId !== prevClaudeSessionId || session.claudeSessionChain.length !== prevChainLength)
       ) {
+        conversationChanged = true;
         ctx.persistSessionState(session);
       }
       // Docker sessions: keep the case's resume seed following the LIVE
@@ -229,9 +231,13 @@ export function registerHookEventRoutes(
       ...(approvalId && session?.mode !== 'deepseek' && { approvalId }),
     });
 
-    // Track in run summary
+    // Track in run summary. `prompt_submitted` fires on EVERY prompt of every
+    // Claude pane; only the ones where the conversation actually moved (a /clear
+    // successor) carry information, and recording the rest would push a row into
+    // the Summary timeline and /api/search per turn and evict useful rows from
+    // the 1000-event FIFO (#367 merge-time fix).
     const summaryTracker = ctx.runSummaryTrackers.get(sessionId);
-    if (summaryTracker) {
+    if (summaryTracker && (event !== 'prompt_submitted' || conversationChanged)) {
       summaryTracker.recordHookEvent(event, safeData);
     }
 

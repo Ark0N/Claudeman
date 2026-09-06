@@ -958,6 +958,7 @@ const SSE_EVENTS = {
   HOOK_AGENT_WORKING: 'hook:agent_working',
   HOOK_TEAMMATE_IDLE: 'hook:teammate_idle',
   HOOK_TASK_COMPLETED: 'hook:task_completed',
+  HOOK_PROMPT_SUBMITTED: 'hook:prompt_submitted',
 
   // Approvals Inbox
   APPROVAL_PENDING: 'approval:pending',
