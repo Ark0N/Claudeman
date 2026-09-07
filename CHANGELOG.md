@@ -1,5 +1,18 @@
 # aicodeman
 
+## 1.26.1
+
+### Patch Changes
+
+- Codex sessions no longer report idle for their entire life, and Codex conversations now appear in Past Sessions and can be resumed.
+
+  **Per-CLI work detection (#385, irisitymichaelgrundberg).** The composer glyph and the working status line are now registry data (`capabilities.workDetect`) rather than Claude constants. Claude keeps its exact current pair, Codex declares `›` plus its `esc to interrupt` footer, and any CLI that declares neither falls back to Claude's, which is what every session used before. Work detection had been gated Claude-mode-only on the reasoning that an external CLI has no `❯`, which was true and still left every Codex session reporting `idle` from the moment it started. `workingLine` is config-supplied and its compiled pattern runs on the PTY hot path, so it goes through `compileVersionRegex()` in both the schema refine and the runtime compile: a nested quantifier there would backtrack on the event loop for the whole server. The Codex footer is matched case-insensitively on the E, so a future version capitalising it cannot make the fix silently inert.
+
+  **Codex conversations in Past Sessions (#386, irisitymichaelgrundberg).** A bounded scanner reads codex's `~/.codex/sessions` rollout store, so the unified session list now merges three transcript stores rather than one (Claude's `~/.claude/projects`, omp's `~/.omp/agent/sessions`, codex's `~/.codex/sessions`). A scanned row carries a `resumeId`, the rollout's own thread id, which lets it resume through `codexConfig.resumeSessionId`; a live session never carries one, so a row without it stays a genuinely fresh session. Live and resumed Codex sessions fold into their rollout row through the existing alias map, including a `session_meta.originator` match for fresh panes, so a conversation never shows up twice. The phone overview carries `resumeId` through its own row projection, without which a tapped Codex past row started a fresh session on a thread already on disk.
+
+  ### Thanks
+  - @irisitymichaelgrundberg for both PRs (#385, #386), and for turning a full review round on #386 in a day.
+
 ## 1.26.0
 
 ### Minor Changes
