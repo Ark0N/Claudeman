@@ -307,6 +307,15 @@ describe("codex's work-detection descriptor", () => {
     expect(new RegExp(codex!.workingLine).test(CODEX_FINISHED)).toBe(false);
   });
 
+  it('matches the footer case-insensitively on the E', () => {
+    // Characterised on codex-cli 0.152.1, which prints a lowercase `esc`. A future
+    // version capitalising it would otherwise make the whole fix silently inert:
+    // the pane would simply never look like it was working.
+    expect(new RegExp(codex!.workingLine).test(CODEX_WORKING.replace('esc to interrupt', 'Esc to interrupt'))).toBe(
+      true
+    );
+  });
+
   it('names the glyph Codex actually draws on its composer row', () => {
     expect(CODEX_COMPOSER_REPAINT).toContain(codex!.promptGlyph);
     expect(CODEX_WORKING).toContain(codex!.promptGlyph);

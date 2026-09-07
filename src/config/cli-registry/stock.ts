@@ -429,7 +429,7 @@ const CODEX: CliEntry = {
     // `Working (2m 49s • esc to interrupt)` above it while a turn runs. It animates no
     // braille spinner, and it never prints `esc to interrupt` at rest, so that phrase
     // alone separates a running turn from an idle one.
-    workDetect: { promptGlyph: '›', workingLine: 'esc to interrupt' },
+    workDetect: { promptGlyph: '›', workingLine: '[Ee]sc to interrupt' },
     transcript: 'codex-rollout',
     altScreen: 'strip-full',
     echo: { policy: 'predict', anchor: { kind: 'cursor' }, predictProfile: 'codex' },

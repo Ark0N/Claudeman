@@ -13,7 +13,7 @@
  */
 
 import { z } from 'zod';
-import { TOKEN_PATTERNS } from './patterns.js';
+import { compileVersionRegex, TOKEN_PATTERNS } from './patterns.js';
 import { isKnownLauncherProfile, isKnownSetenvProfile } from './profiles.js';
 
 /** A bare CLI id: lowercase, starts with a letter, at most 24 chars. Also used as a CSS/URL token. */
@@ -277,20 +277,17 @@ const capabilitiesSchema = z
     workDetect: z
       .object({
         promptGlyph: z.string().min(1).max(8),
-        // Compiled per session, so a broken pattern must fail at LOAD time rather than
-        // throw inside the PTY data handler.
+        // Config-supplied regex, so it goes through the same guard as `version.regex`:
+        // ~/.codeman/clis.json can set this, and the compiled pattern runs on the PTY
+        // hot path, where a nested quantifier would be a ReDoS against the event loop.
+        // A broken pattern must also fail at LOAD time rather than inside a data handler.
         workingLine: z
           .string()
           .min(1)
-          .max(400)
-          .refine((src) => {
-            try {
-              new RegExp(src);
-              return true;
-            } catch {
-              return false;
-            }
-          }, 'workingLine must be a valid regular expression'),
+          .refine(
+            (src) => compileVersionRegex(src) !== null,
+            'workingLine must be a regex compileVersionRegex() accepts: at most 200 characters, no nested quantifiers'
+          ),
       })
       .strict()
       .optional(),

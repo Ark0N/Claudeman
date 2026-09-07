@@ -36,11 +36,18 @@ interface CliEntry {
   launch: CliLaunch; // the structured argv template
   env: CliEnv; // exports, tmux setenv keys, the env-override allowlist
   capabilities: CliCapabilities; // what every call site reads instead of the id
+  //   .workDetect?: { promptGlyph, workingLine } — how this CLI's pane shows work
   overlays: CliOverlays; // remote-SSH / Docker pane commands, credential store
 }
 ```
 
 `capabilities` is the important part. It is what `isExternalCliMode()`, `isAltScreenStripMode()`, `hooksAvailableForMode()` and every other former per-mode branch actually read.
+
+### Regexes that come from config
+
+Two capability fields carry a regular expression an override file can set: `discovery.version.regex` and `capabilities.workDetect.workingLine`. Both go through `compileVersionRegex()`, which caps the source at 200 characters, refuses the nested-quantifier shapes that cause catastrophic backtracking, and returns `null` rather than throwing so every caller degrades instead of crashing.
+
+`workingLine` is the one that matters most, because it is compiled once per session and then run against every accumulated PTY chunk and every pane capture. A nested quantifier there is a ReDoS against the event loop for the whole server, not just that session. The guard therefore runs in two places, and neither is redundant: `schema.ts` rejects the entry at LOAD time so a bad pattern never reaches a session, and `_workingLinePattern()` in `session.ts` compiles through the same helper so the runtime cannot end up with a pattern the schema would have refused.
 
 ### Three capabilities that must stay independent
 

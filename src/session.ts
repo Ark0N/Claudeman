@@ -106,6 +106,7 @@ import {
 import { DEFAULT_TMUX_HISTORY_LIMIT } from './config/terminal-history.js';
 import { EXEC_TIMEOUT_MS } from './config/exec-timeout.js';
 import { getCli } from './config/cli-registry/registry.js';
+import { compileVersionRegex } from './config/cli-registry/patterns.js';
 import { resolveSessionCliVersion } from './utils/cli-resolver.js';
 import {
   buildInteractiveArgs,
@@ -2469,13 +2470,11 @@ export class Session extends EventEmitter {
   private _workingLinePattern(): RegExp {
     if (this._workingLineRe === undefined) {
       const src = getCli(this.mode)?.capabilities.workDetect?.workingLine;
-      // The schema validates `workingLine` at load time, so a throw here would mean a
-      // registry that never loaded. Falling back beats taking the session down.
-      try {
-        this._workingLineRe = src ? new RegExp(src) : CLAUDE_WORKING_LINE_PATTERN;
-      } catch {
-        this._workingLineRe = CLAUDE_WORKING_LINE_PATTERN;
-      }
+      // Same guard the schema applies, not a second opinion: `compileVersionRegex()` is
+      // what keeps a nested quantifier out of this pattern, and this one runs on the PTY
+      // hot path. It returns null rather than throwing, and Claude's pattern is the
+      // fallback every session used before the registry carried one.
+      this._workingLineRe = (src ? compileVersionRegex(src) : null) ?? CLAUDE_WORKING_LINE_PATTERN;
     }
     return this._workingLineRe;
   }

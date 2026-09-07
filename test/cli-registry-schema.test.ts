@@ -17,6 +17,7 @@
 
 import { describe, it, expect } from 'vitest';
 import { CliEntrySchema } from '../src/config/cli-registry/schema.js';
+import { compileVersionRegex } from '../src/config/cli-registry/patterns.js';
 import { STOCK_CLIS } from '../src/config/cli-registry/stock.js';
 import type { CliEntry } from '../src/config/cli-registry/types.js';
 
@@ -72,6 +73,34 @@ describe('strictness', () => {
     expectRejected((e) => {
       (e.discovery as Record<string, unknown>).probeEverything = true;
     }, 'strictness has to hold at every depth');
+  });
+});
+
+describe('workDetect.workingLine is guarded like every other config regex', () => {
+  it('rejects a nested quantifier', () => {
+    expectRejected((e) => {
+      (e.capabilities as Record<string, unknown>).workDetect = { promptGlyph: '>', workingLine: '(a+)+b' };
+    }, 'this pattern is compiled once and then run against every accumulated PTY chunk, so catastrophic backtracking here freezes the event loop for the whole server');
+  });
+
+  it('rejects a source longer than compileVersionRegex() will compile', () => {
+    expectRejected((e) => {
+      (e.capabilities as Record<string, unknown>).workDetect = { promptGlyph: '>', workingLine: 'a'.repeat(201) };
+    }, 'the schema must not accept a pattern the runtime will then refuse to compile, or the CLI silently falls back to the Claude pattern');
+  });
+
+  it('rejects a pattern that is not a regex at all', () => {
+    expectRejected((e) => {
+      (e.capabilities as Record<string, unknown>).workDetect = { promptGlyph: '>', workingLine: '([unclosed' };
+    }, 'a broken pattern must fail at LOAD time, not inside the PTY data handler');
+  });
+
+  it('accepts both shipped patterns unchanged', () => {
+    for (const entry of STOCK_CLIS) {
+      const src = entry.capabilities.workDetect?.workingLine;
+      if (!src) continue;
+      expect(compileVersionRegex(src), `${entry.id} declares a workingLine the guard refuses`).not.toBeNull();
+    }
   });
 });
 
