@@ -228,6 +228,11 @@ Object.assign(CodemanApp.prototype, {
           name: item.name || '',
           title: title || item.name || dir.split('/').pop() || item.sessionId.slice(0, 8),
           mode: item.mode || 'claude',
+          // Only the scanner sets this, and only for a codex rollout. Dropping it here
+          // is not cosmetic: resumeMobileOverviewSession() passes row.resumeId on to
+          // resumeHistorySession(), so without it a tapped Codex row starts a FRESH
+          // session on a thread that is already on disk.
+          resumeId: item.resumeId || undefined,
           caseName: matched ? matched.name : '',
           dir: this._shortenHomePath ? this._shortenHomePath(dir) : dir,
           at: item.lastActivityAt || item.createdAt || 0,

@@ -224,6 +224,37 @@ describe('mobile overview model', () => {
     expect(model.past[0].title).toBe('w4-claudeman');
   });
 
+  it('carries resumeId through to the past row so a Codex tap resumes its thread', () => {
+    const app = loadOverviewApp();
+    const model = app.buildMobileOverviewModel({
+      sessions: [],
+      cases: CASES,
+      history: [
+        {
+          sessionId: 'rollout-1',
+          workingDir: '/home/arkon/codeman-cases/beta',
+          firstPrompt: 'port the parser',
+          mode: 'codex',
+          resumeId: 'codex-thread-id',
+          lastActivityAt: 300,
+        },
+        // A claude row carries none, and must not grow one.
+        {
+          sessionId: 'claude-1',
+          workingDir: '/home/arkon/default/claudeman',
+          claudeSessionId: 'claude-uuid-a',
+          lastActivityAt: 200,
+        },
+      ],
+    });
+
+    // resumeMobileOverviewSession() reads row.resumeId off exactly this projection and
+    // hands it to resumeHistorySession(); an undefined here is a fresh codex session on
+    // a thread that already exists, which is the phone-only half of the resume feature.
+    expect(model.past[0]).toMatchObject({ mode: 'codex', resumeId: 'codex-thread-id' });
+    expect(model.past[1].resumeId).toBeUndefined();
+  });
+
   it('does not title a past row with the transcript reader placeholder', () => {
     const app = loadOverviewApp();
     const model = app.buildMobileOverviewModel({
