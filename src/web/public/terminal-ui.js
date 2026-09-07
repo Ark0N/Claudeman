@@ -232,12 +232,22 @@ Object.assign(CodemanApp.prototype, {
   // Terminal Setup — xterm.js config and input handling
   // ═══════════════════════════════════════════════════════════════
 
+  _destroyKeyCode229Recovery() {
+    try {
+      this._keyCode229Recovery?.destroy?.();
+    } catch {
+      // Recovery is optional; terminal replacement must continue.
+    }
+    this._keyCode229Recovery = null;
+  },
+
   initTerminal() {
     // Load scrollback setting from localStorage, treating DEFAULT_SCROLLBACK as a floor
     // so users who picked up the previous (smaller) default get the new minimum on upgrade.
     const stored = parseInt(localStorage.getItem('codeman-scrollback'));
     const scrollback = Number.isFinite(stored) && stored > 0 ? Math.max(stored, DEFAULT_SCROLLBACK) : DEFAULT_SCROLLBACK;
 
+    this._destroyKeyCode229Recovery();
     this.terminal = new Terminal({
       theme: { ...window.codemanCurrentXtermTheme() },
       fontFamily: window.CodemanTerminalFont.resolve(this.loadAppSettingsFromStorage?.().terminalFontFamily),
@@ -292,6 +302,11 @@ Object.assign(CodemanApp.prototype, {
     // punctuation; returning false here would stop xterm before it can diff
     // the helper textarea and emit the committed Unicode text.
     this.terminal.attachCustomKeyEventHandler((ev) => {
+      try {
+        this._keyCode229Recovery?.handleKeyEvent?.(ev);
+      } catch {
+        // The fallback must never interfere with xterm's canonical handler.
+      }
       if (ev.isComposing || ev.key === 'Process' || ev.keyCode === 229) return true;
 
       // Let the app's Alt/Option session-nav and Command Palette shortcuts reach the document keydown handler
@@ -1026,7 +1041,14 @@ Object.assign(CodemanApp.prototype, {
     // mobile connections.  The overlay + localStorage persistence ensure input
     // survives tab switches and reconnects.
 
-    this.terminal.onData((data) => {
+    const handleTerminalData = (data, { recovered = false } = {}) => {
+      if (!recovered) {
+        try {
+          if (this._keyCode229Recovery?.consumeTerminalData?.(data)) return;
+        } catch {
+          // A broken dedupe guard must fail open to canonical xterm data.
+        }
+      }
       // Mouse SGR reports (tap-to-position) are NOT IME input — they must reach
       // the PTY even while the CJK input field owns focus. Without this exception
       // tapping to move the cursor silently does nothing whenever Chinese input
@@ -1348,7 +1370,21 @@ Object.assign(CodemanApp.prototype, {
           }
         }
       }
-    });
+    };
+
+    // Android/GBoard fires keydown with keyCode 229 and, on some paths, never
+    // mutates xterm's helper textarea, so the character is silently dropped.
+    // The controller re-emits exactly those keys, and only after xterm has had
+    // its own chance to produce the canonical data.
+    try {
+      this._keyCode229Recovery = window.CodemanKeyCode229Recovery?.create?.({
+        textarea: this.terminal.textarea,
+        emitRecovered: (data) => handleTerminalData(data, { recovered: true }),
+      });
+    } catch {
+      this._keyCode229Recovery = null;
+    }
+    this.terminal.onData((data) => handleTerminalData(data));
   },
 
   /**
