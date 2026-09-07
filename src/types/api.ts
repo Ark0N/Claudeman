@@ -157,6 +157,20 @@ export interface CaseInfo {
   location?: 'local' | 'linked-local' | 'remote' | 'docker';
   /** Whether this is a linked local folder */
   linked?: boolean;
+  /**
+   * Present when Codeman scaffolded this case directory for an AGENT-spawned session
+   * (the packaged skill's workers, or any spawn naming a parent session), read back
+   * from the case's own marker file — see `src/agent-case-marker.ts`. Absent for every
+   * case a human created, linked or cloned, which is what makes it usable as the
+   * "safe to clean up" signal in the Manage tab.
+   */
+  agentCreated?: {
+    createdAt: string;
+    createdBy: string;
+    parentSessionId?: string;
+    parentSessionName?: string;
+    mode?: string;
+  };
   /** Remote case metadata for display and session creation */
   remote?: {
     hostId: string;
@@ -190,6 +204,25 @@ export interface CaseInfo {
      */
     owned?: boolean;
   };
+}
+
+/**
+ * One agent-created case as `GET /api/cases/agent-created` reports it: the cleanup
+ * view over `CaseInfo.agentCreated`, with the two facts a human needs before deleting
+ * a directory — whether an agent is still working in it, and when it was last touched.
+ */
+export interface AgentCaseSummary {
+  name: string;
+  path: string;
+  createdAt: string;
+  createdBy: string;
+  parentSessionId?: string;
+  parentSessionName?: string;
+  mode?: string;
+  /** A live session's working directory is this case — deleting it would pull the rug. */
+  inUse: boolean;
+  /** Directory mtime, so "nothing has touched this in a week" is answerable. */
+  modifiedAt?: string;
 }
 
 // ========== Error Handling Utilities ==========

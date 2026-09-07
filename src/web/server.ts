@@ -81,7 +81,7 @@ import { RunSummaryTracker } from '../run-summary.js';
 import { PlanOrchestrator } from '../plan-orchestrator.js';
 import { OrchestratorLoop } from '../orchestrator-loop.js';
 import { getLifecycleLog } from '../session-lifecycle-log.js';
-import { applyWorkspaceHooks } from '../hooks-config.js';
+import { applyWorkspaceHooks, pruneAgentSessionPreambles, removeAgentSessionPreamble } from '../hooks-config.js';
 import { PushSubscriptionStore } from '../push-store.js';
 import webpush from 'web-push';
 import { SseStreamManager } from './sse-stream-manager.js';
@@ -1370,6 +1370,12 @@ export class WebServer extends EventEmitter {
           // Best-effort cleanup
         }
       }
+      // Drop the agent skill's preamble cache for this session (seeded at create).
+      // killMux only: a detach leaves the session recoverable, and its agent would
+      // come back to a loader whose file we deleted.
+      if (killMux) {
+        void removeAgentSessionPreamble(sessionId);
+      }
       await session.stop(killMux);
       this.sessions.delete(sessionId);
       // Only remove from state.json if we're also killing the mux session.
@@ -2512,6 +2518,19 @@ export class WebServer extends EventEmitter {
             /* best-effort — daemon may be absent */
           });
       }
+    }
+
+    // Sweep agent preamble caches whose sessions are gone (see
+    // pruneAgentSessionPreambles). Once per boot, after restore, so every session this
+    // instance owns is in the keep set. Best-effort and off the startup critical path.
+    if (!this.testMode) {
+      void pruneAgentSessionPreambles(this.sessions.keys())
+        .then((removed) => {
+          if (removed > 0) console.log(`[agent-skill] pruned ${removed} stale preamble cache file(s)`);
+        })
+        .catch(() => {
+          /* best-effort */
+        });
     }
 
     // Bound disk use under heavy paste-image traffic: delete `paste-*` files

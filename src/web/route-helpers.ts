@@ -23,6 +23,7 @@ import { dataPath } from '../config/instance.js';
 import { getCasesDir } from '../config/cases-dir.js';
 import { isMultiUserMode, maxSessionsPerUser, userCasesDir } from '../config/multiuser.js';
 import { SYNTHETIC_ADMIN, findUser } from '../user-store.js';
+import { AGENT_ORIGIN_SPAWNED_BY_SESSION, normalizeAgentOrigin } from '../agent-case-marker.js';
 
 // Shared path constants used across route modules. CASES_DIR (project folders)
 // stays shared across instances; SETTINGS_PATH is per-instance runtime state.
@@ -359,6 +360,33 @@ export function resolveParentSessionId(
   if (!canAccessOwned(getAuthUser(req), parent.owner)) return undefined;
   if ((parent.owner ?? undefined) !== (owner ?? undefined)) return undefined;
   return parent.id;
+}
+
+/**
+ * Resolve "an agent asked for this", the signal that labels a case directory
+ * Codeman is about to CREATE as an agent scratch workspace (see agent-case-marker.ts).
+ *
+ * Two signals, in order:
+ * 1. an explicit `agentOrigin` body field, or the `X-Codeman-Agent-Origin` header the
+ *    packaged skill sets once on its shared curl invocation, so every spawn recipe
+ *    carries it without a per-recipe edit. The body wins, mirroring parentSessionId;
+ * 2. failing that, an already-RESOLVED parent session id. A create request that names
+ *    the session that spawned it came from an agent by construction: nothing in the
+ *    browser UI sets lineage. This is what still labels workers spawned by a stale
+ *    skill copy or by hand-rolled curl that only carries the lineage header.
+ *
+ * ⚠️ Decoration, like parentSessionId: never an ownership or permission signal, and
+ * never a reason to fail a spawn. An unrecognised origin token is dropped by
+ * `normalizeAgentOrigin` rather than rejected.
+ */
+export function resolveAgentCaseOrigin(
+  req: FastifyRequest,
+  bodyValue: string | undefined,
+  resolvedParentSessionId: string | undefined
+): string | undefined {
+  const header = req.headers['x-codeman-agent-origin'];
+  const raw = bodyValue ?? (Array.isArray(header) ? header[0] : header);
+  return normalizeAgentOrigin(raw) ?? (resolvedParentSessionId ? AGENT_ORIGIN_SPAWNED_BY_SESSION : undefined);
 }
 
 /**

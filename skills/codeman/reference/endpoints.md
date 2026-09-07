@@ -364,6 +364,15 @@ the global 50, or the per-user 25 in multi-user mode, never the waiter cap),
 `CONFLICT`, `OPERATION_FAILED` and `INVALID_INPUT`. None of them are retryable in a
 loop.
 
+⚠️ A case directory quick-start **creates** for you is labelled agent-created (a
+`.codeman-agent-case.json` marker, written because the §0 preamble sends
+`X-Codeman-Agent-Origin`), which is what lets the user find it afterwards:
+`GET /api/v1/cases/agent-created` returns `.data.cases[]` of
+`{name, path, createdAt, createdBy, parentSessionId, inUse, modifiedAt}`, newest first,
+read-only, scoped to the caller's own case space. Report it when you finish; deleting is
+`DELETE /api/v1/cases/:name` and is the user's call by name ([§5.14](verbs.md#514-clean-up)).
+A directory that already existed is never labelled.
+
 ⚠️ `caseName` resolves through the linked-cases registry first, so a name that happens
 to match a case the user linked in lands in that **real repo**, not a fresh scratch
 directory. Pick distinctive scratch names, and use a linked name deliberately when you

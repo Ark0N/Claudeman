@@ -3595,17 +3595,33 @@ Object.assign(CodemanApp.prototype, {
       return;
     }
 
-    let html = '';
+    // Cases an agent worker created (server-side marker file, see agent-case-marker.ts).
+    // A long orchestration leaves one scratch directory per worker behind, so they get
+    // a badge and a bulk cleanup entry point rather than having to be recognised by name.
+    const agentCases = cases.filter(c => c.agentCreated);
+    let html = agentCases.length > 0
+      ? `<div class="case-manage-agent-bar">
+          <span class="case-manage-agent-count">${agentCases.length} case${agentCases.length === 1 ? '' : 's'} created by agent workers</span>
+          <button class="case-manage-btn case-manage-btn-cleanup" onclick="app.cleanupAgentCases()"
+                  title="Review and delete the scratch cases agent workers left behind">Clean up</button>
+         </div>`
+      : '';
     cases.forEach((c, idx) => {
       const isFirst = idx === 0;
       const isLast = idx === cases.length - 1;
       // Was `/Users/<user>` only, the mirror image of the Run menu's bug: every
       // case path on a Linux host rendered in full, unabbreviated.
       const pathDisplay = c.path ? this._shortenHomePath(c.path) : '';
+      const agentTitle = c.agentCreated
+        ? `Created by an agent worker${c.agentCreated.parentSessionName ? ` from ${c.agentCreated.parentSessionName}` : ''}` +
+          ` (${c.agentCreated.createdBy})${c.agentCreated.createdAt ? ` on ${new Date(c.agentCreated.createdAt).toLocaleString()}` : ''}`
+        : '';
       html += `
         <div class="case-manage-item" data-case="${escapeHtml(c.name)}">
           <div class="case-manage-info">
-            <span class="case-manage-name">${escapeHtml(c.name)}</span>
+            <span class="case-manage-name">${escapeHtml(c.name)}${
+              c.agentCreated ? `<span class="case-manage-tag-agent" title="${escapeHtml(agentTitle)}" data-i18n-skip>agent</span>` : ''
+            }</span>
             <span class="case-manage-path">${escapeHtml(pathDisplay)}</span>
           </div>
           <div class="case-manage-actions">
@@ -3681,6 +3697,80 @@ Object.assign(CodemanApp.prototype, {
     } catch (err) {
       this.showToast('Failed to delete case: ' + err.message, 'error');
     }
+  },
+
+  /**
+   * Review-then-delete the scratch cases agent workers left behind.
+   *
+   * ⚠️ Never silently bulk-deletes: the confirm names every directory, and a case a
+   * LIVE session is still working in is excluded outright rather than confirmed away
+   * (`inUse` from the server, which knows every session's working directory). Removal
+   * reuses `DELETE /api/cases/:name` one name at a time, so there is no second
+   * recursive-delete path to keep in step with the first.
+   */
+  async cleanupAgentCases() {
+    let agentCases;
+    try {
+      const res = await fetch('/api/cases/agent-created');
+      const body = await res.json();
+      if (!body.success) {
+        this.showToast(body.error || 'Failed to list agent cases', 'error');
+        return;
+      }
+      agentCases = body.data.cases || [];
+    } catch (err) {
+      this.showToast('Failed to list agent cases: ' + err.message, 'error');
+      return;
+    }
+
+    const busy = agentCases.filter(c => c.inUse);
+    const removable = agentCases.filter(c => !c.inUse);
+    if (removable.length === 0) {
+      this.showToast(
+        busy.length > 0
+          ? `All ${busy.length} agent case(s) are still in use by a running session`
+          : 'No agent-created cases to clean up',
+        'info'
+      );
+      return;
+    }
+
+    const names = removable.map(c => `  ${c.name}`).join('\n');
+    const busyNote = busy.length > 0 ? `\n\nSkipping ${busy.length} case(s) still in use by a running session.` : '';
+    if (!confirm(`Permanently delete ${removable.length} agent-created case folder(s) and everything in them?\n\n${names}${busyNote}`)) {
+      return;
+    }
+
+    let deleted = 0;
+    const failed = [];
+    for (const item of removable) {
+      try {
+        const res = await fetch(`/api/cases/${encodeURIComponent(item.name)}`, { method: 'DELETE' });
+        const body = await res.json();
+        if (body.success) deleted++;
+        else failed.push(item.name);
+      } catch {
+        failed.push(item.name);
+      }
+    }
+
+    this.showToast(
+      failed.length === 0
+        ? `Deleted ${deleted} agent case(s)`
+        : `Deleted ${deleted}, failed: ${failed.join(', ')}`,
+      failed.length === 0 ? 'success' : 'error'
+    );
+
+    // Refresh the picker (its selected case may be one we just deleted) and the list.
+    const select = document.getElementById('quickStartCase');
+    const currentCase = select?.value;
+    const currentDeleted = removable.some(c => c.name === currentCase);
+    if (currentDeleted) select?.blur?.();
+    await this.loadQuickStartCases(currentDeleted ? null : currentCase);
+    if (currentDeleted) {
+      await this.saveLastUsedCase(document.getElementById('quickStartCase')?.value || 'testcase');
+    }
+    this.renderCaseManageList();
   },
 
   async saveCaseOrder(order) {

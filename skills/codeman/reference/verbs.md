@@ -731,6 +731,21 @@ Deleting a session ends the agent and its pane. It does **not** remove:
   it, and ask before running `git worktree remove`, which discards uncommitted work
   inside it.
 
+Those case directories are **labelled** rather than left anonymous. A directory
+`quick-start` creates for a spawn carrying the preamble's `X-Codeman-Agent-Origin`
+header gets a `.codeman-agent-case.json` marker, which is what puts it in the web UI's
+agent-case cleanup list (Add Case → Manage) and in:
+
+```bash
+"${CURL[@]}" "$API/api/v1/cases/agent-created" | jq -r '.data.cases[] | "\(.name)\t\(.createdAt)\tinUse=\(.inUse)"'
+```
+
+Read-only, scoped to the user's own case space, and `inUse` is true while a live
+session is still working in that directory. Report that list when you finish a run
+with workers, so the user knows exactly what to sweep; the deletion is still theirs to
+ask for by name. Only a directory Codeman **created** is ever labelled, so a linked
+case, a cloned repo or a worktree never appears there.
+
 Confirm cleanup with `GET /api/v1/sessions`, never with `/api/v1/sessions/unified`
 (that one folds in transcript history from the whole machine and will keep showing
 your worker forever).

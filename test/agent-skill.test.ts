@@ -11,7 +11,7 @@
  */
 
 import { describe, it, expect, beforeEach, afterEach } from 'vitest';
-import { mkdtemp, rm, mkdir, writeFile, readFile, symlink, readdir, stat } from 'node:fs/promises';
+import { mkdtemp, rm, mkdir, writeFile, readFile, symlink, readdir, stat, utimes } from 'node:fs/promises';
 import { existsSync } from 'node:fs';
 import { join } from 'node:path';
 import { tmpdir, homedir } from 'node:os';
@@ -21,9 +21,24 @@ import {
   removeAgentSkillFrom,
   refreshUserAgentSkill,
   seedAgentSessionPreamble,
+  removeAgentSessionPreamble,
+  pruneAgentSessionPreambles,
 } from '../src/hooks-config.js';
 
 const MARKER_PREFIX = '<!-- codeman-managed-agent-skill';
+
+/** Run `fn` against a throwaway XDG cache dir, restoring the env afterwards. */
+async function withCacheDir(fn: (cacheDir: string) => Promise<void>): Promise<void> {
+  const prevXdg = process.env.XDG_CACHE_HOME;
+  const cacheDir = join(casePath, 'xdg-cache');
+  process.env.XDG_CACHE_HOME = cacheDir;
+  try {
+    await fn(cacheDir);
+  } finally {
+    if (prevXdg === undefined) delete process.env.XDG_CACHE_HOME;
+    else process.env.XDG_CACHE_HOME = prevXdg;
+  }
+}
 
 let casePath: string;
 const skillDir = () => join(casePath, '.claude', 'skills', 'codeman');
@@ -159,6 +174,57 @@ describe('preamble single-source (seed + §0 heredoc parity)', () => {
       expect(content.startsWith('# ---- Codeman agent preamble')).toBe(true);
       expect(content).toMatch(/\nCODEMAN_PREAMBLE=\d+\.\d+\.\d+\n$/);
       expect((await stat(target)).mode & 0o777).toBe(0o600);
+    } finally {
+      if (prevXdg === undefined) delete process.env.XDG_CACHE_HOME;
+      else process.env.XDG_CACHE_HOME = prevXdg;
+    }
+  });
+
+  it('removeAgentSessionPreamble drops one session cache and shrugs at a missing one', async () => {
+    // Seeding writes one file per claude session and nothing used to remove them
+    // (236 leftovers measured on a working machine); session teardown calls this.
+    await withCacheDir(async (cacheDir) => {
+      await seedAgentSessionPreamble('gone-session');
+      expect(existsSync(join(cacheDir, 'codeman-agent-gone-session.sh'))).toBe(true);
+
+      await removeAgentSessionPreamble('gone-session');
+      expect(existsSync(join(cacheDir, 'codeman-agent-gone-session.sh'))).toBe(false);
+
+      await expect(removeAgentSessionPreamble('never-existed')).resolves.toBeUndefined();
+    });
+  });
+
+  it('pruneAgentSessionPreambles takes only aged caches with no live session behind them', async () => {
+    await withCacheDir(async (cacheDir) => {
+      const aged = (name: string) => join(cacheDir, name);
+      for (const id of ['live-old', 'dead-old', 'dead-fresh']) {
+        await seedAgentSessionPreamble(id);
+      }
+      // Age two of them past the cutoff; `dead-fresh` stays new.
+      const old = new Date(Date.now() - 30 * 24 * 60 * 60 * 1000);
+      await utimes(aged('codeman-agent-live-old.sh'), old, old);
+      await utimes(aged('codeman-agent-dead-old.sh'), old, old);
+      // An unrelated file in the same cache dir must be invisible to the sweep.
+      await writeFile(aged('someone-elses-file.sh'), 'not ours\n');
+
+      const removed = await pruneAgentSessionPreambles(['live-old']);
+
+      expect(removed).toBe(1);
+      expect(existsSync(aged('codeman-agent-dead-old.sh'))).toBe(false);
+      // A live session's cache is load-bearing: the skill's two-line loader reads it
+      // mid-run, so age alone must never take it.
+      expect(existsSync(aged('codeman-agent-live-old.sh'))).toBe(true);
+      // And a recently-seeded one belongs to a session this process may not know about.
+      expect(existsSync(aged('codeman-agent-dead-fresh.sh'))).toBe(true);
+      expect(existsSync(aged('someone-elses-file.sh'))).toBe(true);
+    });
+  });
+
+  it('pruneAgentSessionPreambles reports 0 rather than throwing when there is no cache dir', async () => {
+    const prevXdg = process.env.XDG_CACHE_HOME;
+    process.env.XDG_CACHE_HOME = join(casePath, 'no-such-cache');
+    try {
+      expect(await pruneAgentSessionPreambles([])).toBe(0);
     } finally {
       if (prevXdg === undefined) delete process.env.XDG_CACHE_HOME;
       else process.env.XDG_CACHE_HOME = prevXdg;

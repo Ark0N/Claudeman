@@ -47,7 +47,7 @@ later call opens with, and your first REAL call performs them anyway:
 
 ```bash
 . "${XDG_CACHE_HOME:-$HOME/.cache}/codeman-agent-$CODEMAN_SESSION_ID.sh" 2>/dev/null
-[ "${CODEMAN_PREAMBLE:-}" = 1.21.0 ] || { echo "preamble missing or stale; run the full §0 block"; exit 1; }
+[ "${CODEMAN_PREAMBLE:-}" = 1.22.0 ] || { echo "preamble missing or stale; run the full §0 block"; exit 1; }
 ```
 
 ⚠️ **Never spend a Bash call on this check alone.** §1's block opens with this same
@@ -75,8 +75,8 @@ PRE="${XDG_CACHE_HOME:-$HOME/.cache}/codeman-agent-$CODEMAN_SESSION_ID.sh"
 mkdir -p "$(dirname "$PRE")"
 # Rewrite unless the file already ends with THIS version's stamp, so a stale or a
 # half-written file self-heals here instead of costing you a round trip to rm it.
-grep -qs '^CODEMAN_PREAMBLE=1.21.0$' "$PRE" || (umask 077; cat > "$PRE" <<'PREAMBLE'
-# ---- Codeman agent preamble 1.21.0 (seeded by Codeman at session spawn; the SKILL.md §0 bootstrap rewrites it when missing or stale) ----
+grep -qs '^CODEMAN_PREAMBLE=1.22.0$' "$PRE" || (umask 077; cat > "$PRE" <<'PREAMBLE'
+# ---- Codeman agent preamble 1.22.0 (seeded by Codeman at session spawn; the SKILL.md §0 bootstrap rewrites it when missing or stale) ----
 API="${CODEMAN_API_URL:?CODEMAN_API_URL not set; refusing to guess}"
 SELF="${CODEMAN_SESSION_ID:?CODEMAN_SESSION_ID not set}"
 # Credentials, cheapest first. Your session has usually INHERITED the server's
@@ -96,7 +96,10 @@ AUTH=(); [ -n "${CODEMAN_PASSWORD:-}" ] && AUTH=(-u "${CODEMAN_USERNAME:-admin}:
 # draw the lineage. Set once here and every present and future create call carries it;
 # it is ignored on every other endpoint. Purely cosmetic (see §5.1) and it can never
 # fail a spawn, so there is no case where you would want to leave it off.
-CURL=(curl -sk "${AUTH[@]}" -H "X-Codeman-Parent-Session: $SELF")
+# X-Codeman-Agent-Origin: marks a case directory a spawn CREATES as agent scratch, so the
+# user can find and delete it long after your workers are gone (§5.14). Same deal: set
+# once, cosmetic, never fails a spawn, and it labels only directories Codeman creates.
+CURL=(curl -sk "${AUTH[@]}" -H "X-Codeman-Parent-Session: $SELF" -H "X-Codeman-Agent-Origin: codeman-skill")
 CID=codeman-agent-1            # FIXED literal, never "agent-$$": see below
 
 # Fail-CLOSED session delete. The DELETE lives INSIDE the guard on purpose: the older
@@ -322,10 +325,10 @@ last_text() {
 # The stamp is the LAST line on purpose (a truncated write leaves it unset) and is kept
 # bare on purpose: the write condition above anchors on it with $, so an inline comment
 # here would fail that match and rewrite this file on every single bootstrap.
-CODEMAN_PREAMBLE=1.21.0
+CODEMAN_PREAMBLE=1.22.0
 PREAMBLE
 )
-. "$PRE"; [ "${CODEMAN_PREAMBLE:-}" = 1.21.0 ] || { echo "preamble at $PRE is stale or truncated: rm it and re-run this block"; exit 1; }
+. "$PRE"; [ "${CODEMAN_PREAMBLE:-}" = 1.22.0 ] || { echo "preamble at $PRE is stale or truncated: rm it and re-run this block"; exit 1; }
 ```
 
 Every later Bash call that touches the API starts with the same two loader lines from
@@ -376,7 +379,7 @@ and no per-call body to hand-build.
 
 ```bash
 . "${XDG_CACHE_HOME:-$HOME/.cache}/codeman-agent-$CODEMAN_SESSION_ID.sh" 2>/dev/null   # §0 loader
-[ "${CODEMAN_PREAMBLE:-}" = 1.21.0 ] || { echo "preamble missing or stale; run the full §0 block"; exit 1; }
+[ "${CODEMAN_PREAMBLE:-}" = 1.22.0 ] || { echo "preamble missing or stale; run the full §0 block"; exit 1; }
 N=(alpha beta)                    # INVENT one fresh case name per worker; never list cases first
                                   # (a name may carry a mode: `beta:deepseek`, see below)
 T=('reply with one line: the absolute path of your working directory'
@@ -441,7 +444,8 @@ Four things this block leans on, each one link away, no detour needed to run it:
   strands the prompt on the composer until a bare `\r` follows: all three are reasons
   to let `sendwait` build the call rather than hand-rolling it.
 - Each `sendwait` costs that worker one billed turn, as does every prompt you send it.
-- Deleting the sessions does **not** remove the case directories: §5.14.
+- Deleting the sessions does **not** remove the case directories. They are marked as
+  agent-created, so `GET /api/v1/cases/agent-created` lists them for cleanup: §5.14.
 
 ### DeepSeek Harness workers
 
@@ -494,7 +498,7 @@ One row per job. Acting on this table alone is correct; the §5 links are the de
 | find yourself, list what exists | `GET /api/v1/sessions`, match your `$SELF` by **prefix** | [§5.11](reference/verbs.md#511-list-and-find-yourself) |
 | read or record what the user wants | `GET/PUT .../intent`, and `POST .../readmymind` to predict | [§5.12](reference/verbs.md#512-read-my-mind) |
 | talk to a claude worker directly | `ListAgents` / `SendMessage`, when the feature is on at both ends | [§5.13](reference/verbs.md#513-messaging-claude-workers) |
-| clean up | `delete_session "$SID"` per id you created. Case directories and git worktrees are **not** removed with it | [§5.14](reference/verbs.md#514-clean-up) |
+| clean up | `delete_session "$SID"` per id you created. Case directories and git worktrees are **not** removed with it; `GET /api/v1/cases/agent-created` lists the scratch case dirs your spawns left behind, for you to report | [§5.14](reference/verbs.md#514-clean-up) |
 
 ## 3. Rules digest
 
@@ -595,7 +599,7 @@ these**; open the one row you actually hit.
 | [5.11 List and find yourself](reference/verbs.md#511-list-and-find-yourself) | enumerate sessions, or match `$SELF` by prefix |
 | [5.12 Read My Mind](reference/verbs.md#512-read-my-mind) | read or record what the user wants for a case |
 | [5.13 Messaging claude workers](reference/verbs.md#513-messaging-claude-workers) | `ListAgents` / `SendMessage` instead of the HTTP path |
-| [5.14 Clean up](reference/verbs.md#514-clean-up) | what deleting a session does **not** remove |
+| [5.14 Clean up](reference/verbs.md#514-clean-up) | what deleting a session does **not** remove, and how to list the case dirs you left |
 
 ## 6. Setup and auth
 

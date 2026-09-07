@@ -1066,9 +1066,80 @@ export async function installAgentSkillInto(skillDir: string): Promise<AgentSkil
  */
 export async function seedAgentSessionPreamble(sessionId: string): Promise<void> {
   const content = await readFile(join(agentSkillSourceDir(), 'preamble.sh'), 'utf-8');
-  const cacheDir = process.env.XDG_CACHE_HOME || join(homedir(), '.cache');
-  await mkdir(cacheDir, { recursive: true });
-  await writeFile(join(cacheDir, `codeman-agent-${sessionId}.sh`), content, { mode: 0o600 });
+  await mkdir(agentPreambleCacheDir(), { recursive: true });
+  await writeFile(agentPreamblePath(sessionId), content, { mode: 0o600 });
+}
+
+/** Where the preamble caches live. One formula, shared by seed / remove / prune. */
+function agentPreambleCacheDir(): string {
+  return process.env.XDG_CACHE_HOME || join(homedir(), '.cache');
+}
+
+/** `codeman-agent-<sessionId>.sh` in that directory. */
+function agentPreamblePath(sessionId: string): string {
+  return join(agentPreambleCacheDir(), `codeman-agent-${sessionId}.sh`);
+}
+
+/** Matches exactly what seedAgentSessionPreamble writes, and nothing else in ~/.cache. */
+const AGENT_PREAMBLE_FILE_PATTERN = /^codeman-agent-(.+)\.sh$/;
+
+/** How long a preamble cache with no live session behind it is kept before the sweep takes it. */
+export const AGENT_PREAMBLE_MAX_AGE_MS = 7 * 24 * 60 * 60 * 1000;
+
+/**
+ * Drop one session's preamble cache. Called when a session is deleted, which is the
+ * precise counterpart to seeding it at create: one file per claude session was being
+ * written and nothing ever removed them (236 leftovers measured on a working machine,
+ * the oldest three weeks old). Best-effort — a file that will not delete is litter,
+ * never a reason to fail a teardown.
+ */
+export async function removeAgentSessionPreamble(sessionId: string): Promise<void> {
+  await unlink(agentPreamblePath(sessionId)).catch(() => {});
+}
+
+/**
+ * Sweep preamble caches left by sessions that are gone: the delete path above covers
+ * an orderly teardown, and this covers everything else (a crash, a killed server, a
+ * session deleted by an older build, another instance's leftovers).
+ *
+ * ⚠️ Two guards, and both matter: a file whose session is in `keepSessionIds` is never
+ * touched however old it is, and everything else needs `maxAgeMs` of age on top. A live
+ * session's cache is load-bearing — remove it and the skill's two-line loader fails its
+ * version check mid-run — and the age floor is what keeps a session belonging to
+ * ANOTHER instance (whose ids this process cannot see) out of the blast radius. Losing
+ * one is degradation rather than breakage: the §0 fallback block rewrites it.
+ *
+ * Returns how many it removed. Best-effort throughout; a missing cache dir is 0.
+ */
+export async function pruneAgentSessionPreambles(
+  keepSessionIds: Iterable<string>,
+  maxAgeMs: number = AGENT_PREAMBLE_MAX_AGE_MS
+): Promise<number> {
+  const cacheDir = agentPreambleCacheDir();
+  const keep = new Set(keepSessionIds);
+  const cutoff = Date.now() - maxAgeMs;
+  let removed = 0;
+
+  let entries: string[];
+  try {
+    entries = await readdir(cacheDir);
+  } catch {
+    return 0;
+  }
+
+  for (const entry of entries) {
+    const sessionId = AGENT_PREAMBLE_FILE_PATTERN.exec(entry)?.[1];
+    if (!sessionId || keep.has(sessionId)) continue;
+    const path = join(cacheDir, entry);
+    try {
+      if ((await lstat(path)).mtimeMs > cutoff) continue;
+      await unlink(path);
+      removed++;
+    } catch {
+      /* best-effort — a vanished or unreadable file is not our problem */
+    }
+  }
+  return removed;
 }
 
 /**

@@ -1025,6 +1025,16 @@ export const QuickStartSchema = z.object({
   envOverrides: safeEnvOverridesSchema,
   /** Claude CLI effort level (soft default via --settings, switchable in-session via /effort) */
   effort: effortLevelSchema,
+  /**
+   * Who is spawning this worker (`codeman-skill` from the packaged agent skill), or,
+   * equivalently, the `X-Codeman-Agent-Origin` header; the body wins when both are
+   * present. Used ONLY to label a case directory this request CREATES as an agent
+   * scratch workspace, so it can be found and cleaned up later — see
+   * `src/agent-case-marker.ts`. Never a permission signal, and an unrecognised token
+   * is dropped rather than rejected. `POST /api/sessions` has no equivalent field
+   * because it takes an existing `workingDir` and so never creates a directory to label.
+   */
+  agentOrigin: z.string().max(64).optional(),
 });
 
 // ========== Hook Events ==========

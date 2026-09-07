@@ -5941,6 +5941,57 @@ body.touch-device .terminal-container .xterm .xterm-helper-textarea {
   color: #ef4444;
 }
 
+/* Agent-created cases: the badge on a scratch case, and the bulk cleanup bar above
+   the list. Tokens only (no hardcoded ink), so the light skins repaint with the rest. */
+.case-manage-tag-agent {
+  display: inline-block;
+  margin-left: 6px;
+  padding: 0 5px;
+  border: 1px solid var(--control-border);
+  border-radius: 3px;
+  background: var(--control-bg);
+  color: var(--text-muted);
+  font-size: 0.58rem;
+  font-weight: 500;
+  letter-spacing: 0.04em;
+  text-transform: uppercase;
+  vertical-align: 1px;
+}
+
+.case-manage-agent-bar {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 10px;
+  margin-bottom: 4px;
+  padding: 8px 10px;
+  border: 1px solid var(--control-border);
+  border-radius: 6px;
+  /* Sticky, and therefore OPAQUE: it is the first child of the scrolling list
+     (.case-manage-list is a 320px-tall flex scroller), so a translucent bar would
+     have case rows sliding visibly under it, and a static one would put the cleanup
+     button out of reach the moment a long case list is scrolled. */
+  position: sticky;
+  top: 0;
+  z-index: 1;
+  background: var(--bg-card);
+}
+
+.case-manage-agent-count {
+  font-size: 0.7rem;
+  color: var(--text-dim);
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+/* The shared .case-manage-btn is a 26px icon square; this one carries a word. */
+.case-manage-btn-cleanup {
+  width: auto;
+  padding: 0 10px;
+  white-space: nowrap;
+}
+
 .toolbar-input {
   padding: 0.4rem 0.5rem;
   background: var(--bg-input);

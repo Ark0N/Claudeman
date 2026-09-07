@@ -76,12 +76,14 @@ import {
   ownerFor,
   parseBody,
   persistAndBroadcastSession,
+  resolveAgentCaseOrigin,
   resolveCasesDir,
   resolveParentSessionId,
   sessionCapacityMessage,
   SETTINGS_PATH,
   validatePathWithinBase,
 } from '../route-helpers.js';
+import { buildAgentCaseMarker, writeAgentCaseMarker } from '../../agent-case-marker.js';
 import { canUsernameRunPrivilegedCommands, resolveClaudeModeForUsername } from '../../user-store.js';
 import { enabledClis, getCli } from '../../config/cli-registry/registry.js';
 import { resolveCliLaunchError } from '../../utils/cli-launcher.js';
@@ -2973,7 +2975,12 @@ export function registerSessionRoutes(
       envOverrides,
       effort,
       parentSessionId,
+      agentOrigin,
     } = parseBody(QuickStartSchema, req.body);
+
+    // Resolved ONCE here: the same value labels a case directory this request creates
+    // (agent-case-marker.ts) and draws the tab lineage line on the session below.
+    const qsParentSessionId = resolveParentSessionId(ctx, req, parentSessionId, owner);
 
     // Multi-user: shell mode is arbitrary host-account execution, gated by the grant.
     // Resolve the owner's grant from the store so a GRANTED regular user is not wrongly denied.
@@ -3220,6 +3227,26 @@ export function registerSessionRoutes(
           await writeHooksConfig(resolvedCasePath);
         }
 
+        // Label a directory an AGENT asked us to create, so the scratch workspaces a
+        // long orchestration leaves behind can be told apart from the user's real
+        // projects later (see agent-case-marker.ts). This is the only branch that may
+        // write it: it is the only one that creates the directory, and a pre-existing
+        // case must never be labelled. Best-effort — a failed marker must not fail the
+        // spawn it decorates.
+        const qsAgentOrigin = resolveAgentCaseOrigin(req, agentOrigin, qsParentSessionId);
+        if (qsAgentOrigin) {
+          await writeAgentCaseMarker(
+            resolvedCasePath,
+            buildAgentCaseMarker({
+              createdBy: qsAgentOrigin,
+              parentSessionId: qsParentSessionId,
+              parentSessionName: qsParentSessionId ? ctx.sessions.get(qsParentSessionId)?.name : undefined,
+              mode,
+              owner,
+            })
+          );
+        }
+
         ctx.broadcast(SseEvent.CaseCreated, { name: caseName, path: resolvedCasePath });
       } catch (err) {
         return createErrorResponse(ApiErrorCode.OPERATION_FAILED, `Failed to create case: ${getErrorMessage(err)}`);
@@ -3353,7 +3380,7 @@ export function registerSessionRoutes(
       docker,
       resumeSessionId: dockerResumeId,
       tmuxHistoryLimit: qsTerminalHistoryConfig.tmuxHistoryLimit,
-      parentSessionId: resolveParentSessionId(ctx, req, parentSessionId, owner),
+      parentSessionId: qsParentSessionId,
     });
 
     // Auto-detect completion phrase from CLAUDE.md BEFORE broadcasting

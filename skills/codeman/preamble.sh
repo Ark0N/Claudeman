@@ -1,4 +1,4 @@
-# ---- Codeman agent preamble 1.21.0 (seeded by Codeman at session spawn; the SKILL.md §0 bootstrap rewrites it when missing or stale) ----
+# ---- Codeman agent preamble 1.22.0 (seeded by Codeman at session spawn; the SKILL.md §0 bootstrap rewrites it when missing or stale) ----
 API="${CODEMAN_API_URL:?CODEMAN_API_URL not set; refusing to guess}"
 SELF="${CODEMAN_SESSION_ID:?CODEMAN_SESSION_ID not set}"
 # Credentials, cheapest first. Your session has usually INHERITED the server's
@@ -18,7 +18,10 @@ AUTH=(); [ -n "${CODEMAN_PASSWORD:-}" ] && AUTH=(-u "${CODEMAN_USERNAME:-admin}:
 # draw the lineage. Set once here and every present and future create call carries it;
 # it is ignored on every other endpoint. Purely cosmetic (see §5.1) and it can never
 # fail a spawn, so there is no case where you would want to leave it off.
-CURL=(curl -sk "${AUTH[@]}" -H "X-Codeman-Parent-Session: $SELF")
+# X-Codeman-Agent-Origin: marks a case directory a spawn CREATES as agent scratch, so the
+# user can find and delete it long after your workers are gone (§5.14). Same deal: set
+# once, cosmetic, never fails a spawn, and it labels only directories Codeman creates.
+CURL=(curl -sk "${AUTH[@]}" -H "X-Codeman-Parent-Session: $SELF" -H "X-Codeman-Agent-Origin: codeman-skill")
 CID=codeman-agent-1            # FIXED literal, never "agent-$$": see below
 
 # Fail-CLOSED session delete. The DELETE lives INSIDE the guard on purpose: the older
@@ -244,4 +247,4 @@ last_text() {
 # The stamp is the LAST line on purpose (a truncated write leaves it unset) and is kept
 # bare on purpose: the write condition above anchors on it with $, so an inline comment
 # here would fail that match and rewrite this file on every single bootstrap.
-CODEMAN_PREAMBLE=1.21.0
+CODEMAN_PREAMBLE=1.22.0
