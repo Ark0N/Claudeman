@@ -1,5 +1,34 @@
 # aicodeman
 
+## 1.26.0
+
+### Minor Changes
+
+- Tag the case directories agent workers create, and clean up what they leave behind.
+
+  A long agent orchestration creates one case directory per worker, and deleting the
+  sessions never removed them, so `~/codeman-cases` filled with scratch folders that
+  looked exactly like real projects.
+  - A case directory `POST /api/quick-start` **creates** for an agent-driven spawn now
+    carries a `.codeman-agent-case.json` marker recording when it was made, by whom,
+    from which session, and in which mode. Only the branch that creates the directory
+    writes it, so a linked case, a cloned repo or any pre-existing path is never
+    labelled, and deleting the marker file adopts a scratch case as a real one.
+  - The label comes from the new `X-Codeman-Agent-Origin` header that the packaged agent
+    skill sets on its shared curl invocation (preamble 1.22.0), or an `agentOrigin` body
+    field, falling back to a resolved `parentSessionId` so workers spawned by an older
+    skill copy are still labelled.
+  - `GET /api/cases` publishes it as `agentCreated`, and the new read-only
+    `GET /api/cases/agent-created` lists the scratch cases with `inUse` (a live session
+    is still working in it) and `modifiedAt`.
+  - Add Case -> Manage badges every agent-created case and adds a sticky **Clean up**
+    entry point that names each directory in its confirmation and skips any case a
+    running session is using. Removal still goes through `DELETE /api/cases/:name`.
+  - The agent skill's per-session preamble cache (`~/.cache/codeman-agent-<id>.sh`) is
+    now removed with the session and swept at boot. One was written per Claude session
+    and nothing ever deleted them (236 orphans on a working machine); the sweep keeps
+    every live session's file and only takes orphans older than seven days.
+
 ## 1.25.0
 
 ### Minor Changes
