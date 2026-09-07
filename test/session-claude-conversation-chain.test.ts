@@ -100,9 +100,11 @@ describe('Session claude conversation chain', () => {
     // before this existed. Every assignment built from the launch-id fallback
     // must therefore carry `restoredConversation` first.
     const source = readFileSync(resolve(import.meta.dirname, '../src/session.ts'), 'utf8');
-    const fallbackAssignments = source.match(
-      /_claudeSessionId =\s*\n?\s*[^;]*?_resumeSessionId \|\| this\._ompConfig\?\.resumeSessionId \|\| this\.id;/g
-    );
+    // The tail of the chain grows as each CLI gains a resume alias of its own
+    // (omp, then codex), so the pattern pins the two ends and lets the middle
+    // widen. A `[^;]` run cannot cross a statement boundary, so each match is
+    // still one assignment.
+    const fallbackAssignments = source.match(/_claudeSessionId =[^;]*?_resumeSessionId[^;]*?this\.id;/g);
     expect(fallbackAssignments).not.toBeNull();
     expect(fallbackAssignments!.length).toBeGreaterThanOrEqual(2);
     for (const assignment of fallbackAssignments!) {

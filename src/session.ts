@@ -724,13 +724,20 @@ export class Session extends EventEmitter {
     this._wireActivityAt = config.lastActivityAt || Date.now();
     this._wireActivitySettleUntil = config.lastActivityAt ? Date.now() + WIRE_ACTIVITY_SETTLE_MS : 0;
     // Set claudeSessionId — when resuming, the Claude conversation ID is the resumed one.
-    // For omp, `claudeSessionId` doubles as the generic "external transcript id"
-    // alias key mergeUnifiedSessions() folds a history row into its owning
-    // session by: omp mints its OWN uuid, unrelated to this Codeman id, so
-    // without this an omp conversation's Past-Sessions row (keyed by omp's
-    // id) would never merge with its own live/persisted row (keyed by this
-    // id) — it would just show up a second time.
-    this._claudeSessionId = config.resumeSessionId || config.ompConfig?.resumeSessionId || this.id;
+    // For omp and codex, `claudeSessionId` doubles as the generic "external
+    // transcript id" alias key mergeUnifiedSessions() folds a history row into
+    // its owning session by: each mints its OWN thread id, unrelated to this
+    // Codeman id, so without this the conversation's Past-Sessions row (keyed by
+    // that thread id) would never merge with its own live/persisted row (keyed
+    // by this id) — it would just show up a second time. For codex a duplicate
+    // is worse than cosmetic: the stale row still resumes, so clicking it starts
+    // a SECOND `codex resume` on a thread already open in another pane.
+    //
+    // This covers a RESUMED codex session, which knows its thread id up front. A
+    // fresh one learns its id only once codex writes the rollout, so it is folded
+    // from the other side — see the originator stamping in `gatherUnifiedInputs()`.
+    this._claudeSessionId =
+      config.resumeSessionId || config.ompConfig?.resumeSessionId || config.codexConfig?.resumeSessionId || this.id;
     // Restored from state.json on boot recovery. start() resets _claudeSessionId
     // to the launch id even when re-attaching to a mux session whose CLI has
     // moved on (a `/clear` before the restart), so this anchor is what lets the
@@ -2068,16 +2075,23 @@ export class Session extends EventEmitter {
         // this to omp's own session uuid — that already-resolved id must win
         // over the generic `this.id` fallback, or this line clobbers it back
         // to the Codeman id
-        // on every single respawn.
+        // on every single respawn. codex needs the same fallback for the same
+        // reason: its thread id lives in `_codexConfig`, so without it every
+        // respawn drops a resumed codex session's alias and its Past-Sessions
+        // row springs back as a duplicate that still resumes.
         // ⚠️ A RESTORED mux session is the one case where the launch id is a
         // lie: the CLI never stopped, so a `/clear` before the Codeman restart
         // already moved it to a conversation `this.id` knows nothing about. The
         // persisted chain's tail is that conversation, reported first-hand by
-        // the CLI's own hook, so it outranks the fallback here. A NEW pane has
-        // an empty chain and falls through to exactly today's expression.
+        // the CLI's own hook, so it outranks every fallback here. A NEW pane has
+        // an empty chain and falls through to the resume/alias fallbacks.
         restoredConversation = isRestored ? this._claudeSessionChain[this._claudeSessionChain.length - 1] : undefined;
         this._claudeSessionId =
-          restoredConversation || this._resumeSessionId || this._ompConfig?.resumeSessionId || this.id;
+          restoredConversation ||
+          this._resumeSessionId ||
+          this._ompConfig?.resumeSessionId ||
+          this._codexConfig?.resumeSessionId ||
+          this.id;
 
         // For NEW mux sessions: wait for readiness then clean buffer
         // For RESTORED mux sessions: don't do anything - client will fetch buffer on tab switch
@@ -2178,15 +2192,19 @@ export class Session extends EventEmitter {
     // Set claudeSessionId — when resuming, the Claude conversation ID is the resumed one.
     // Mirrors the mux branch above and must not clobber it: this line runs
     // unconditionally after both the mux and direct-PTY paths, so it also needs
-    // the ompConfig fallback or it stomps the mux branch's correctly-resolved
-    // OMP alias back to this.id on every mux/plain-reattach boot recovery
-    // (the "third reset point" — see DECISIONS.md). For the same reason it needs
-    // `restoredConversation`: on a RESTORED mux attach the CLI never stopped and
-    // may have `/clear`ed before the restart, so the launch id is a lie and the
-    // chain's tail is the live conversation. Empty on every other path, which
-    // leaves this expression exactly as it was.
+    // the ompConfig and codexConfig fallbacks or it stomps the mux branch's
+    // correctly-resolved OMP/codex alias back to this.id on every mux/plain-
+    // reattach boot recovery (the "third reset point" — see DECISIONS.md).
+    // For the same reason it needs `restoredConversation`: on a RESTORED mux
+    // attach the CLI never stopped and may have `/clear`ed before the restart,
+    // so the launch id is a lie and the chain's tail is the live conversation.
+    // It is empty on every other path, so those paths keep the alias chain.
     this._claudeSessionId =
-      restoredConversation || this._resumeSessionId || this._ompConfig?.resumeSessionId || this.id;
+      restoredConversation ||
+      this._resumeSessionId ||
+      this._ompConfig?.resumeSessionId ||
+      this._codexConfig?.resumeSessionId ||
+      this.id;
 
     this._pid = this.ptyProcess.pid;
     console.log('[Session] Interactive PTY spawned with PID:', this._pid);
