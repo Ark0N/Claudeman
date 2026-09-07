@@ -20,6 +20,13 @@
 
 const CACHE_NAME = 'codeman-v1';
 
+// Reverse-proxy base path: the worker is served at `<base>/sw.js`, so its own
+// location tells us the mount prefix ('' at root, or '/codeman'). Every URL below
+// is prefixed through B() so the cached shell, icons and API calls resolve under
+// the mount instead of escaping to the origin root.
+const SW_BASE = self.location.pathname.replace(/\/sw\.js$/, '');
+const B = (p) => (p && p[0] === '/' ? SW_BASE + p : p);
+
 // Core app shell -- cached on install for instant startup
 const APP_SHELL = [
   '/',
@@ -45,7 +52,7 @@ const APP_SHELL = [
   '/icon-192.png',
   '/icon-512.png',
   '/manifest.json',
-];
+].map(B);
 
 // --- Install: precache app shell ---
 
@@ -116,9 +123,9 @@ self.addEventListener('push', (event) => {
   const options = {
     body: body || '',
     tag: tag || 'codeman-default',
-    icon: '/icon-192.png',
-    badge: '/icon-192.png',
-    data: { sessionId, approvalId, url: sessionId ? `/?session=${sessionId}` : '/' },
+    icon: B('/icon-192.png'),
+    badge: B('/icon-192.png'),
+    data: { sessionId, approvalId, url: sessionId ? B(`/?session=${sessionId}`) : B('/') },
     renotify: true,
     requireInteraction: urgency === 'critical',
   };
@@ -143,7 +150,7 @@ self.addEventListener('notificationclick', (event) => {
   event.notification.close();
 
   const { sessionId, approvalId, url } = event.notification.data || {};
-  const targetUrl = url || '/';
+  const targetUrl = url || B('/');
   const action = event.action || null;
 
   // Approve/Deny action buttons answer the Approvals Inbox item directly from
@@ -152,7 +159,7 @@ self.addEventListener('notificationclick', (event) => {
   // because a service worker fetch carries the worker's own (same) origin.
   if ((action === 'approve' || action === 'deny') && approvalId) {
     event.waitUntil(
-      fetch(`/api/approvals/${encodeURIComponent(approvalId)}/answer`, {
+      fetch(B(`/api/approvals/${encodeURIComponent(approvalId)}/answer`), {
         method: 'POST',
         credentials: 'include',
         headers: { 'Content-Type': 'application/json' },

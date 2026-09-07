@@ -951,14 +951,23 @@ export interface DockerLaunchOptions {
 export function buildDockerLaunchCommand(opts: DockerLaunchOptions): string {
   const { mode, docker, sessionId, resumeSessionId, createContext, execEnv, execEnvNames, seedCopies } = opts;
   const base = buildDockerBaseArgs(docker).join(' ');
-  const createArgs = buildDockerCreateArgs(createContext).join(' ');
+  // ADOPTED container (docker.owned === false): the user built it and runs it, so
+  // this chain may only LOOK and then exec. No image check (the image is theirs),
+  // no create, and above all no `start` — starting a container we do not own is
+  // exactly the lifecycle mutation adoption promises never to perform. A missing
+  // or stopped container fails closed with an actionable message instead.
+  const adopted = docker.owned === false;
+  // Built lazily: an adopted case has no meaningful create-config, so computing
+  // create args for it would demand a context the adopt path never assembles.
+  const createArgs = adopted ? '' : buildDockerCreateArgs(createContext).join(' ');
   const name = shellescape(docker.containerName);
   const workdir = shellescape(docker.containerWorkdir);
   const image = shellescape(docker.image);
   const dkrName = dockerTmuxSessionName(sessionId);
   const sid = sessionId.slice(0, 8);
 
-  let modeCommand = docker.commands?.[mode as DockerCommandMode] || defaultDockerCommandForMode(mode);
+  let modeCommand =
+    docker.commands?.[mode as DockerCommandMode] || defaultDockerCommandForMode(mode, !!docker.runsAsRoot);
   if (mode === 'claude') {
     modeCommand = claudeDockerPaneCommand(modeCommand, sessionId, resumeSessionId);
   } else if (resumeSessionId) {
@@ -994,7 +1003,16 @@ export function buildDockerLaunchCommand(opts: DockerLaunchOptions): string {
   );
   const startFailMsg = shellescape(`Codeman: container ${docker.containerName} failed to start (docker daemon down?)`);
 
-  const imageCheck = `${base} image inspect ${image} >/dev/null 2>&1 || { echo ${imageMissingMsg}; exit 1; }`;
+  const notFoundMsg = shellescape(
+    `Codeman: container ${docker.containerName} not found. Adopted containers are never created by Codeman - start it yourself, then reopen this session.`
+  );
+  const notRunningMsg = shellescape(
+    `Codeman: container ${docker.containerName} is not running. Codeman never starts a container it does not own - start it yourself, then reopen this session.`
+  );
+
+  const imageCheck = adopted
+    ? ''
+    : `${base} image inspect ${image} >/dev/null 2>&1 || { echo ${imageMissingMsg}; exit 1; }`;
   // create-if-missing (idempotent): reconnect / boot recovery re-runs this exact
   // chain. A daemon without swap accounting warns whenever --memory is present,
   // even when --memory-swap is omitted. In compatibility mode, retain the memory
@@ -1011,14 +1029,27 @@ export function buildDockerLaunchCommand(opts: DockerLaunchOptions): string {
       `elif ${base} inspect ${name} >/dev/null 2>&1; then ${removeCreateOutput}; ` +
       `else ${filteredCreateOutput} >&2; ${removeCreateOutput}; false; fi; }`
     : `${base} ${createArgs}`;
-  const ensure = `${base} inspect ${name} >/dev/null 2>&1 || ${createCommand}`;
-  const start = `${base} start ${name} >/dev/null 2>&1 || { echo ${startFailMsg}; exit 1; }`;
+  const ensure = adopted
+    ? `${base} inspect ${name} >/dev/null 2>&1 || { echo ${notFoundMsg}; exit 1; }`
+    : `${base} inspect ${name} >/dev/null 2>&1 || ${createCommand}`;
+  // ⚠️ No double quotes and no `$(…)` in the ADOPTED arms. This whole chain is
+  // embedded in an outer `bash -c "…"`, so an unescaped `"` closes that string early,
+  // the rest is re-tokenized, and tmux fails to exec with a bare `execvp(3) failed`.
+  // A `grep -qx` pipeline reads the same answer using only the single-quoted form
+  // every other line in this builder already uses.
+  const start = adopted
+    ? `${base} inspect -f ${shellescape('{{.State.Running}}')} ${name} 2>/dev/null | grep -qx true || { echo ${notRunningMsg}; exit 1; }`
+    : `${base} start ${name} >/dev/null 2>&1 || { echo ${startFailMsg}; exit 1; }`;
   // Seed writable credential config from read-only host mounts ONCE per container
   // (guarded by [ -e ] so reconnects never clobber in-container config; `cp -a` for
   // whole-dir credential seeds). mkdir -p the parent so a file seed works even when
   // no sibling share-mount pre-created the dir. Paths are fixed CONTAINER_HOME
   // constants (no shell metachars), so the whole inner command is shell-quoted once.
-  const seedSteps = (seedCopies ?? []).map((s) => {
+  // An ADOPTED container gets NO seed copies: those read from create-time
+  // read-only mounts that do not exist here, and writing host credentials into a
+  // container the user owns is a mutation adoption does not permit. Its CLIs must
+  // already be authenticated inside it.
+  const seedSteps = (adopted ? [] : (seedCopies ?? [])).map((s) => {
     const cp = s.recursive ? 'cp -a' : 'cp';
     const parent = s.to.slice(0, s.to.lastIndexOf('/'));
     return `mkdir -p ${parent} 2>/dev/null; [ -e ${s.to} ] || ${cp} ${s.from} ${s.to} 2>/dev/null || true`;
@@ -1026,7 +1057,7 @@ export function buildDockerLaunchCommand(opts: DockerLaunchOptions): string {
   const innerCmd = seedSteps.length ? `${seedSteps.join(' ; ')} ; ${tmuxInvocation}` : tmuxInvocation;
   const execCmd = `exec ${base} exec -it --workdir ${workdir} ${execEnvFlags.join(' ')} ${name} sh -lc ${shellescape(innerCmd)}`;
 
-  return [imageCheck, ensure, start, execCmd].join(' ; ');
+  return [imageCheck, ensure, start, execCmd].filter(Boolean).join(' ; ');
 }
 
 /**
@@ -1042,13 +1073,29 @@ export function buildDockerKillCommand(options: { docker: SessionDocker; session
   return `${base} exec ${shellescape(docker.containerName)} tmux -L ${DOCKER_TMUX_SOCKET} kill-session -t ${shellescape(dkrName)}`;
 }
 
+/**
+ * Guard for the two builders that mutate CONTAINER lifecycle. They are pure
+ * string builders, so refusing here means an adopted container cannot even have
+ * a stop/remove command constructed for it — there is no shape of caller bug
+ * that turns into a `docker stop`/`rm` on something we do not own.
+ */
+function assertOwnedContainer(docker: SessionDocker, action: string): void {
+  if (docker.owned === false) {
+    throw new Error(
+      `Refusing to ${action} adopted container "${docker.containerName}": Codeman does not own its lifecycle.`
+    );
+  }
+}
+
 /** Explicit container stop (frees RAM/CPU; conversation resumes on next launch via --resume). */
 export function buildDockerStopCommand(docker: SessionDocker): string {
+  assertOwnedContainer(docker, 'stop');
   return `${buildDockerBaseArgs(docker).join(' ')} stop -t 10 ${shellescape(docker.containerName)}`;
 }
 
 /** Explicit container removal (case-delete). Destroys in-image state; bind mounts survive. */
 export function buildDockerRemoveCommand(docker: SessionDocker): string {
+  assertOwnedContainer(docker, 'remove');
   return `${buildDockerBaseArgs(docker).join(' ')} rm -f ${shellescape(docker.containerName)}`;
 }
 
@@ -1725,7 +1772,15 @@ export class TmuxManager extends EventEmitter implements TerminalMultiplexer {
     // `missingCliMessage()` returns null for a mode with no binary to find (`shell`), and
     // carries bounded PATH/login-shell/search-dir diagnostics so the error says where we
     // actually looked.
-    if (!cliDir) {
+    //
+    // ⚠️ Skipped entirely for a DOCKER session: the CLI runs INSIDE the container, so the
+    // host does not need it at all. Demanding it here threw for a host without the binary,
+    // the catch fell back to a direct PTY, and that PTY tried to exec the CLI on the HOST —
+    // surfacing as a bare `execvp(3) failed: No such file or directory` with nothing
+    // pointing at the real cause. The container's own CLIs are verified by the adoption
+    // preflight / image gate before launch instead.
+    const cliRunsInContainer = !!docker;
+    if (!cliRunsInContainer && !cliDir) {
       const message = missingCliMessage(mode);
       if (message) throw new Error(message);
     }

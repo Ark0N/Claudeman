@@ -12607,6 +12607,43 @@ kbd {
   background: color-mix(in srgb, var(--green) 12%, transparent);
 }
 
+/* Consecutive messages from one speaker inside one turn are segments of a
+   single utterance, not separate cards: no repeated badge, a hairline seam.
+   The role accent survives because the colour rules above match on BOTH
+   :has(.rv-role-*) and .rv-msg-* — a badge-less continuation still hits the
+   class arm. Do not drop either arm. */
+.rv-message.rv-msg-cont {
+  margin-top: -18px;
+  border-top: 0;
+  border-top-left-radius: 0;
+  border-top-right-radius: 0;
+  padding-top: 0;
+}
+
+.rv-message.rv-msg-cont > .rv-text {
+  border-top: 1px solid var(--border);
+  padding-top: 12px;
+}
+
+.rv-message:has(+ .rv-msg-cont) {
+  border-bottom-left-radius: 0;
+  border-bottom-right-radius: 0;
+  padding-bottom: 0;
+}
+
+/* A prompt the user typed while the agent was working (absorbed mid-turn).
+   A pseudo-element, not a text node, so the i18n MutationObserver cannot
+   rewrite it. */
+.rv-message[data-queued='1'] .rv-role::after {
+  content: ' ⏱';
+}
+
+.rv-notice {
+  opacity: 0.7;
+  font-style: italic;
+  margin-top: 12px;
+}
+
 /* Markdown rendered content inside response viewer.
    Prose uses a proportional font for readability; code keeps monospace. */
 .rv-text,
@@ -16645,6 +16682,44 @@ html[data-tab-orientation='vertical'] .home-sessions {
    label as a row label, its `.form-hint` as a row description. Scoped to the
    document, so `.form-row` everywhere else is untouched.
    ─────────────────────────────────────────────────────────────────────────── */
+/* Adopt-an-existing-container mode swaps which half of the Docker panel applies:
+   the create-time fields (image, network, resources, credential mounts) describe
+   a `docker create` that adoption never runs, and the container name is the one
+   field only adoption needs. `.docker-adopt-only` is hidden by default so the
+   panel stays exactly as it was until the checkbox is ticked. Rules carry
+   `!important` because the adapter block above paints `.form-row` as a row card
+   and `details.advanced-options` has its own display. */
+/* Run-menu notice: why a container case is offering no agent modes. Lives at the
+   top of the menu so the reason is where the missing entries would have been. */
+.run-mode-notice {
+  padding: 8px 12px;
+  margin: 0 0 4px;
+  font-size: 12px;
+  line-height: 1.45;
+  color: var(--text-muted, #9aa0a6);
+  border-bottom: 1px solid var(--border, #333);
+  white-space: normal;
+}
+
+#createCaseModal .docker-adopt-only {
+  display: none !important;
+}
+#createCaseModal[data-docker-adopt='1'] .docker-adopt-only {
+  display: block !important;
+}
+#createCaseModal[data-docker-adopt='1'] .docker-create-only {
+  display: none !important;
+}
+#createCaseModal .btn-inline-check {
+  background: none;
+  border: none;
+  padding: 0;
+  font: inherit;
+  color: var(--accent, #4a9eff);
+  cursor: pointer;
+  text-decoration: underline;
+}
+
 #createCaseModal .set-doc .form-row {
   margin: 0 0 3px;
   padding: 7px 10px;

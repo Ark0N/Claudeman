@@ -210,7 +210,10 @@ const CLAUDE: CliEntry = {
     // (no trust-folder/permission prompt that nothing on that side can answer). A per-host
     // `commands.claude` override, or the docker multi-user clamp, stays the escape hatch.
     remote: { command: 'claude --dangerously-skip-permissions' },
-    docker: { command: 'claude --dangerously-skip-permissions' },
+    // ⚠️ As root the flag is not merely unnecessary, it is REFUSED ("cannot be used with
+    // root/sudo privileges"), and only inside the container — so an adopted root container
+    // would just show a dead pane. Drop it there and let claude ask.
+    docker: { command: 'claude --dangerously-skip-permissions', rootCommand: 'claude' },
     // Claude's docker/remote credential handling has its own dedicated code path
     // (claudeDockerPaneCommand, artifacts at docker-hosts.ts:537-575) — no generic credStore.
   },

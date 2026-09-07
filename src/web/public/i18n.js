@@ -86,6 +86,7 @@
     'Instance count': '实例数量',
     'No response yet': '暂无回复',
     'No response yet — send a message in this session first.': '暂无回复，请先在此会话中发送一条消息。',
+    'No full conversation history available for this session': '此会话没有可显示的完整对话历史',
     'Last Response': '最近一次回复',
     More: '更多',
     'Codeman version': '{name}版本',
@@ -713,6 +714,19 @@
     'Runs this case in a hardened, isolated container. The base image is built automatically on first use. Docker/Podman must be installed.':
       '在加固的隔离容器中运行此案例。首次使用时会自动构建基础镜像；必须安装 Docker/Podman。',
     'Run in an isolated Docker container': '在隔离的 Docker 容器中运行',
+    'Attach to an existing container': '接入已在运行的容器',
+    'On: Codeman only runs docker exec into a container you already built and run — it never creates, starts, stops or removes it. The CLIs must already be installed and logged in inside it.':
+      '开启后，{name}只会 docker exec 进入你自己构建并运行的容器，绝不创建、启动、停止或删除它；容器内必须已安装并登录好相应 CLI。',
+    'Container Name': '容器名称',
+    'Pick from the running containers or type a name.': '从正在运行的容器中选择，或直接输入名称。',
+    'Check container': '检查容器',
+    'Container Workdir': '容器内工作目录',
+    'A path that already exists inside the container. Adoption mounts nothing, so this need not match the host workspace path.':
+      '容器内已存在的路径。接入不挂载任何目录，因此它不必与主机工作区路径相同。',
+    'Already have a container running?': '已经有正在运行的容器？',
+    'Attach to it instead': '改为接入该容器',
+    'Codeman only runs docker exec into it and never touches its lifecycle.':
+      '{name}只会 docker exec 进入它，绝不触碰其生命周期。',
     'Absolute HOST directory, bind-mounted into the container. Codeman scaffolds CLAUDE.md + hooks into it.':
       '绑定挂载到容器中的主机绝对目录；{name}会在其中生成 CLAUDE.md 和 hooks。',
     'A reusable docker host profile. Reuse the same ID across cases to share settings.':

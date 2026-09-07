@@ -442,7 +442,15 @@ export interface CliOverlays {
    * all (docker for `shell`) — distinct from "no override", which still gets a default.
    */
   remote?: { command?: string } | { disabled: true };
-  docker?: { command?: string } | { disabled: true };
+  /**
+   * `rootCommand` is the same invocation for a container whose exec user is uid 0. Only
+   * declare it when the normal `command` would be REFUSED as root: claude's carries
+   * `--dangerously-skip-permissions`, which Claude Code rejects outright under root, and
+   * the rejection is visible only inside the container, so the pane dies with no clue on
+   * the outside. Codeman's own base image runs a non-root user and never selects this; an
+   * ADOPTED container belongs to its owner and is frequently root. Absent = use `command`.
+   */
+  docker?: { command?: string; rootCommand?: string } | { disabled: true };
   /**
    * ⚠️ DECLARED-FOR-LATER, unlike `remote`/`docker` above, which are live.
    *

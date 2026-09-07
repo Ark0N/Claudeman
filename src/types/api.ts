@@ -110,6 +110,10 @@ export type HookEventType =
   | 'stop'
   | 'teammate_idle'
   | 'task_completed'
+  // Claude Code's UserPromptSubmit. The payload's `session_id` is the pane's
+  // LIVE conversation id, reported by the CLI process itself, so it survives a
+  // `/clear` without any cwd/timestamp correlation.
+  | 'prompt_submitted'
   // No Claude Code hook behind this one: it is the DeepSeek status bridge's
   // "a turn STARTED" report (see deepseek-status-shim.ts). Keep in step with
   // HookEventSchema in web/schemas.ts.
@@ -167,6 +171,24 @@ export interface CaseInfo {
     image?: string;
     path: string;
     network?: string;
+    /**
+     * CLIs available INSIDE the container. A container case runs its agents in
+     * the container, so HOST CLI availability says nothing about what it can
+     * run. Absent = unknown (an owned container runs our base image, which ships
+     * every CLI), which the UI reads as "do not gate".
+     */
+    availableModes?: string[];
+    /**
+     * `false` for an ADOPTED container (mirror of `DockerCase.owned`); absent = owned.
+     *
+     * ⚠️ The UI needs this to read a FAILED container probe correctly. For an adopted
+     * case a missing container is a real fault worth reporting, because the user is the
+     * only one who can start it. For an owned case it is the NORMAL state before the
+     * first session: the container is created on demand by the launch chain, so treating
+     * "not found" as a fault there hid every agent mode behind an error telling the user
+     * to start a container Codeman was about to create itself.
+     */
+    owned?: boolean;
   };
 }
 

@@ -684,3 +684,39 @@ describe('referrer policy on proxied responses', () => {
     expect(headers['referrer-policy']).toBe('same-origin');
   });
 });
+
+describe('reverse-proxy base path', () => {
+  const BASE = '/codeman';
+  const BASED_PREFIX = `${BASE}/webview/${CAP}/`;
+
+  it('rides the mount into the iframe prefix', () => {
+    expect(proxyPrefixFor(CAP, BASE)).toBe(BASED_PREFIX);
+    expect(proxyPrefixFor(CAP, '')).toBe(PREFIX); // root unchanged
+  });
+
+  it('rewrites HTML (base tag, root-absolute attrs, shim) under the mount', () => {
+    const out = rewriteHtml('<html><head></head><body><img src="/logo.png"></body></html>', CAP, BASE);
+    expect(out).toContain(`<base href="${BASED_PREFIX}">`);
+    expect(out).toContain(`src="${BASED_PREFIX}logo.png"`);
+    // The runtime shim's rewrite target is the base-prefixed path.
+    expect(out).toContain(JSON.stringify(BASED_PREFIX));
+  });
+
+  it('rebases Set-Cookie Path onto the mounted prefix so the browser sends it back', () => {
+    expect(rewriteSetCookie('sid=abc; Path=/', CAP, true, BASE)).toContain(`Path=${BASED_PREFIX}`);
+    expect(rewriteSetCookie('sid=abc; HttpOnly', CAP, true, BASE)).toContain(`Path=${BASED_PREFIX}`);
+  });
+
+  it('rewrites a same-origin Location into the mounted prefix', () => {
+    const requestUrl = new URL('http://127.0.0.1:4000/app');
+    expect(rewriteLocation('/dashboard?x=1', requestUrl, CAP, BASE)).toBe(`${BASED_PREFIX}dashboard?x=1`);
+  });
+
+  it('extracts the capability from a browser Referer that carries the mount prefix', () => {
+    expect(capabilityFromReferer(`https://box.ts.net${BASED_PREFIX}page`, BASE)).toBe(CAP);
+    // A same-named sibling path must not be mistaken for the mount.
+    expect(capabilityFromReferer(`https://box.ts.net/codeman-docs/webview/${CAP}/page`, BASE)).toBeNull();
+    // Without the base arg the prefixed Referer no longer matches (documents why the arg exists).
+    expect(capabilityFromReferer(`https://box.ts.net${BASED_PREFIX}page`)).toBeNull();
+  });
+});

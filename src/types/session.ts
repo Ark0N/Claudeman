@@ -244,6 +244,33 @@ export interface DockerCase {
   containerWorkdir?: string;
   /** Container name (default codeman-case-<slug>). */
   container?: string;
+  /**
+   * Whether THIS Codeman created the container (mirror of `SessionRemote.owned`).
+   *
+   * - `true` (default for cases Codeman linked/quick-created): we own the
+   *   container; drift may recreate it, case-delete may `docker rm -f` it, and
+   *   the launch chain may create + start it.
+   * - `false` (ADOPTED: an already-running container the user built and runs
+   *   themselves): Codeman must never create, start, stop, restart or remove it.
+   *   The launch chain fails closed when the container is missing or not running
+   *   instead of touching its lifecycle, drift is not evaluated (there is no
+   *   `codeman.confighash` label to compare), and no credential seed is copied
+   *   into its HOME. Only the in-container tmux session is ever created or
+   *   killed — exactly the `owned:false` remote-SSH contract.
+   *
+   * Absent is treated as owned (cases persisted before this field existed were
+   * all created by us).
+   */
+  owned?: boolean;
+  /**
+   * CLIs found INSIDE the container by the adoption preflight. A container case
+   * runs its agents in the container, so host CLI availability says nothing about
+   * what this case can run — the base image ships every CLI, and an adopted
+   * container ships whatever its owner installed. Absent = unknown (owned cases,
+   * or a case linked before this field existed), which callers read as "do not
+   * gate".
+   */
+  availableModes?: SessionMode[];
   /** Last captured Claude conversation id, replayed via --resume on a fresh launch. */
   lastClaudeSessionId?: string;
 }
@@ -276,6 +303,19 @@ export interface SessionDocker {
   extraExecArgs?: string[];
   /** Stable hash of the drift-relevant create args (recreate-on-drift detection). */
   configHash?: string;
+  /**
+   * Whether the container's exec user is root. Claude Code REFUSES
+   * `--dangerously-skip-permissions` as root, and an adopted container's user
+   * belongs to its owner, so the flag is omitted rather than letting the pane
+   * die with a message only visible inside the container.
+   */
+  runsAsRoot?: boolean;
+  /**
+   * Mirror of `DockerCase.owned`, flattened onto the live session so every
+   * lifecycle decision (launch chain, drift, stop, remove) can see it without
+   * re-reading docker-cases.json. Absent = owned. See `DockerCase.owned`.
+   */
+  owned?: boolean;
 }
 
 /**
@@ -648,6 +688,15 @@ export interface SessionState {
    * again until the pane's own Enter is known.
    */
   lastSubmitAt?: number;
+  /**
+   * Claude conversations this pane has been on, oldest first, current last.
+   * Written ONLY from a first-hand `UserPromptSubmit`/`Stop` hook payload —
+   * never from the history correlation — so it cannot record a sibling pane's
+   * conversation. Persisted because `/clear` is otherwise unrecoverable: once
+   * the pane moves on, the predecessor id exists nowhere else, and the last
+   * entry is what re-pins `claudeSessionId` past `start()`'s three resets.
+   */
+  claudeSessionChain?: string[];
   /**
    * PTY-exit circuit breaker tripped — respawn blocked until an explicit restart
    * (COD-118). Runtime-only: never restored on boot (fresh server = fresh breaker).

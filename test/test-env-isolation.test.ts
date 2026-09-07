@@ -30,6 +30,7 @@ const STRIPPED_ENV_VARS: Array<[name: string, why: string]> = [
   ['CODEMAN_PASSWORD', 'auth from a running instance would make protected routes behave differently'],
   ['CODEMAN_USERNAME', 'same, and it changes which owner scoping resolves to'],
   ['CODEMAN_GESTURE', 'flips renderIndexHtml output and breaks byte-identity assertions'],
+  ['CODEMAN_BASE_URL', 'mounts the server under a sub-path and breaks the root-install byte-identity assertions'],
   ['CODEMAN_INSTANCE', 'moves the data dir to ~/.codeman-<name> and the tmux socket to codeman-<name>'],
   ['CODEMAN_DATA_DIR', 'ABSOLUTE override: bypasses the temp HOME and points the suite at a real data dir'],
   ['CODEMAN_TMUX_SOCKET', 'renames the socket resolveTmuxSocketName() returns'],

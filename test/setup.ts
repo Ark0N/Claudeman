@@ -41,6 +41,10 @@ delete process.env.CODEMAN_USERNAME;
 // __codemanGestureAvailable flag), breaking byte-identity assertions
 // (test/server-index-title.test.ts) when the shell exports CODEMAN_GESTURE=1.
 delete process.env.CODEMAN_GESTURE;
+// CODEMAN_BASE_URL (#381) is read by the WebServer constructor as a fallback; an
+// operator who exports it (exactly who the feature is for) would otherwise see the
+// root-install byte-identity assertions fail.
+delete process.env.CODEMAN_BASE_URL;
 
 // Instance selection is PROCESS-WIDE and is what `src/config/instance.ts` derives
 // both the data dir and the tmux socket from, so a shell that exports any of these

@@ -16,6 +16,7 @@ import { isAbsolute, join } from 'node:path';
 import { homedir } from 'node:os';
 import { dataPath } from './config/instance.js';
 import { casePath } from './config/cases-dir.js';
+import { assertValidBasePath } from './config/base-path.js';
 import { installAgentSkillInto, removeAgentSkillFrom, type AgentSkillApplyResult } from './hooks-config.js';
 import { getSessionManager } from './session-manager.js';
 import { getTaskQueue } from './task-queue.js';
@@ -843,6 +844,11 @@ function addWebLaunchOptions(cmd: Command): Command {
     .option('-H, --host <host>', 'Host to bind to', process.env.CODEMAN_HOST || '127.0.0.1')
     .option('-p, --port <port>', 'Port to listen on (env: CODEMAN_PORT)', process.env.CODEMAN_PORT || '3000')
     .option('--https', 'Enable HTTPS with self-signed certificate (only needed for remote access, not localhost)')
+    .option(
+      '--base-url <path>',
+      'Sub-path Codeman is mounted under behind a reverse proxy, e.g. /codeman (env: CODEMAN_BASE_URL)',
+      process.env.CODEMAN_BASE_URL || '/'
+    )
     .option('--title-hostname <hostname>', 'Override the hostname shown in the browser title')
     .option(
       '--allow-unauthenticated-network',
@@ -859,6 +865,7 @@ function toWebLaunchOptions(options: {
   host: string;
   port: string;
   https?: boolean;
+  baseUrl?: string;
   titleHostname?: string;
   allowUnauthenticatedNetwork?: boolean;
   multiuser?: boolean;
@@ -868,10 +875,18 @@ function toWebLaunchOptions(options: {
     console.error(palette.err(`✗ Invalid port: ${options.port}`));
     process.exit(1);
   }
+  let basePath: string;
+  try {
+    basePath = assertValidBasePath(options.baseUrl);
+  } catch (err) {
+    console.error(palette.err(`✗ ${err instanceof Error ? err.message : String(err)}`));
+    process.exit(1);
+  }
   return {
     host: options.host,
     port,
     https: !!options.https,
+    basePath,
     titleHostname: options.titleHostname,
     allowUnauthenticatedNetwork: !!options.allowUnauthenticatedNetwork,
     multiuser: !!options.multiuser,
@@ -961,14 +976,21 @@ webCmd.action(async (options) => {
   const https = launch.https;
   const titleHostname = options.titleHostname;
   const allowUnauthenticatedNetwork = launch.allowUnauthenticatedNetwork ?? false;
+  const basePath = launch.basePath ?? '';
+  // Single source of truth for subsystems that read it directly (e.g. renderers).
+  if (basePath) process.env.CODEMAN_BASE_URL = basePath;
   const displayHost = host === '0.0.0.0' ? 'localhost' : host;
 
-  console.log(palette.info(`Starting Codeman web interface on ${displayHost}:${port}${https ? ' (HTTPS)' : ''}...`));
+  console.log(
+    palette.info(
+      `Starting Codeman web interface on ${displayHost}:${port}${basePath ? basePath + '/' : ''}${https ? ' (HTTPS)' : ''}...`
+    )
+  );
 
   try {
     // The server prints its own "running at" line (it also covers the daemon and
     // service launch paths), so this one used to be a duplicate of it.
-    const server = await startWebServer(port, https, false, host, titleHostname, allowUnauthenticatedNetwork);
+    const server = await startWebServer(port, https, false, host, titleHostname, allowUnauthenticatedNetwork, basePath);
     if (https) {
       console.log(palette.warn('  Note: Accept the self-signed certificate in your browser on first visit'));
     }

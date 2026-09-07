@@ -3333,8 +3333,10 @@ html:is([data-skin="paper-gray"], [data-skin="solarized-light"], [data-skin="cat
      recessed tray and matching pill geometry instead of reading as a fat
      accent pill parked beside a stray × glyph. Tray colors come from skin
      tokens, never a hardcoded black alpha, or the light skins get a grey slab.
-     `:has()` keeps the tray off the two sheets that carry a lone × (Session
-     Options and Add Case save from inside their own forms). */
+     `:has()` keeps the tray off Session Options, the one sheet left carrying a
+     lone × because it saves from inside its own per-section forms. Add Case
+     now has a header save of its own (its footer is hidden below 860px, so
+     that button is the only way to submit it there), and picks up the tray. */
   :is(#appSettingsModal, #sessionOptionsModal, #createCaseModal) .set-head-actions:has(.set-head-save) {
     padding: 3px;
     border: 1px solid var(--border);
@@ -3351,6 +3353,15 @@ html:is([data-skin="paper-gray"], [data-skin="solarized-light"], [data-skin="cat
     height: 36px;
     padding: 0 16px;
     font-size: 0.86rem;
+  }
+
+  /* Add Case's pending state has to show on the header button: below 860px it is
+     the only submit control (the footer is hidden), and the #caseModalSubmit
+     .loading rule in the phone block dims a button nobody can see. Measured at
+     390px before this: header opacity 1 for the whole clone, hidden footer 0.6. */
+  #createCaseModal .set-head-save.loading {
+    opacity: 0.6;
+    pointer-events: none;
   }
 
   :is(#appSettingsModal, #sessionOptionsModal, #createCaseModal) .set-head-actions .modal-close {

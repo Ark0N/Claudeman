@@ -3430,7 +3430,7 @@ Object.assign(CodemanApp.prototype, {
       const nameClass = isDir ? 'file-tree-name directory' : 'file-tree-name';
 
       const downloadBtn = !isDir
-        ? `<a class="file-tree-download" href="${escapeHtml(`/api/sessions/${encodeURIComponent(owner)}/file-raw?path=${encodeURIComponent(node.path)}&download=true`)}" title="Download" onclick="event.stopPropagation()">&#x2B07;</a>`
+        ? `<a class="file-tree-download" href="${escapeHtml(CodemanBase.url(`/api/sessions/${encodeURIComponent(owner)}/file-raw?path=${encodeURIComponent(node.path)}&download=true`))}" title="Download" onclick="event.stopPropagation()">&#x2B07;</a>`
         : '';
 
       html.push(`
@@ -3605,7 +3605,7 @@ Object.assign(CodemanApp.prototype, {
             : '';
           const nameClass = isDir ? 'file-tree-name directory' : 'file-tree-name';
           const downloadBtn = !isDir
-            ? `<a class="file-tree-download" href="${escapeHtml(`/api/sessions/${ownerPath}/file-raw?path=${encodeURIComponent(match.path)}&download=true`)}" title="Download" onclick="event.stopPropagation()">&#x2B07;</a>`
+            ? `<a class="file-tree-download" href="${escapeHtml(CodemanBase.url(`/api/sessions/${ownerPath}/file-raw?path=${encodeURIComponent(match.path)}&download=true`))}" title="Download" onclick="event.stopPropagation()">&#x2B07;</a>`
             : '';
           return `
             <div class="file-tree-item" data-path="${escapeHtml(match.path)}" data-type="${escapeHtml(match.type)}" data-owner="${escapeHtml(ownerSessionId)}">
@@ -4004,18 +4004,20 @@ Object.assign(CodemanApp.prototype, {
     // (html/htm arrive as a download there by design — file-raw serves them
     // attachment-only so widening READ never widens RUN.)
     const officeDoc = ext === 'docx' || ext === 'pptx';
-    this.filePreviewDetachUrl = attachmentId
-      ? `/api/sessions/${sessionId}/attachments/${encodeURIComponent(attachmentId)}/${officeDoc ? 'preview' : 'raw'}`
-      : officeDoc
-        ? `/api/sessions/${sessionId}/file-preview?path=${encodeURIComponent(filePath)}`
-        : `/api/sessions/${sessionId}/file-raw?path=${encodeURIComponent(filePath)}`;
+    this.filePreviewDetachUrl = CodemanBase.url(
+      attachmentId
+        ? `/api/sessions/${sessionId}/attachments/${encodeURIComponent(attachmentId)}/${officeDoc ? 'preview' : 'raw'}`
+        : officeDoc
+          ? `/api/sessions/${sessionId}/file-preview?path=${encodeURIComponent(filePath)}`
+          : `/api/sessions/${sessionId}/file-raw?path=${encodeURIComponent(filePath)}`
+    );
     if (detachBtn) detachBtn.hidden = false;
 
     // Registered attachment: render straight from its by-id routes — images and
     // PDFs inline, Office docs via the server-converted PDF preview, text fetched
     // raw. (Workspace-path previews fall through to the file-content endpoint.)
     if (attachmentId) {
-      const base = `/api/sessions/${sessionId}/attachments/${encodeURIComponent(attachmentId)}`;
+      const base = CodemanBase.url(`/api/sessions/${sessionId}/attachments/${encodeURIComponent(attachmentId)}`);
       const IMAGE_EXTS = new Set(['png', 'jpg', 'jpeg', 'gif', 'webp', 'bmp', 'svg']);
       // VIDEO/AUDIO mirror VIDEO_ATTACHMENT_EXTENSIONS/AUDIO_ATTACHMENT_EXTENSIONS
       // (src/attachment-registry.ts, the single source); the frontend cannot import
@@ -4073,13 +4075,13 @@ Object.assign(CodemanApp.prototype, {
     // to file-content below, which would dump the binary bytes as mojibake.
     if (ext === 'docx' || ext === 'pptx') {
       footerEl.textContent = ext.toUpperCase();
-      const previewSrc = `/api/sessions/${sessionId}/file-preview?path=${encodeURIComponent(filePath)}`;
+      const previewSrc = CodemanBase.url(`/api/sessions/${sessionId}/file-preview?path=${encodeURIComponent(filePath)}`);
       bodyEl.innerHTML = `<iframe src="${escapeHtml(previewSrc)}" title="${escapeHtml(filePath)}"></iframe>`;
       return;
     }
     if (ext === 'pdf') {
       footerEl.textContent = 'PDF';
-      const rawSrc = `/api/sessions/${sessionId}/file-raw?path=${encodeURIComponent(filePath)}`;
+      const rawSrc = CodemanBase.url(`/api/sessions/${sessionId}/file-raw?path=${encodeURIComponent(filePath)}`);
       bodyEl.innerHTML = `<iframe src="${escapeHtml(rawSrc)}" title="${escapeHtml(filePath)}"></iframe>`;
       return;
     }
@@ -4113,19 +4115,19 @@ Object.assign(CodemanApp.prototype, {
       const data = result.data;
 
       if (data.type === 'image') {
-        bodyEl.innerHTML = `<img src="${data.url}" alt="${escapeHtml(filePath)}">`;
+        bodyEl.innerHTML = `<img src="${escapeHtml(CodemanBase.url(data.url))}" alt="${escapeHtml(filePath)}">`;
         footerEl.textContent = `${this.formatFileSize(data.size)} \u2022 ${data.extension}`;
       } else if (data.type === 'video') {
         // playsinline: iOS otherwise hijacks playback into its fullscreen
         // player, which leaves the overlay behind it and its own close button
         // as the only way back.
-        bodyEl.innerHTML = `<video src="${escapeHtml(data.url)}" controls autoplay playsinline preload="metadata"></video>`;
+        bodyEl.innerHTML = `<video src="${escapeHtml(CodemanBase.url(data.url))}" controls autoplay playsinline preload="metadata"></video>`;
         footerEl.textContent = `${this.formatFileSize(data.size)} \u2022 ${data.extension}`;
       } else if (data.type === 'audio') {
-        bodyEl.innerHTML = `<audio src="${escapeHtml(data.url)}" controls autoplay preload="metadata"></audio>`;
+        bodyEl.innerHTML = `<audio src="${escapeHtml(CodemanBase.url(data.url))}" controls autoplay preload="metadata"></audio>`;
         footerEl.textContent = `${this.formatFileSize(data.size)} \u2022 ${data.extension}`;
       } else if (data.type === 'binary') {
-        const downloadHref = `/api/sessions/${sessionId}/file-raw?path=${encodeURIComponent(filePath)}&download=true`;
+        const downloadHref = CodemanBase.url(`/api/sessions/${sessionId}/file-raw?path=${encodeURIComponent(filePath)}&download=true`);
         bodyEl.innerHTML = `<div class="binary-message">Binary file (${this.formatFileSize(data.size)})<br>Cannot preview<br><a href="${escapeHtml(downloadHref)}" download>Download</a></div>`;
         footerEl.textContent = data.extension || 'binary';
       } else {
@@ -4422,9 +4424,11 @@ Object.assign(CodemanApp.prototype, {
   },
 
   openAttachmentInNewTab(sessionId, filePath, attachmentId = null) {
-    const url = attachmentId
-      ? `/api/sessions/${sessionId}/attachments/${encodeURIComponent(attachmentId)}/raw`
-      : `/api/sessions/${sessionId}/file-raw?path=${encodeURIComponent(filePath)}`;
+    const url = CodemanBase.url(
+      attachmentId
+        ? `/api/sessions/${sessionId}/attachments/${encodeURIComponent(attachmentId)}/raw`
+        : `/api/sessions/${sessionId}/file-raw?path=${encodeURIComponent(filePath)}`
+    );
     window.open(url, '_blank');
   },
 
@@ -4460,19 +4464,22 @@ Object.assign(CodemanApp.prototype, {
     const stack = this.ensureAttachmentCardStack();
     const session = this.sessions.get(sessionId);
     const sessionName = session?.name || sessionId.substring(0, 8);
-    const attachmentRawUrl =
+    const attachmentRawUrl = CodemanBase.url(
       rawUrl ||
-      (attachmentId
-        ? `/api/sessions/${sessionId}/attachments/${encodeURIComponent(attachmentId)}/raw`
-        : `/api/sessions/${sessionId}/file-raw?path=${encodeURIComponent(filePath)}`);
-    const attachmentPreviewUrl =
+        (attachmentId
+          ? `/api/sessions/${sessionId}/attachments/${encodeURIComponent(attachmentId)}/raw`
+          : `/api/sessions/${sessionId}/file-raw?path=${encodeURIComponent(filePath)}`)
+    );
+    const attachmentPreviewUrl = CodemanBase.url(
       previewUrl ||
-      (attachmentId ? `/api/sessions/${sessionId}/attachments/${encodeURIComponent(attachmentId)}/preview` : null);
-    const attachmentThumbnailUrl =
+        (attachmentId ? `/api/sessions/${sessionId}/attachments/${encodeURIComponent(attachmentId)}/preview` : null)
+    );
+    const attachmentThumbnailUrl = CodemanBase.url(
       thumbnailUrl ||
-      (attachmentId
-        ? `/api/sessions/${sessionId}/attachments/${encodeURIComponent(attachmentId)}/thumbnail`
-        : `/api/sessions/${sessionId}/file-thumbnail?path=${encodeURIComponent(filePath)}`);
+        (attachmentId
+          ? `/api/sessions/${sessionId}/attachments/${encodeURIComponent(attachmentId)}/thumbnail`
+          : `/api/sessions/${sessionId}/file-thumbnail?path=${encodeURIComponent(filePath)}`)
+    );
     const downloadUrl = attachmentId ? `${attachmentRawUrl}?download=true` : `${attachmentRawUrl}&download=true`;
     const typeLabel = (extension || attachmentType || 'file').toUpperCase();
 
@@ -4736,7 +4743,7 @@ Object.assign(CodemanApp.prototype, {
       .join(' • ');
     const thumb =
       item.thumbnailUrl && !item.missing
-        ? `<img class="attachment-history-thumb-img" src="${escapeHtml(item.thumbnailUrl)}" alt="">`
+        ? `<img class="attachment-history-thumb-img" src="${escapeHtml(CodemanBase.url(item.thumbnailUrl))}" alt="">`
         : '';
     const disabled = item.missing ? 'disabled aria-disabled="true"' : '';
     return `
@@ -4776,7 +4783,7 @@ Object.assign(CodemanApp.prototype, {
     const item = this.getAttachmentHistoryItem(itemId);
     if (!item || item.missing) return;
     if (item.rawUrl || item.url) {
-      window.open(item.rawUrl || item.url, '_blank');
+      window.open(CodemanBase.url(item.rawUrl || item.url), '_blank');
       return;
     }
     this.openAttachmentInNewTab(item.sessionId, item.relativePath || item.fileName, item.attachmentId || null);
@@ -4785,7 +4792,7 @@ Object.assign(CodemanApp.prototype, {
   downloadAttachmentHistoryItem(itemId) {
     const item = this.getAttachmentHistoryItem(itemId);
     if (!item || item.missing || !item.downloadUrl) return;
-    window.open(item.downloadUrl, '_blank');
+    window.open(CodemanBase.url(item.downloadUrl), '_blank');
   },
 
   reshowAttachmentCard(itemId) {
@@ -4931,7 +4938,7 @@ Object.assign(CodemanApp.prototype, {
 
     // Connect to SSE stream
     const eventSource = new EventSource(
-      `/api/sessions/${sessionId}/tail-file?path=${encodeURIComponent(filePath)}&lines=50`
+      CodemanBase.url(`/api/sessions/${sessionId}/tail-file?path=${encodeURIComponent(filePath)}&lines=50`)
     );
 
     eventSource.onmessage = (e) => {
@@ -5073,7 +5080,7 @@ Object.assign(CodemanApp.prototype, {
 
     // Build image URL using the existing file-raw endpoint
     // Use relativePath (path from working dir) instead of fileName (basename) for subdirectory images
-    const imageUrl = `/api/sessions/${sessionId}/file-raw?path=${encodeURIComponent(relativePath || fileName)}`;
+    const imageUrl = CodemanBase.url(`/api/sessions/${sessionId}/file-raw?path=${encodeURIComponent(relativePath || fileName)}`);
 
     // Create window element
     const win = document.createElement('div');

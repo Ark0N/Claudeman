@@ -10,6 +10,7 @@ import { Readable } from 'node:stream';
 import { createRouteTestHarness, type RouteTestHarness } from './_route-test-utils.js';
 import { registerFileRoutes } from '../../src/web/routes/file-routes.js';
 import { ApiErrorCode } from '../../src/types.js';
+import { CASES_DIR } from '../../src/web/route-helpers.js';
 
 // Mock fs/promises for file operations
 vi.mock('node:fs/promises', () => ({
@@ -112,6 +113,20 @@ describe('file-routes', () => {
         ['src', 'directory', undefined],
         ['notes.txt', 'file', 'text'],
       ]);
+    });
+
+    it('defaults to the Codeman Cases root, not Home, when linking a case with no path chosen yet', async () => {
+      // The "Link Existing" case picker opens with an empty path and no
+      // sessionId. `Home` and `Codeman Cases` are unrelated bind mounts under
+      // Docker, so falling back to whichever root happened to be listed first
+      // could open the picker somewhere with no cases in it at all — and, worse,
+      // make a stale directory from a since-changed CODEMAN_CASES_PATH look like
+      // a normal thing to stumble across while browsing for one to link.
+      const res = await harness.app.inject({ method: 'GET', url: '/api/filesystem/browse' });
+
+      expect(res.statusCode).toBe(200);
+      const body = JSON.parse(res.body);
+      expect(body.data.path).toBe(CASES_DIR);
     });
 
     it('rejects paths outside the configured roots', async () => {

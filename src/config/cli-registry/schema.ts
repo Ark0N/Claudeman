@@ -322,7 +322,7 @@ const commandLine = z
   );
 
 const overlayTargetSchema = z.union([
-  z.object({ command: commandLine.optional() }).strict(),
+  z.object({ command: commandLine.optional(), rootCommand: commandLine.optional() }).strict(),
   z.object({ disabled: z.literal(true) }).strict(),
 ]);
 

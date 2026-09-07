@@ -80,7 +80,7 @@ try {
   const prev = localStorage.getItem('codeman-crash-diag');
   if (prev) {
     console.log('[CRASH-DIAG] Previous session breadcrumbs:\n' + prev);
-    navigator.sendBeacon('/api/crash-diag', JSON.stringify({ data: prev, id: _crashDiag._pageId + '-prev' }));
+    navigator.sendBeacon(CodemanBase.url('/api/crash-diag'), JSON.stringify({ data: prev, id: _crashDiag._pageId + '-prev' }));
   }
 } catch {}
 _crashDiag.log('PAGE LOAD');
@@ -89,7 +89,7 @@ _crashDiag.log('PAGE LOAD');
 function _crashDiagBeacon() {
   try {
     if (_crashDiag._entries.length > 0) {
-      navigator.sendBeacon('/api/crash-diag', JSON.stringify({ data: _crashDiag._entries.join('\n'), id: _crashDiag._pageId }));
+      navigator.sendBeacon(CodemanBase.url('/api/crash-diag'), JSON.stringify({ data: _crashDiag._entries.join('\n'), id: _crashDiag._pageId }));
     }
   } catch {}
 }
@@ -1268,7 +1268,11 @@ class CodemanApp {
       if (typeof window !== 'undefined' && typeof window.__CODEMAN_SOLO__ === 'string' && window.__CODEMAN_SOLO__) {
         return window.__CODEMAN_SOLO__;
       }
-      const m = location.pathname.match(/^\/session\/([^/]+)\/?$/);
+      // Strip the reverse-proxy base so the match works under a sub-path mount.
+      const base = window.CodemanBase?.base || '';
+      let path = location.pathname;
+      if (base && path.startsWith(base)) path = path.slice(base.length) || '/';
+      const m = path.match(/^\/session\/([^/]+)\/?$/);
       return m ? decodeURIComponent(m[1]) : null;
     } catch { return null; }
   }
@@ -1293,7 +1297,7 @@ class CodemanApp {
     if (this.detachedSessions.has(id) && this._raiseDetached(id)) return;
     const features = 'width=960,height=680,menubar=no,toolbar=no,location=no,status=no';
     let win = null;
-    try { win = window.open('/session/' + encodeURIComponent(id), 'codeman-session-' + id, features); } catch {}
+    try { win = window.open(CodemanBase.url('/session/' + encodeURIComponent(id)), 'codeman-session-' + id, features); } catch {}
     if (!win) {
       this.showToast?.('Pop-out blocked — allow popups for this site to detach a session', 'error');
       return;
@@ -1545,7 +1549,7 @@ class CodemanApp {
     // regardless of filter (server side).
     const _sseParams = new URLSearchParams({ clientId: this._clientId });
     if (this.activeSessionId) _sseParams.set('sessions', this.activeSessionId);
-    this.eventSource = new EventSource(`/api/events?${_sseParams.toString()}`);
+    this.eventSource = new EventSource(CodemanBase.url(`/api/events?${_sseParams.toString()}`));
 
     // Store all event listeners for cleanup on reconnect.
     //
@@ -2183,15 +2187,26 @@ class CodemanApp {
   }
 
   /** Build one response-viewer message so the brief and full views share markup and CSS. */
-  _buildResponseViewerMessage(text, role, agentLabel) {
+  _buildResponseViewerMessage(text, role, agentLabel, meta) {
     const div = document.createElement('div');
     const isUser = role === 'user';
     div.className = 'rv-message ' + (isUser ? 'rv-msg-user' : 'rv-msg-assistant');
+    // Consecutive messages from one speaker inside one turn are segments of a
+    // single utterance: one badge, a hairline seam. Claude emits a median of 3
+    // messages per turn (p90 11, max 51), so a badge per message would be the
+    // card spam the old concatenation was introduced to avoid. `meta` is
+    // optional so the brief view's 3-argument call keeps its exact shape.
+    const continuation = !!(meta && meta.continuation);
+    if (continuation) div.classList.add('rv-msg-cont');
+    if (meta && meta.kind) div.dataset.kind = meta.kind;
+    if (meta && meta.queued) div.dataset.queued = '1';
 
-    const roleBadge = document.createElement('div');
-    roleBadge.className = 'rv-role ' + (isUser ? 'rv-role-user' : 'rv-role-assistant');
-    roleBadge.textContent = isUser ? 'You' : agentLabel;
-    div.appendChild(roleBadge);
+    if (!continuation) {
+      const roleBadge = document.createElement('div');
+      roleBadge.className = 'rv-role ' + (isUser ? 'rv-role-user' : 'rv-role-assistant');
+      roleBadge.textContent = isUser ? 'You' : agentLabel;
+      div.appendChild(roleBadge);
+    }
 
     const renderedText = document.createElement('div');
     renderedText.className = 'rv-text';
@@ -2351,19 +2366,49 @@ class CodemanApp {
       if (!body) return;
 
       if (messages.length === 0) {
-        body.textContent = 'No conversation history available';
+        // Never destroy what the eye button already rendered: the brief view has
+        // a terminal-buffer fallback (see toggleResponseViewer) that this
+        // endpoint does not, so an empty full-context result must not wipe a
+        // real answer the user is reading.
+        // ⚠️ Idempotent, because More deliberately stays live here: the branch
+        // returns before the button is hidden so a transcript that appears a
+        // moment later can still be loaded, and appending would then stack a
+        // second identical notice on every retry.
+        // `:scope >` keeps the lookup off model-rendered markdown inside .rv-text.
+        let notice = body.querySelector(':scope > .rv-notice');
+        if (!notice) {
+          notice = document.createElement('div');
+          notice.className = 'rv-notice';
+          body.appendChild(notice);
+        }
+        const emptyText = 'No full conversation history available for this session';
+        notice.textContent = window.codemanT?.(emptyText) || emptyText;
         return;
       }
 
       // Render conversation thread
       const agentLabel = this._getResponseViewerAgentLabel();
       body.innerHTML = '';
+      let previous = null;
       for (const msg of messages) {
-        body.appendChild(this._buildResponseViewerMessage(msg.text, msg.role, agentLabel));
+        // ⚠️ A numeric `turn` is REQUIRED, never same-role adjacency alone.
+        // Only the Claude reader emits turns; Codex and the external-CLI pane
+        // parser emit adjacent assistant/response blocks with no turn at all, and
+        // an older server emits none either — all three must keep rendering one
+        // badged card per message exactly as they do today.
+        const continuation =
+          !!previous && previous.role === msg.role && typeof msg.turn === 'number' && previous.turn === msg.turn;
+        body.appendChild(this._buildResponseViewerMessage(msg.text, msg.role, agentLabel, { ...msg, continuation }));
+        previous = msg;
       }
       this._bindResponseViewerInteractions(body);
 
-      if (title) title.textContent = `Conversation (${messages.length} messages)`;
+      const turns = new Set(messages.filter((msg) => typeof msg.turn === 'number').map((msg) => msg.turn)).size;
+      if (title) {
+        title.textContent = turns
+          ? `Conversation (${messages.length} messages, ${turns} turns)`
+          : `Conversation (${messages.length} messages)`;
+      }
       if (moreBtn) moreBtn.style.display = 'none';
       // Scroll to bottom (latest message)
       body.scrollTop = body.scrollHeight;
@@ -2753,7 +2798,7 @@ class CodemanApp {
     // up to the limit).
     const cid = this._clientId ? `${this._clientId}:${this._wsTabNonce}` : '';
     const cidQuery = cid ? `?cid=${encodeURIComponent(cid)}` : '';
-    const url = `${proto}//${location.host}/ws/sessions/${sessionId}/terminal${cidQuery}`;
+    const url = `${proto}//${location.host}${CodemanBase.base}/ws/sessions/${sessionId}/terminal${cidQuery}`;
     const ws = new WebSocket(url);
     this._ws = ws;
     this._wsSessionId = sessionId;

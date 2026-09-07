@@ -23,6 +23,63 @@
 // Codeman — Shared constants and utility functions for frontend modules
 
 // ═══════════════════════════════════════════════════════════════
+// Reverse-proxy base path
+// ═══════════════════════════════════════════════════════════════
+// When Codeman is served behind a reverse proxy under a sub-path (e.g. /codeman/),
+// the server injects `window.__CODEMAN_BASE__` (normalized: '' for root, or '/foo').
+// The `<base href>` tag in index.html already rewrites the RELATIVE asset refs, but
+// every URL the frontend builds at RUNTIME is root-absolute (`/api/...`, `/ws/...`)
+// and root-absolute URLs ignore `<base>` — so those must be prefixed here instead.
+// Rather than touch ~190 call sites, all runtime URL construction routes through this
+// ONE choke point: `CodemanBase.url()` is the route builder, and a thin wrapper over
+// `fetch` applies it transparently. The handful of EventSource/WebSocket sites call
+// `CodemanBase.url()` / `CodemanBase.base` explicitly. No-op when mounted at root.
+const CodemanBase = (function () {
+  // `window` is absent in some unit-test vm contexts that load this module in
+  // isolation; guard so the module still evaluates (base degrades to root).
+  const _win = typeof window !== 'undefined' ? window : undefined;
+  const base = String((_win && _win.__CODEMAN_BASE__) || '').replace(/\/+$/, '');
+  /**
+   * Prefix a root-absolute application path with the mount base. Leaves untouched:
+   * relative paths and fragments/queries (resolved against `<base>`), protocol-relative
+   * (`//host`) and absolute URLs, and paths already carrying the prefix.
+   */
+  function url(path) {
+    if (!base) return path;
+    if (typeof path !== 'string' || path.length === 0) return path;
+    if (path[0] !== '/') return path; // relative / fragment / query
+    if (path[1] === '/') return path; // protocol-relative
+    if (path === base || path.startsWith(base + '/') || path.startsWith(base + '?')) return path;
+    return base + path;
+  }
+  return { base, url };
+})();
+if (typeof window !== 'undefined') window.CodemanBase = CodemanBase;
+
+// Transparently prefix root-absolute app paths on every fetch, so the many
+// `/api/...` string literals across the frontend need no per-call edit.
+if (typeof window !== 'undefined' && CodemanBase.base && typeof window.fetch === 'function') {
+  const _origFetch = window.fetch.bind(window);
+  window.fetch = function (input, init) {
+    if (typeof input === 'string') return _origFetch(CodemanBase.url(input), init);
+    if (typeof Request !== 'undefined' && input instanceof Request) {
+      try {
+        const u = new URL(input.url);
+        if (u.origin === location.origin) {
+          const prefixed = CodemanBase.url(u.pathname);
+          if (prefixed !== u.pathname) {
+            return _origFetch(new Request(u.origin + prefixed + u.search + u.hash, input), init);
+          }
+        }
+      } catch (_e) {
+        /* not a parseable URL — fall through */
+      }
+    }
+    return _origFetch(input, init);
+  };
+}
+
+// ═══════════════════════════════════════════════════════════════
 // Web Push Utilities
 // ═══════════════════════════════════════════════════════════════
 
@@ -958,6 +1015,7 @@ const SSE_EVENTS = {
   HOOK_AGENT_WORKING: 'hook:agent_working',
   HOOK_TEAMMATE_IDLE: 'hook:teammate_idle',
   HOOK_TASK_COMPLETED: 'hook:task_completed',
+  HOOK_PROMPT_SUBMITTED: 'hook:prompt_submitted',
 
   // Approvals Inbox
   APPROVAL_PENDING: 'approval:pending',

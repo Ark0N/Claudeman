@@ -424,6 +424,11 @@ export function sanitizeHookData(data: Record<string, unknown> | null | undefine
     'stop_hook_active',
     'transcript_path',
     'message',
+    // UserPromptSubmit identity fields. `prompt` is deliberately NOT here: the
+    // prompt text would land in the SSE broadcast, and Read My Mind already
+    // captures intent through transcript-watcher.
+    'prompt_id',
+    'source',
   ];
 
   for (const key of allowedKeys) {

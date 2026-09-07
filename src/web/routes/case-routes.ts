@@ -13,7 +13,7 @@ import fs from 'node:fs/promises';
 import { join, resolve, basename } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { homedir } from 'node:os';
-import type { ApiResponse, CaseInfo, DockerHost, RemoteSessionInfo, SessionDocker } from '../../types.js';
+import type { ApiResponse, CaseInfo, DockerHost, RemoteSessionInfo, SessionDocker, SessionMode } from '../../types.js';
 import { ApiErrorCode, createErrorResponse, getErrorMessage } from '../../types.js';
 import {
   CreateCaseSchema,
@@ -24,6 +24,9 @@ import {
   RemoteCaseLinkSchema,
   RemoteHostSchema,
   DockerCaseLinkSchema,
+  DockerCaseAdoptSchema,
+  DockerAdoptPreflightSchema,
+  DockerBrowseSchema,
   DockerHostSchema,
   DockerExportSchema,
   DockerImportSchema,
@@ -66,6 +69,10 @@ import {
   DEFAULT_AGENT_IMAGE,
   dockerContainerName,
   dockerDisplayPath,
+  probeAdoptableContainer,
+  listDockerContainers,
+  browseInContainer,
+  dockerAdoptProbeModes,
   readDockerCases,
   readDockerHosts,
   removeDockerContainer,
@@ -73,6 +80,7 @@ import {
   writeDockerCases,
   writeDockerHosts,
 } from '../../docker-hosts.js';
+import type { AdoptedContainerProbe, DockerBrowseResult, DockerContainerInfo } from '../../docker-hosts.js';
 import { buildDockerRemoveCommand } from '../../tmux-manager.js';
 import {
   checkRemoteTmuxAvailable,
@@ -291,6 +299,8 @@ export function registerCaseRoutes(app: FastifyInstance, ctx: EventPort & Config
           image: host.image,
           path: dockerCase.hostWorkspacePath,
           network: host.network ?? 'bridge',
+          ...(dockerCase.availableModes ? { availableModes: dockerCase.availableModes } : {}),
+          ...(dockerCase.owned === false ? { owned: false } : {}),
         },
       };
       const existingIndex = cases.findIndex((item) => item.name === dockerCase.name);
@@ -771,6 +781,191 @@ export function registerCaseRoutes(app: FastifyInstance, ctx: EventPort & Config
     }
   );
 
+  /**
+   * ADOPT an already-running container (`owned: false`). The mirror of the
+   * remote-SSH attach path: Codeman execs into a container the user built and
+   * runs, and never creates, starts, stops, restarts or removes it.
+   *
+   * Everything here is read-only toward the container. The preflight refuses at
+   * LINK time — missing, stopped, or no tmux inside — because the alternative is
+   * failing at session launch, where the only ways out would be a dead pane or
+   * starting a container we do not own. There is no image gate and no
+   * `ensureCaseImage`: adoption never runs `docker create`, so the container's
+   * image is the user's business.
+   */
+  app.post(
+    '/api/cases/docker-adopt',
+    async (req, reply): Promise<ApiResponse<{ case: unknown; image?: string; availableModes?: SessionMode[] }>> => {
+      // ⚠️ Admin-only in multi-user mode, unlike `docker-link` right above. Linking
+      // creates OUR container, whose only bind mount is a workspace `isWorkingDirAllowed`
+      // has already confined. Adoption names a container someone else built, and its
+      // mounts are whatever its owner gave it — a container mounting `/` hands the
+      // adopter a shell over the whole host, which is exactly the workspace scoping this
+      // mode exists to enforce. Same machine-level reasoning as the docker HOST routes.
+      const denied = adminOnly(req, reply);
+      if (denied) return denied;
+      const dockerCase = {
+        ...parseBody(DockerCaseAdoptSchema, req.body),
+        type: 'docker' as const,
+        owner: ownerFor(req),
+        owned: false as const,
+      };
+      const host = (await readDockerHosts(CODEMAN_CONFIG_DIR)).find((item) => item.id === dockerCase.hostId);
+      if (!host) return createErrorResponse(ApiErrorCode.NOT_FOUND, 'Docker host not found');
+
+      const linkedCases = await readLinkedCases();
+      const dockerCases = await readDockerCases(CODEMAN_CONFIG_DIR);
+      if (
+        dockerCases.some((item) => item.name === dockerCase.name) ||
+        linkedCases[dockerCase.name] ||
+        existsSync(join(resolveCasesDir(getAuthUser(req)), dockerCase.name))
+      ) {
+        return createErrorResponse(ApiErrorCode.ALREADY_EXISTS, 'Case already exists');
+      }
+      // Two cases must never share one adopted container: session close kills the
+      // in-container tmux by session id, but a shared adoption would let one case's
+      // teardown and another's launch race over the same tmux server.
+      const container = dockerCase.container;
+      if (dockerCases.some((item) => (item.container ?? dockerContainerName(item.name)) === container)) {
+        return createErrorResponse(ApiErrorCode.ALREADY_EXISTS, `Container "${container}" is already linked to a case`);
+      }
+
+      if (!isWorkingDirAllowed(getAuthUser(req), dockerCase.hostWorkspacePath)) {
+        return createErrorResponse(ApiErrorCode.FORBIDDEN, 'hostWorkspacePath is outside your workspace');
+      }
+      // The workspace must ALREADY exist: it mirrors a path inside a container we
+      // did not create, so silently mkdir-ing it would invent a host directory that
+      // does not correspond to whatever is actually mounted there.
+      if (!existsSync(dockerCase.hostWorkspacePath)) {
+        return createErrorResponse(
+          ApiErrorCode.INVALID_INPUT,
+          'hostWorkspacePath does not exist. Adoption mirrors an existing container, so point this at the real host directory already mounted into it.'
+        );
+      }
+
+      const availability = await checkDockerAvailable(host.engine);
+      if (!availability.ok) {
+        return createErrorResponse(
+          ApiErrorCode.OPERATION_FAILED,
+          availability.error || 'docker daemon is not available'
+        );
+      }
+      // The container workdir is validated INSIDE the container. It defaults to
+      // hostWorkspacePath only because that is what an owned container's bind
+      // mount guarantees; adoption mounts nothing, so the probe has to prove it.
+      const adoptDocker = toSessionDocker(host, dockerCase);
+      const probe = await probeAdoptableContainer(adoptDocker, dockerAdoptProbeModes(), adoptDocker.containerWorkdir);
+      if (!probe.ok) {
+        return createErrorResponse(ApiErrorCode.OPERATION_FAILED, probe.error || 'container is not adoptable');
+      }
+
+      // Persist what the container actually has: the run-mode picker gates on
+      // HOST CLIs, which is the wrong question for a case whose agents run inside
+      // a container the host knows nothing about.
+      const adoptedCase = { ...dockerCase, availableModes: probe.availableModes };
+      await writeDockerCases(CODEMAN_CONFIG_DIR, [...dockerCases, adoptedCase]);
+      ctx.broadcast(SseEvent.CaseLinked, {
+        name: adoptedCase.name,
+        path: adoptedCase.hostWorkspacePath,
+        type: 'docker',
+      });
+      return {
+        success: true,
+        data: { case: adoptedCase, image: probe.image, availableModes: probe.availableModes },
+      };
+    }
+  );
+
+  /**
+   * Preflight an existing container WITHOUT linking anything, so the UI can tell
+   * the user "not running" / "no tmux" / "codex present, claude missing" before
+   * they commit to a case name. Read-only; never touches container lifecycle.
+   */
+  /**
+   * Containers on the host's engine, for the adoption picker. Read-only and
+   * best-effort (mirror of the remote `:hostId/sessions` discovery route): an
+   * unreachable daemon yields an empty list rather than an error, because the
+   * container name is a free-text field the user can always type by hand.
+   */
+  app.get(
+    '/api/docker-hosts/:hostId/containers',
+    async (req, reply): Promise<ApiResponse<{ containers: DockerContainerInfo[] }>> => {
+      // Enumerating every container on the engine is machine-level information (names,
+      // images, uptime), so it follows the docker-host policy rather than the case one.
+      const denied = adminOnly(req, reply);
+      if (denied) return denied;
+      const { hostId } = req.params as { hostId: string };
+      const host = (await readDockerHosts(CODEMAN_CONFIG_DIR)).find((item) => item.id === hostId);
+      if (!host) return createErrorResponse(ApiErrorCode.NOT_FOUND, 'Docker host not found');
+      const containers = await listDockerContainers({
+        engine: host.engine ?? 'docker',
+        context: host.context,
+        daemonHost: host.daemonHost,
+      });
+      return { success: true, data: { containers } };
+    }
+  );
+
+  /**
+   * Browse a directory INSIDE a container, for the adoption form's
+   * container-workdir picker. The host picker cannot answer this: for an adopted
+   * container nothing is mounted at a matching host path, so the field would
+   * otherwise be typed blind. Read-only — one `ls` through `docker exec`.
+   */
+  app.post('/api/docker-cases/browse', async (req, reply): Promise<ApiResponse<DockerBrowseResult>> => {
+    // Reads a directory listing inside an ARBITRARY named container, so it is gated with
+    // the adopt flow it serves rather than with the (owner-scoped) case file routes.
+    const denied = adminOnly(req, reply);
+    if (denied) return denied;
+    const body = parseBody(DockerBrowseSchema, req.body);
+    const host = (await readDockerHosts(CODEMAN_CONFIG_DIR)).find((item) => item.id === body.hostId);
+    if (!host) return createErrorResponse(ApiErrorCode.NOT_FOUND, 'Docker host not found');
+    const result = await browseInContainer(
+      {
+        engine: host.engine ?? 'docker',
+        context: host.context,
+        daemonHost: host.daemonHost,
+        containerName: body.container,
+      },
+      body.path || '/'
+    );
+    return { success: true, data: result };
+  });
+
+  app.post('/api/docker-cases/adopt-preflight', async (req, reply): Promise<ApiResponse<AdoptedContainerProbe>> => {
+    const body = parseBody(DockerAdoptPreflightSchema, req.body);
+    const dockerCases = await readDockerCases(CODEMAN_CONFIG_DIR);
+    // ⚠️ NOT plain `adminOnly`, unlike the two routes above: the run menu probes this for
+    // every docker case to learn which CLIs the CONTAINER has, so an admin-only gate would
+    // hide every agent mode from a non-admin's own docker case. A non-admin may therefore
+    // probe a container ALREADY linked to a case they can access — never an arbitrary one,
+    // which is the adopt-time question and stays admin-only with the rest of that flow.
+    if (!isAdmin(req)) {
+      const owns = dockerCases.some(
+        (item) =>
+          (item.container ?? dockerContainerName(item.name)) === body.container &&
+          canAccessOwned(getAuthUser(req), item.owner)
+      );
+      if (!owns) {
+        reply.code(403);
+        return createErrorResponse(ApiErrorCode.FORBIDDEN, 'Admin only in multi-user mode');
+      }
+    }
+    const host = (await readDockerHosts(CODEMAN_CONFIG_DIR)).find((item) => item.id === body.hostId);
+    if (!host) return createErrorResponse(ApiErrorCode.NOT_FOUND, 'Docker host not found');
+    const probe = await probeAdoptableContainer(
+      {
+        engine: host.engine ?? 'docker',
+        context: host.context,
+        daemonHost: host.daemonHost,
+        containerName: body.container,
+      },
+      dockerAdoptProbeModes(),
+      body.containerWorkdir
+    );
+    return { success: true, data: probe };
+  });
+
   // One-click "Run in Docker": create a NORMAL case (folder in CASES_DIR, scaffolded)
   // AND link it to a hardened container with default settings, auto-provisioning a
   // shared `default` docker host so the user never touches host/image/network fields.
@@ -899,6 +1094,17 @@ export function registerCaseRoutes(app: FastifyInstance, ctx: EventPort & Config
     if (!host) return createErrorResponse(ApiErrorCode.NOT_FOUND, 'Docker host not found');
 
     const sessionDocker = toSessionDocker(host, dockerCase);
+    // A full export `docker commit`s the container into an image. For an ADOPTED
+    // container that means packaging someone else's container — with whatever
+    // credentials its owner logged in with — into a bundle Codeman then hands out,
+    // and it is the one export step that touches the container at all. The
+    // workspace-only export is a plain host-directory tar and stays available.
+    if (mode === 'full' && dockerCase.owned === false) {
+      return createErrorResponse(
+        ApiErrorCode.FORBIDDEN,
+        `Case "${name}" adopted an existing container. Codeman does not own it and will not commit it to an image — use a workspace-only export, or build the image yourself.`
+      );
+    }
     if (mode === 'full' && !sessionDocker.mountCredentials) {
       return createErrorResponse(
         ApiErrorCode.INVALID_INPUT,
@@ -1042,8 +1248,22 @@ export function registerCaseRoutes(app: FastifyInstance, ctx: EventPort & Config
     '/api/docker-cases/:name/recreate',
     async (req): Promise<ApiResponse<{ name: string; container: string }>> => {
       const { name } = req.params as { name: string };
-      const dockerCase = (await readDockerCases(CODEMAN_CONFIG_DIR)).find((item) => item.name === name);
+      // Ownership gate: recreate DESTROYS a container, so it must be scoped like
+      // delete is (`canAccessOwned`). Without it any user could rebuild another
+      // user's container by name.
+      const dockerCase = (await readDockerCases(CODEMAN_CONFIG_DIR)).find(
+        (item) => item.name === name && canAccessOwned(getAuthUser(req), item.owner)
+      );
       if (!dockerCase) return createErrorResponse(ApiErrorCode.NOT_FOUND, 'Docker case not found');
+      // An ADOPTED container is the user's own: there is nothing to recreate it
+      // from (no create-config, no image gate) and destroying it is exactly what
+      // adoption promises never to do.
+      if (dockerCase.owned === false) {
+        return createErrorResponse(
+          ApiErrorCode.FORBIDDEN,
+          `Case "${name}" adopted an existing container. Codeman does not own its lifecycle and will not recreate it — rebuild it yourself, or unlink the case.`
+        );
+      }
       const host = (await readDockerHosts(CODEMAN_CONFIG_DIR)).find((item) => item.id === dockerCase.hostId);
       if (!host) return createErrorResponse(ApiErrorCode.NOT_FOUND, 'Docker host not found');
       const sessionDocker = toSessionDocker(host, dockerCase);
@@ -1154,7 +1374,13 @@ export function registerCaseRoutes(app: FastifyInstance, ctx: EventPort & Config
       );
       // Best-effort `docker rm -f` the per-case container (case-delete is the
       // explicit teardown that removes it; the bind-mounted workspace survives).
-      const host = (await readDockerHosts(CODEMAN_CONFIG_DIR)).find((item) => item.id === dockerCase.hostId);
+      // An ADOPTED container is skipped entirely: unlinking the case must leave
+      // the user's own container running and untouched. The seed file is skipped
+      // with it — adoption never wrote one.
+      const host =
+        dockerCase.owned === false
+          ? undefined
+          : (await readDockerHosts(CODEMAN_CONFIG_DIR)).find((item) => item.id === dockerCase.hostId);
       if (host) {
         const sessionDocker = toSessionDocker(host, dockerCase);
         try {

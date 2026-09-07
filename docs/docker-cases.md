@@ -78,6 +78,49 @@ curl -X POST localhost:3000/api/cases/docker-link -d '{"name":"sandbox","hostId"
 curl -X POST localhost:3000/api/quick-start -d '{"caseName":"sandbox","mode":"claude"}'
 ```
 
+## Attach to a container you already run
+
+The tab's **Attach to an existing container** toggle points a case at a container **you**
+built and run. Codeman only ever `docker exec`s into it: it never creates, starts, stops,
+restarts or removes it, and it seeds no credentials into it, so the CLIs inside must already
+be installed and logged in. A missing or stopped container is an error to report, not a state
+to fix — start it yourself and reopen the session.
+
+- **Container Name** is a picker over the engine's containers that you can also type into
+  (the engine may be remote, or the container may not exist yet when you fill the form).
+  Stopped containers are listed too, sorted last and labelled, so "mine isn't here" is never
+  a dead end.
+- **Container Workdir** is a path that must already exist **inside** the container. Adoption
+  mounts nothing, so it need not match the host workspace path; **Browse** lists directories
+  inside the container itself. Without this check, a wrong path fails at launch as a bare
+  `execvp failed` inside the pane.
+- **Workspace Path** is still a real host directory. It backs file previews, attachments and
+  watchers exactly as it does for an owned case, but here it is only a mirror: nothing is
+  bind-mounted, so point it at whatever host directory your container already exposes.
+- **Check container** runs a read-only preflight and reports what is inside before you commit
+  to a case name (running or not, tmux present, which CLIs resolved).
+- **Run modes come from the container**, not the host: a host with no `claude` still offers
+  Claude if the container ships it, and a mode the container lacks is hidden.
+- Claude is launched **without** `--dangerously-skip-permissions` when the container's exec
+  user is root, because Claude Code refuses that flag as root and the refusal is only visible
+  inside the container.
+- Image, network and resource settings disappear from the form: they describe a
+  `docker create` that adoption never runs.
+
+Recreate is refused for an adopted case, full-image export is refused (it would commit a
+container that is not ours), unlinking the case leaves the container running, and the boot
+reaper skips it. Workspace-only export still works and never pauses the container.
+
+Equivalent API:
+
+```bash
+curl -X POST localhost:3000/api/docker-cases/adopt-preflight -d '{"hostId":"local","container":"my-dev-box","containerWorkdir":"/workspace"}'
+curl -X POST localhost:3000/api/cases/docker-adopt -d '{"name":"devbox","hostId":"local","container":"my-dev-box","hostWorkspacePath":"/home/you/projects/devbox","containerWorkdir":"/workspace"}'
+```
+
+In multi-user mode adoption is **admin-only**, unlike `docker-link`: an adopted container's
+mounts belong to whoever built it, so one mounting `/` would hand the adopter the whole host.
+
 ## Lifecycle
 
 - **Reconnect after a Codeman restart** lands back in the same live agent (the in-container tmux survives).

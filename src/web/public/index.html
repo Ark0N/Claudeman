@@ -2589,8 +2589,15 @@
       <div class="modal-content modal-lg set-shell">
         <div class="modal-header set-shell-head">
           <h3>Add Case</h3>
+          <!-- mobile.css hides this modal's .set-foot, so on a phone the footer's
+               Create/Link button is unreachable and the modal cannot be submitted
+               at all. Mirrors the Settings modal's header Save: close first in the
+               DOM so the focus trap still lands on it, row-reverse puts this to
+               its left. Both buttons are driven together by switchCaseModalTab()
+               and submitCaseModal(). -->
           <div class="set-head-actions">
             <button class="modal-close" onclick="app.closeCreateCaseModal()" aria-label="Close create case">&times;</button>
+            <button class="set-head-save" id="caseModalSubmitMobile" onclick="app.submitCaseModal()">Create</button>
           </div>
         </div>
         <div class="set-body">
@@ -2644,6 +2651,7 @@
             <div class="form-row docker-quick-row">
               <label class="checkbox-row"><input type="checkbox" id="newCaseDocker"> 🐳 Run in an isolated Docker container</label>
               <span class="form-hint">Runs this case in a hardened, isolated container. The base image is built automatically on first use. Docker/Podman must be installed.</span>
+              <span class="form-hint">Already have a container running? <button type="button" class="btn-inline-check" id="dockerAdoptJumpBtn">Attach to it instead</button> Codeman only runs docker exec into it and never touches its lifecycle.</span>
             </div>
             <details class="advanced-options docker-quick-settings" id="dockerQuickSettings">
               <summary><svg class="set-adv-chev" width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.4" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M6 9l6 6 6-6"/></svg><span>Container settings (optional, sensible defaults)</span></summary>
@@ -2848,13 +2856,34 @@
             </div>
             <p class="set-section-blurb">Run the case inside a container: one per case, shared by all its sessions.</p>
             <div class="form-row">
+              <label class="checkbox-row"><input type="checkbox" id="dockerAdoptExisting"> Attach to an existing container</label>
+              <span class="form-hint">On: Codeman only runs docker exec into a container you already built and run — it never creates, starts, stops or removes it. The CLIs must already be installed and logged in inside it.</span>
+            </div>
+            <div class="form-row docker-adopt-only">
+              <label>Container Name</label>
+              <input type="text" id="dockerContainerName" list="dockerContainerList" placeholder="my-dev-box" pattern="[a-zA-Z0-9][a-zA-Z0-9_.-]+" autocomplete="off" autocapitalize="off" spellcheck="false">
+              <datalist id="dockerContainerList"></datalist>
+              <span class="form-hint">Pick from the running containers or type a name. <button type="button" class="btn-inline-check" id="dockerAdoptCheckBtn">Check container</button></span>
+            </div>
+            <div class="form-row docker-adopt-only">
+              <label>Container Workdir</label>
+              <div class="path-input-group">
+                <input type="text" id="dockerAdoptWorkdir" placeholder="/workspace" autocomplete="off" autocapitalize="off" autocorrect="off" spellcheck="false">
+                <button type="button" class="btn path-input-browse" onclick="app.openDockerWorkdirPicker()">Browse&hellip;</button>
+              </div>
+              <span class="form-hint">A path that already exists inside the container. Adoption mounts nothing, so this need not match the host workspace path.</span>
+            </div>
+            <div class="form-row">
               <label>Case Name</label>
               <input type="text" id="dockerCaseName" placeholder="sandbox" pattern="[a-zA-Z0-9_-]+" autocomplete="off" autocapitalize="off" spellcheck="false">
               <span class="form-hint">Runs inside an isolated container. Multiple sessions can share the same container.</span>
             </div>
             <div class="form-row">
               <label>Workspace Path</label>
-              <input type="text" id="dockerWorkspacePath" placeholder="/home/user/projects/sandbox" autocomplete="off" autocapitalize="off" autocorrect="off" spellcheck="false">
+              <div class="path-input-group">
+                <input type="text" id="dockerWorkspacePath" placeholder="/home/user/projects/sandbox" autocomplete="off" autocapitalize="off" autocorrect="off" spellcheck="false">
+                <button type="button" class="btn path-input-browse" onclick="app.openDockerWorkspacePathPicker()">Browse&hellip;</button>
+              </div>
               <span class="form-hint">Absolute HOST directory, bind-mounted into the container. Codeman scaffolds CLAUDE.md + hooks into it.</span>
             </div>
             <div class="form-row">
@@ -2862,12 +2891,12 @@
               <input type="text" id="dockerHostId" placeholder="local" pattern="[a-zA-Z0-9_-]+" autocomplete="off" autocapitalize="off" spellcheck="false">
               <span class="form-hint">A reusable docker host profile. Reuse the same ID across cases to share settings.</span>
             </div>
-            <div class="form-row">
+            <div class="form-row docker-create-only">
               <label>Image</label>
               <input type="text" id="dockerImage" placeholder="codeman/agent:base" autocomplete="off" autocapitalize="off" spellcheck="false">
               <span class="form-hint">Build it once with <code>node scripts/build-agent-image.mjs</code>. Contains node + claude/codex/gemini/opencode/agy/pi/grok/dsh + tmux.</span>
             </div>
-            <div class="form-row">
+            <div class="form-row docker-create-only">
               <label>Network</label>
               <select id="dockerNetwork">
                 <option value="bridge">bridge (internet on, default)</option>
@@ -2875,7 +2904,7 @@
                 <option value="custom">custom bridge</option>
               </select>
             </div>
-            <details class="advanced-options">
+            <details class="advanced-options docker-create-only">
               <summary><svg class="set-adv-chev" width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.4" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M6 9l6 6 6-6"/></svg><span>Advanced container settings</span></summary>
               <div class="advanced-options-content">
                 <div class="form-row">
