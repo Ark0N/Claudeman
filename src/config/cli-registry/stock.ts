@@ -1037,9 +1037,13 @@ const DEEPSEEK: CliEntry = {
     // The half no other CLI needs. `DSH_*` is an allowlisted envOverrides prefix and
     // applyEnvOverrides() runs LAST, so without this a non-granted owner could send
     // DSH_PERMISSION_MODE on the same request and land after the config clamp.
-    // DEEPSEEK_API_KEY added alongside DEEPSEEK_BASE_URL for the custom-model-injection.ts
-    // recipe (deployment_plan.md) — the pair travels together, same reasoning as base URL.
-    privilegedEnvKeys: ['DSH_PERMISSION_MODE', 'DSH_HOME', 'DEEPSEEK_BASE_URL', 'DEEPSEEK_API_KEY'],
+    // ⚠️ DEEPSEEK_API_KEY deliberately stays OUT of this list (see the docstring on
+    // clampEnvOverridesForOwner() in session-routes.ts): _configureCliEnv() forwards the
+    // SERVER's own key into every dsh pane, so DEEPSEEK_BASE_URL is the exfiltration
+    // vector, not the key itself — a non-granted owner supplying THEIR OWN key removes
+    // privilege rather than granting it, and clamping it here was a real regression
+    // (test/deepseek-mode.test.ts) fixed before this shipped.
+    privilegedEnvKeys: ['DSH_PERMISSION_MODE', 'DSH_HOME', 'DEEPSEEK_BASE_URL'],
     // Web-researched, unverified, partial: reuses the already-existing DEEPSEEK_BASE_URL/
     // DEEPSEEK_API_KEY keys above. No modelVars — dsh's model is a profile-composition
     // entry (see `model: { source: 'none' }` above), not an env var, so forcing a specific
