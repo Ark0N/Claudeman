@@ -20,7 +20,7 @@ import {
 } from '../scripts/pr-bot/report.js';
 import { classifyCi, latestRunPerWorkflow, type PrSummary, type WorkflowRun } from '../scripts/pr-bot/github.js';
 import { parseCallback, parseCommand, prNumberFromMessageText } from '../scripts/pr-bot/telegram.js';
-import { trustDialogKey } from '../scripts/pr-bot/codeman-client.js';
+import { findModelLimitNotice, trustDialogKey } from '../scripts/pr-bot/codeman-client.js';
 import { buildConfig, parseEnvFile } from '../scripts/pr-bot/config.js';
 import { buildReviewBrief } from '../scripts/pr-bot/review-task.js';
 
@@ -299,6 +299,38 @@ describe('trustDialogKey', () => {
 
   it('lets the freshest marked row win', () => {
     expect(trustDialogKey('❯ No, exit\n...\n❯ Yes, I trust this folder')).toBe('confirm');
+  });
+});
+
+describe('findModelLimitNotice', () => {
+  // Captured off prbot-394's pane on 2026-09-08, the run that lost 40 minutes: Claude
+  // Code answers a spent budget inside the turn and then simply sits there.
+  const SPENT_PANE = [
+    '\x1b[38;5;153m\u276f\x1b[39m Read /home/arkon/.codeman/pr-bot/jobs/pr-394/brief.md and do the review.',
+    "  \u23bf  You've reached your Fable limit. Run /usage-credits to continue or switch models with /model.",
+    '\u273b Saut\u00e9ed for 1s \u00b7 done 7:16 PM',
+  ].join('\n');
+
+  it('finds the notice on a real pane, ANSI and gutter glyph stripped', () => {
+    expect(findModelLimitNotice(SPENT_PANE)).toBe(
+      "You've reached your Fable limit. Run /usage-credits to continue or switch models with /model."
+    );
+  });
+
+  it('is not tied to one model name or to a straight apostrophe', () => {
+    // The pane renders a typographic apostrophe, and every model prints this sentence.
+    expect(
+      findModelLimitNotice('  \u23bf  You\u2019ve reached your Opus limit. Run /usage-credits to continue.')
+    ).toContain('reached your Opus limit');
+    expect(findModelLimitNotice('You have reached your Sonnet 5 limit.')).toContain('Sonnet 5');
+  });
+
+  it('says nothing about an ordinary working pane', () => {
+    expect(findModelLimitNotice('\u273b Actualizing\u2026 (13m 23s \u00b7 esc to interrupt)')).toBeUndefined();
+    expect(findModelLimitNotice('')).toBeUndefined();
+    // The bare word is not the notice: a review whose own findings discuss usage limits
+    // must not be reported as an exhausted account.
+    expect(findModelLimitNotice('the usage limit parser handles the 5-hour reset')).toBeUndefined();
   });
 });
 

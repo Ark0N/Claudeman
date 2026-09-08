@@ -11,7 +11,7 @@
  * worktree's project settings through the git common dir, i.e. the MAIN checkout's
  * `.claude/settings.local.json`, whose model pin then silently overrides anything
  * written into the worktree (measured 2026-09-05: a worktree pinned to
- * `claude-fable-5-1` reported `claude-opus-5[1m]`). A shared clone has its own
+ * `claude-fable-5-1` reported `claude-opus-5[1m]`, the main checkout's pin). A shared clone has its own
  * project root, so Codeman's `modelOverride` and hooks land where the CLI reads them,
  * while `objects/info/alternates` keeps the object store shared (no duplication).
  *

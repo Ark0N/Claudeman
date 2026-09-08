@@ -90,7 +90,7 @@ has to be copied; set them here to use a different bot.
 | `PR_BOT_POLL_INTERVAL` | `600` | Seconds between GitHub polls (minimum 60). |
 | `PR_BOT_MAIN_CHECKOUT` | the repo this script is in | The repository the clones share objects with and fetch from. |
 | `PR_BOT_DATA_DIR` | `~/.codeman/pr-bot` | State, briefs, reports, clones. |
-| `PR_BOT_MODEL` | unset (the session default) | Codeman `modelOverride` for the review sessions, e.g. `claude-fable-5-1`. |
+| `PR_BOT_MODEL` | unset (the session default) | Codeman `modelOverride` for the review sessions, e.g. `opus[1m]`. ⚠️ Pick a model whose budget can absorb a re-review of every open PR on every head commit: when it runs out, Claude Code answers the limit **inside the turn** and the reviewer has nothing to write. The bot now names that failure in seconds (`findModelLimitNotice`) instead of burning the whole `PR_BOT_REVIEW_TIMEOUT`, and a limit does not spend the per-head retry budget, so the queue resumes by itself once the budget does. |
 | `PR_BOT_EFFORT` | unset | Codeman `effort` for the review sessions. |
 | `PR_BOT_REVIEW_TIMEOUT` | `40` | Minutes before a review is abandoned. |
 | `PR_BOT_FOLLOWUP_TIMEOUT` | `20` | Minutes before a follow-up is abandoned. |

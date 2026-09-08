@@ -50,7 +50,42 @@ export interface SessionRecord {
   mode: string;
 }
 
-export type TurnOutcome = { kind: 'stop' } | { kind: 'blocked' } | { kind: 'exit' } | { kind: 'timeout' };
+export type TurnOutcome =
+  | { kind: 'stop' }
+  | { kind: 'blocked' }
+  | { kind: 'exit' }
+  | { kind: 'timeout' }
+  | { kind: 'limit'; message: string };
+
+/**
+ * Claude Code answers a spent model budget INSIDE the turn ("You've reached your Fable
+ * limit. Run /usage-credits to continue or switch models with /model.") and then simply
+ * sits there with nothing to write. Measured 2026-09-08: four reviews each burned their
+ * whole 40-minute deadline and reported a bare "timed out without a report", which reads
+ * as a hung reviewer rather than an account that needs attention, and the retries spent
+ * the per-head budget so the PRs would not have been picked up again once credits
+ * returned. Matching the notice turns 40 silent minutes into a named failure in seconds.
+ *
+ * Deliberately model-agnostic: the same sentence is printed for every model, and the
+ * apostrophe is typographic on the pane, so neither the model name nor `'` is matched.
+ */
+const MODEL_LIMIT_PATTERN = /reached your [^\n]{0,40}?\blimit\b|\/usage-credits/i;
+
+/**
+ * Thrown instead of a plain Error when a review died on a spent model budget, so the
+ * caller can tell an account condition apart from a review that genuinely failed.
+ */
+export class ModelLimitError extends Error {
+  override readonly name = 'ModelLimitError';
+}
+
+/** The limit notice as one clean line, or undefined if the screen does not carry it. */
+export function findModelLimitNotice(screen: string): string | undefined {
+  const line = stripAnsi(screen)
+    .split('\n')
+    .find((l) => MODEL_LIMIT_PATTERN.test(l));
+  return line?.replace(/^[\s>|]*(?:\u23bf|\u2514|\u256d|\u2570|\u23a2|\u2502|\u23bd)?\s*/u, '').trim() || undefined;
+}
 
 const sleep = (ms: number) => new Promise((r) => setTimeout(r, ms));
 
@@ -241,9 +276,22 @@ export class CodemanClient {
     if (!r.delivered) throw new Error('the prompt was not delivered (pane dead?)');
     let wait = r.wait;
     let nudged = false;
+    // Only consulted when the turn produced nothing, so a review that merely QUOTES the
+    // notice in its report cannot be mistaken for one that hit it.
+    const limitNotice = async (): Promise<string | undefined> =>
+      findModelLimitNotice(await this.terminalText(id).catch(() => ''));
     while (true) {
-      if (wait && !wait.timedOut) return toOutcome(wait);
+      if (wait && !wait.timedOut) {
+        const outcome = toOutcome(wait);
+        if (outcome.kind === 'stop' && !opts.isDone?.()) {
+          const limit = await limitNotice();
+          if (limit) return { kind: 'limit', message: limit };
+        }
+        return outcome;
+      }
       if (opts.isDone?.()) return { kind: 'stop' };
+      const limit = await limitNotice();
+      if (limit) return { kind: 'limit', message: limit };
       const remaining = opts.deadlineMs - (Date.now() - started);
       if (remaining <= 0) return { kind: 'timeout' };
       if (!nudged) {

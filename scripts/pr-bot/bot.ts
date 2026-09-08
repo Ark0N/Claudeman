@@ -19,7 +19,7 @@
 import { randomBytes } from 'crypto';
 import { existsSync, mkdirSync, readFileSync, rmSync, writeFileSync } from 'fs';
 import { join } from 'path';
-import { CodemanClient, stripAnsi, type TurnOutcome } from './codeman-client.js';
+import { CodemanClient, ModelLimitError, stripAnsi, type TurnOutcome } from './codeman-client.js';
 import type { PrBotConfig } from './config.js';
 import {
   approveWorkflowRun,
@@ -434,7 +434,10 @@ export class PrBot {
         if (report && !existsSync(reportMdPath)) writeFileSync(reportMdPath, last);
       }
       await this.recordClaudeSessionId(sessionId, rec);
-      if (!report) throw new Error(await this.describeFailure(sessionId, outcome, started, last));
+      if (!report) {
+        const why = await this.describeFailure(sessionId, outcome, started, last);
+        throw outcome.kind === 'limit' ? new ModelLimitError(why) : new Error(why);
+      }
 
       const durationMin = Math.max(1, Math.round((Date.now() - started) / 60_000));
       Object.assign(rec, {
@@ -460,9 +463,15 @@ export class PrBot {
       if (rec) {
         rec.status = 'failed';
         rec.lastError = reason;
-        rec.failedAttempts = rec.failedSha === rec.headSha ? (rec.failedAttempts ?? 0) + 1 : 1;
-        rec.failedSha = rec.headSha;
-        const givingUp = rec.failedAttempts >= MAX_AUTO_RETRIES;
+        // A spent model budget is an account condition, not a bad PR, so it must not
+        // spend the per-head retry budget: otherwise one exhausted afternoon marks every
+        // open PR "not retrying on my own" and none of them come back when credits do.
+        const accountCondition = err instanceof ModelLimitError;
+        if (!accountCondition) {
+          rec.failedAttempts = rec.failedSha === rec.headSha ? (rec.failedAttempts ?? 0) + 1 : 1;
+          rec.failedSha = rec.headSha;
+        }
+        const givingUp = !accountCondition && (rec.failedAttempts ?? 0) >= MAX_AUTO_RETRIES;
         await this.telegram
           .sendMessage(
             formatReviewFailure(rec, reason) +
@@ -523,6 +532,11 @@ export class PrBot {
       }
       case 'exit':
         return 'the session exited before writing a report';
+      case 'limit':
+        return (
+          `the model budget for these review sessions is spent, so the reviewer never started:\n${outcome.message}\n` +
+          'Point PR_BOT_MODEL in ~/.codeman/pr-bot.env at a model with headroom and restart codeman-pr-bot.'
+        );
       case 'timeout':
         return `timed out after ${minutes} min without a report`;
       default:
