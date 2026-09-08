@@ -10,7 +10,10 @@
 > and Claude Code as local coding agents itself, which is basically this
 > feature's idea in miniature. 🙂
 
-**Status: draft / work-in-progress.** This PR is not ready to merge — see
+**Status: open for review.** The backend/CLI-injection side (chunks 1-5,
+7-8) is built, tested, and verified end-to-end against a real server;
+chunk 6 (frontend toolbar UI) is not yet built, and gemini/deepseek remain
+documented, unresolved gaps rather than working paths — see
 [Status](#status) below for exactly what's done and what's still open.
 
 ---
