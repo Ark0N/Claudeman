@@ -778,19 +778,34 @@ export function buildRemoteLaunchCommand(options: {
     modeCommand = override;
   } else if (mode === 'claude') {
     // Deterministic conversation pinning for SSH-remote claude (mirrors the
-    // docker-claude shape in claudeDockerPaneCommand): the FIRST run creates
-    // the conversation under --session-id <sessionId>; a respawn / reattach
-    // re-runs the same idempotent command, --session-id exits non-zero
-    // ("already in use"), and the `||` fallback RESUMES that same
+    // docker-claude shape in claudeDockerPaneCommand, INCLUDING the distinct
+    // resumeId branch it declares — this used to only mirror the same-id
+    // fallback shape, silently dropping an explicit resumeSessionId that
+    // differs from sessionId, e.g. a resume-from-history launch): the FIRST
+    // run creates the conversation under --session-id <sessionId>; a respawn
+    // / reattach re-runs the same idempotent command, --session-id exits
+    // non-zero ("already in use"), and the `||` fallback RESUMES that same
     // conversation. Without a pinned id, every reattach relaunched a bare
     // `claude` and started a NEW conversation (found live 2026-08-29: remote
     // claude ctrl-d / ctrl-c relaunched a fresh session). A per-host
     // `commands.claude` override stays authoritative (admin's explicit
     // choice) and skips this entirely.
     const permFlags = buildClaudePermissionFlags(claudeMode, allowedTools);
-    modeCommand = remoteLoginShellCommand(
-      `claude${permFlags} --session-id ${sessionId} || claude${permFlags} --resume ${sessionId}`
-    );
+    const cmd = `claude${permFlags}`;
+    // Defense in depth, mirroring claudeDockerPaneCommand's own belt-and-braces check:
+    // sessionId is server-minted and always safe in practice, but this command is built
+    // as a single shellescaped string and then executed as shell code on the remote
+    // host, so an unsafe value here is validated rather than trusted.
+    if (!RESUME_ID_SAFE.test(sessionId)) {
+      modeCommand = remoteLoginShellCommand(cmd);
+    } else {
+      const rid = resumeSessionId && RESUME_ID_SAFE.test(resumeSessionId) ? resumeSessionId : undefined;
+      modeCommand = remoteLoginShellCommand(
+        rid && rid !== sessionId
+          ? `${cmd} --resume ${rid} || ${cmd} --session-id ${sessionId}`
+          : `${cmd} --session-id ${sessionId} || ${cmd} --resume ${sessionId}`
+      );
+    }
   } else if (mode === 'omp') {
     // Remote OMP respawn must RESUME the same conversation instead of
     // relaunching fresh (found live 2026-08-29: remote ctrl-c/ctrl-d relaunched
