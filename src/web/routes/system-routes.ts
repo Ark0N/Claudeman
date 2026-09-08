@@ -990,11 +990,9 @@ export function registerSystemRoutes(
       } catch {
         /* ignore */
       }
-      // statusLineTelemetry and acknowledgeUnauthTunnel are ACTION fields (not stored
-      // settings) — strip them before persisting so settings.json stays clean.
-      // statusLineTelemetry is an action field only (see below); it must never
-      // land in settingsToStore.
-      const { statusLineTelemetry: _statusLineTelemetry, acknowledgeUnauthTunnel, ...settingsToStore } = settings;
+      // acknowledgeUnauthTunnel is an ACTION field (not a stored setting) — strip
+      // it before persisting so settings.json stays clean.
+      const { acknowledgeUnauthTunnel, ...settingsToStore } = settings;
       const merged = { ...existing, ...settingsToStore };
       await fs.writeFile(SETTINGS_PATH, JSON.stringify(merged, null, 2));
 
@@ -1007,7 +1005,7 @@ export function registerSystemRoutes(
       // Service toggles resolve from `merged` (existing + incoming), NEVER from the
       // raw request body. A PARTIAL PUT omits keys it does not intend to change, and
       // reading the body directly turned every omission into "apply the default":
-      // a body of just `{statusLineTelemetry:true}` would START the subagent watcher
+      // a body of just `{showPlanUsageLimits:true}` would START the subagent watcher
       // (`?? true`) and STOP the workflow + image watchers (`?? false`), silently
       // undoing the user's persisted config. Reading `merged` makes any PUT reconcile
       // services to the effective stored settings instead, which also self-heals
@@ -1033,19 +1031,23 @@ export function registerSystemRoutes(
         }
       });
 
-      // Plan-usage chip: its DISPLAY is per-device (client-side, see settings-ui.js).
-      // Telemetry COLLECTION was previously server-side and enable-sticky here —
-      // toggling the chip ON re-injected a statusLine.command into every ACTIVE
-      // Claude session's settings.local.json so live % started flowing without a
-      // new session. That disk write is exactly the bug fixed 2026-08-31 (it took
-      // precedence over the user's own statusline for ANY `claude` run in that
-      // directory, including outside Codeman, with no way to undo it). Telemetry
-      // is now requested per-session at CREATE/RESPAWN time only (statusLineTelemetry
-      // threaded through cron/ralph-loop/quick-start/interactive-create, see those
-      // route handlers), resolved into an ephemeral `--settings` CLI flag — fixed at
-      // spawn, so there is nothing to (re)inject into an ALREADY-RUNNING session
-      // here, unlike the old disk mechanism. The action field above is received and
-      // discarded; flipping the chip ON only affects sessions created from now on.
+      // Plan-usage chip: its DISPLAY is per-device (client-side, see settings-ui.js),
+      // but `showPlanUsageLimits` ALSO doubles as the telemetry COLLECTION switch,
+      // persisted here in settingsToStore like any other setting (no special-casing
+      // needed — see readPlanUsageTelemetryEnabled's doc comment in hooks-config.ts).
+      // Telemetry COLLECTION used to be a SEPARATE, action-only, sticky mechanism
+      // here: toggling the chip ON re-injected a statusLine.command into every
+      // ACTIVE Claude session's settings.local.json so live % started flowing
+      // without a new session. That disk write was the bug fixed 2026-08-31 (it
+      // took precedence over the user's own statusline for ANY `claude` run in
+      // that directory, including outside Codeman, with no way to undo it).
+      // Collection is now decided by TmuxManager.createSession/respawnPane reading
+      // `showPlanUsageLimits` FRESH from settings.json at spawn time — no
+      // per-session field, no per-request threading through cron/Ralph-loop/
+      // quick-start/interactive-create (they all reach the same read), and no
+      // (re)injection into an already-running session needed here: the NEXT
+      // respawn (a Ralph cycle, `/clear`, a PTY-exit restart) already picks up
+      // whatever this PUT just persisted.
 
       // Handle tunnel toggle dynamically
       if ('tunnelEnabled' in settings) {

@@ -7,6 +7,7 @@
 
 import { describe, it, expect, beforeAll, beforeEach, afterAll, afterEach } from 'vitest';
 import {
+  chmodSync,
   closeSync,
   existsSync,
   openSync,
@@ -18,6 +19,7 @@ import {
   statSync,
 } from 'node:fs';
 import { join } from 'node:path';
+import { SETTINGS_PATH } from '../src/web/route-helpers.js';
 import { tmpdir, homedir } from 'node:os';
 import { spawn } from 'node:child_process';
 import {
@@ -28,6 +30,7 @@ import {
   generateHooksConfig,
   generateStatusLineCommand,
   generateSubagentStopGuardScript,
+  readPlanUsageTelemetryEnabled,
   refreshStaleCodemanHooks,
   resolveStatusLineCliCommand,
   settingsWriteBlocker,
@@ -1319,6 +1322,48 @@ describe('Hook Config Generation - Extended', () => {
   });
 });
 
+describe('readPlanUsageTelemetryEnabled', () => {
+  const backup = existsSync(SETTINGS_PATH) ? readFileSync(SETTINGS_PATH, 'utf-8') : null;
+
+  afterEach(() => {
+    if (backup !== null) {
+      writeFileSync(SETTINGS_PATH, backup);
+    } else {
+      rmSync(SETTINGS_PATH, { force: true });
+    }
+  });
+
+  it('reads true fresh from the persisted showPlanUsageLimits setting', async () => {
+    mkdirSync(join(SETTINGS_PATH, '..'), { recursive: true });
+    writeFileSync(SETTINGS_PATH, JSON.stringify({ showPlanUsageLimits: true }));
+    expect(await readPlanUsageTelemetryEnabled()).toBe(true);
+  });
+
+  it('reads false when the setting is explicitly false', async () => {
+    mkdirSync(join(SETTINGS_PATH, '..'), { recursive: true });
+    writeFileSync(SETTINGS_PATH, JSON.stringify({ showPlanUsageLimits: false }));
+    expect(await readPlanUsageTelemetryEnabled()).toBe(false);
+  });
+
+  it('defaults to false when the setting is absent or the file is missing', async () => {
+    rmSync(SETTINGS_PATH, { force: true });
+    expect(await readPlanUsageTelemetryEnabled()).toBe(false);
+
+    mkdirSync(join(SETTINGS_PATH, '..'), { recursive: true });
+    writeFileSync(SETTINGS_PATH, JSON.stringify({ someOtherSetting: true }));
+    expect(await readPlanUsageTelemetryEnabled()).toBe(false);
+  });
+
+  it('never caches — a change on disk is visible on the very next call', async () => {
+    mkdirSync(join(SETTINGS_PATH, '..'), { recursive: true });
+    writeFileSync(SETTINGS_PATH, JSON.stringify({ showPlanUsageLimits: false }));
+    expect(await readPlanUsageTelemetryEnabled()).toBe(false);
+
+    writeFileSync(SETTINGS_PATH, JSON.stringify({ showPlanUsageLimits: true }));
+    expect(await readPlanUsageTelemetryEnabled()).toBe(true);
+  });
+});
+
 describe('resolveStatusLineCliCommand', () => {
   const testDir = join(tmpdir(), 'codeman-statusline-cli-test-' + Date.now());
 
@@ -1386,6 +1431,83 @@ describe('resolveStatusLineCliCommand', () => {
 
     expect(cmd).toBeUndefined();
     expect(JSON.parse(readFileSync(settingsPath, 'utf-8')).statusLine).toBeUndefined();
+  });
+});
+
+describe('statusline exporter script (real shell execution)', () => {
+  const testDir = join(tmpdir(), 'codeman-statusline-script-exec-test-' + Date.now());
+  const binDir = join(tmpdir(), 'codeman-statusline-script-exec-bin-' + Date.now());
+
+  beforeEach(() => {
+    mkdirSync(testDir, { recursive: true });
+    mkdirSync(binDir, { recursive: true });
+  });
+
+  afterEach(() => {
+    rmSync(testDir, { recursive: true, force: true });
+    rmSync(binDir, { recursive: true, force: true });
+  });
+
+  // A stand-in for the real `curl` binary, placed FIRST on PATH — same technique
+  // the exporter's own review used ("an arg-echoing stand-in"). It ignores every
+  // arg curl would have received; only its own scripted behavior matters here.
+  function writeFakeCurl(script: string): void {
+    const curlPath = join(binDir, 'curl');
+    writeFileSync(curlPath, `#!/bin/sh\n${script}\n`);
+    chmodSync(curlPath, 0o755);
+  }
+
+  function runExporter(
+    env: Record<string, string>
+  ): Promise<{ code: number | null; stdout: string; durationMs: number }> {
+    return resolveStatusLineCliCommand(testDir, true).then(
+      (scriptPath) =>
+        new Promise((resolve, reject) => {
+          const start = Date.now();
+          const child = spawn('sh', [scriptPath!], {
+            env: { ...env, PATH: `${binDir}:${process.env.PATH}` },
+            stdio: ['pipe', 'pipe', 'ignore'],
+          });
+          let stdout = '';
+          child.stdout.setEncoding('utf8');
+          child.stdout.on('data', (chunk) => {
+            stdout += chunk;
+          });
+          child.on('error', reject);
+          child.on('close', (code) => resolve({ code, stdout, durationMs: Date.now() - start }));
+          child.stdin.end('{}');
+        })
+    );
+  }
+
+  const baseEnv = {
+    CODEMAN_SESSION_ID: 'x',
+    CODEMAN_API_URL: 'http://127.0.0.1:1',
+    CODEMAN_HOOK_SECRET_FILE: '/dev/null',
+  };
+
+  it('no-user-statusline branch: the POST runs in the foreground and its OWN stdout becomes the footer', async () => {
+    writeFakeCurl(`echo 'model: opus | 42% used'`);
+    const result = await runExporter(baseEnv);
+    expect(result.stdout.trim()).toBe('model: opus | 42% used');
+  });
+
+  it('no-user-statusline branch: falls back to the plain "codeman" marker when curl fails', async () => {
+    writeFakeCurl(`exit 1`);
+    const result = await runExporter(baseEnv);
+    expect(result.stdout.trim()).toBe('codeman');
+  });
+
+  it('wrap branch: never blocks a reader-to-EOF on a slow/hung curl (background subshell closes stdin too)', async () => {
+    writeFakeCurl(`sleep 3`);
+    const result = await runExporter({ ...baseEnv, CODEMAN_USER_STATUSLINE_CMD: 'echo my-own-statusline' });
+    expect(result.stdout.trim()).toBe('my-own-statusline');
+    expect(result.durationMs).toBeLessThan(1000);
+  }, 10000);
+
+  it('curl is bounded with --max-time so a HUNG (not just refused) Codeman cannot wedge the render', async () => {
+    const scriptPath = await resolveStatusLineCliCommand(testDir, true);
+    expect(readFileSync(scriptPath!, 'utf-8')).toContain('--max-time');
   });
 });
 

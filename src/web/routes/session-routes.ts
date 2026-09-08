@@ -947,18 +947,19 @@ export function registerSessionRoutes(
       await updateCaseModel(workingDir, body.modelOverride || null);
     }
 
-    // Plan-usage telemetry request (App Settings → header chip). NO LONGER a
-    // disk write here — a settings.local.json statusLine took precedence over
-    // the user's own global/project statusLine for ANY `claude` run in that
-    // directory, including entirely outside Codeman, with no disclosure and no
-    // way to undo it (real bug, found 2026-08-31). The request now flows
-    // through as an ordinary session field (statusLineTelemetryRequested below)
-    // and Session/TmuxManager resolve it into an EPHEMERAL `claude --settings`
-    // CLI flag at actual spawn time (resolveStatusLineCliCommand in
-    // hooks-config.ts) — never written to disk, so a plain `claude` run outside
-    // Codeman is untouched. That resolution also self-heals: it strips any
-    // legacy disk-written exporter an older Codeman build left behind.
-    const statusLineTelemetryRequested = body.statusLineTelemetry === true;
+    // Plan-usage telemetry (App Settings → header chip): no request-time field
+    // here anymore, and NO disk write — a settings.local.json statusLine used
+    // to take precedence over the user's own global/project statusLine for ANY
+    // `claude` run in that directory, including entirely outside Codeman, with
+    // no disclosure and no way to undo it (real bug, found 2026-08-31).
+    // TmuxManager.createSession reads the persisted `showPlanUsageLimits`
+    // setting FRESH at spawn (readPlanUsageTelemetryEnabled in hooks-config.ts)
+    // and resolves it into an EPHEMERAL `claude --settings` CLI flag — never
+    // written to disk, so a plain `claude` run outside Codeman is untouched —
+    // and applies uniformly to every claude creation path (this route, cron,
+    // the Ralph Loop API, quick-start), not just this one. That resolution
+    // also self-heals: it strips any legacy disk-written exporter an older
+    // Codeman build left behind.
 
     // Hooks for the workspace this session runs in (install vs refresh-only is the
     // `workspaceHooksEnabled` setting; see applyWorkspaceHooks). Never for a remote
@@ -1092,7 +1093,6 @@ export function registerSessionRoutes(
       resumeSessionId: validatedResumeId,
       envOverrides: await clampEnvOverridesForOwner(owner, body.envOverrides),
       effort: body.effort,
-      statusLineTelemetry: statusLineTelemetryRequested,
       tmuxHistoryLimit: terminalHistoryConfig.tmuxHistoryLimit,
       remote,
       owner,

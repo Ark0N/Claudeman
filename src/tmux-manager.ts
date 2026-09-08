@@ -67,7 +67,11 @@ import {
   legacyConfigForMode,
 } from './session-cli-registry-bridge.js';
 import type { CliEntry } from './config/cli-registry/types.js';
-import { resolveStatusLineCliCommand, findEffectiveUserStatusLineCommand } from './hooks-config.js';
+import {
+  resolveStatusLineCliCommand,
+  readPlanUsageTelemetryEnabled,
+  findEffectiveUserStatusLineCommand,
+} from './hooks-config.js';
 import {
   buildSshConnectionArgs,
   defaultRemoteCommandForMode,
@@ -1756,7 +1760,6 @@ export class TmuxManager extends EventEmitter implements TerminalMultiplexer {
       resumeSessionId,
       envOverrides,
       effort,
-      statusLineTelemetry,
       historyLimit = DEFAULT_TMUX_HISTORY_LIMIT,
       remote,
       docker,
@@ -1815,13 +1818,13 @@ export class TmuxManager extends EventEmitter implements TerminalMultiplexer {
 
     const envExportsStr = this.buildEnvExports(sessionId, muxName, mode).join(' && ');
 
-    // Claude-only, local spawns only (remote/docker have their own separate
-    // command builders — out of scope here). Also self-heals: strips any
-    // legacy disk-written exporter from an older Codeman build the first
-    // time a session starts in that workspace again.
+    // Registry-gated (capabilities.statusLineTelemetry — claude only today), local
+    // spawns only (remote/docker have their own separate command builders — out of
+    // scope here). Also self-heals: strips any legacy disk-written exporter from an
+    // older Codeman build the first time a session starts in that workspace again.
     const statusLineCommand =
-      mode === 'claude' && !remote && !docker
-        ? await resolveStatusLineCliCommand(workingDir, statusLineTelemetry === true)
+      getCli(mode)?.capabilities.statusLineTelemetry && !remote && !docker
+        ? await resolveStatusLineCliCommand(workingDir, await readPlanUsageTelemetryEnabled())
         : undefined;
     // The user's own REAL statusLine, if any (walked via Claude Code's own
     // settings precedence) — exported below so the shared exporter script
@@ -2070,7 +2073,6 @@ export class TmuxManager extends EventEmitter implements TerminalMultiplexer {
       resumeSessionId,
       envOverrides,
       effort,
-      statusLineTelemetry,
       remote,
       docker,
       name,
@@ -2088,8 +2090,8 @@ export class TmuxManager extends EventEmitter implements TerminalMultiplexer {
 
     // See createSession()'s identical resolution for rationale.
     const statusLineCommand =
-      mode === 'claude' && !remote && !docker
-        ? await resolveStatusLineCliCommand(workingDir, statusLineTelemetry === true)
+      getCli(mode)?.capabilities.statusLineTelemetry && !remote && !docker
+        ? await resolveStatusLineCliCommand(workingDir, await readPlanUsageTelemetryEnabled())
         : undefined;
     const userStatusLineCommand = statusLineCommand ? await findEffectiveUserStatusLineCommand(workingDir) : undefined;
 

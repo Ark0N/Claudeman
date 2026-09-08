@@ -78,9 +78,13 @@ describe('buildSpawnCommand statusLineCommand (claude mode)', () => {
     expect(extractSettingsJson(cmd)).toEqual({ statusLine: { type: 'command', command: tricky } });
   });
 
-  it('round-trips the REAL exporter command unmodified (generateStatusLineCommand)', async () => {
-    const { generateStatusLineCommand } = await import('../src/hooks-config.js');
-    const real = generateStatusLineCommand();
+  it('round-trips the REAL exporter script path unmodified (ensureStatusLineExporterScript)', async () => {
+    // What resolveStatusLineCliCommand actually hands to buildSpawnCommand at spawn
+    // time today is a bare script PATH (see that function's doc comment for why —
+    // never the raw curl command generateStatusLineCommand() builds, which only
+    // backs the legacy disk-write applyStatusLineConfig path now).
+    const { ensureStatusLineExporterScript } = await import('../src/hooks-config.js');
+    const real = await ensureStatusLineExporterScript();
     const cmd = buildSpawnCommand({ mode: 'claude', sessionId: 'sid-1', statusLineCommand: real });
     expect(extractSettingsJson(cmd)).toEqual({ statusLine: { type: 'command', command: real } });
   });
