@@ -3846,6 +3846,14 @@ Object.assign(CodemanApp.prototype, {
       return;
     }
 
+    // The pane belongs to the popup showing it, so this window has nothing to
+    // restore. Say so rather than reporting a size that was never sent — the
+    // same button in that window does the job.
+    if (!this.isSoloWindow && this.detachedSessions?.has(this.activeSessionId)) {
+      this.showToast('This session is sized by its own window', 'warning');
+      return;
+    }
+
     const dims = this.getTerminalDimensions();
     if (!dims) {
       this.showToast('Could not determine terminal size', 'error');
@@ -4827,16 +4835,20 @@ Object.assign(CodemanApp.prototype, {
    * @returns {Promise<boolean>} Whether dimensions changed from the last send
    */
   async sendResize(sessionId, options = {}) {
+    // Fit terminal to container before reading dimensions — ensures local
+    // terminal size matches what we report to the server PTY.
+    if (this.fitAddon) this.fitAddon.fit();
     // One PTY cannot hold two sizes. A detached session is owned by its own
     // window, and the dashboard's terminal is narrower than that window because
     // the session rail takes width the popup does not have — so both sizing it
     // makes the CLI draw frames that fit neither, which garbles the popup. The
     // dashboard yields; the solo window sizes what it alone displays.
     // (_maybeRefetchFullHistory already stands aside for the same reason.)
+    // ⚠️ AFTER the fit, never before: the local reflow keeps the dashboard's own
+    // xterm right, and only the SERVER write is the dashboard's to withhold —
+    // the mobile-keyboard guard below draws exactly this line. tab-rail-resize
+    // performs its one settle-time refit through this call and has no fallback.
     if (!this.isSoloWindow && this.detachedSessions?.has(sessionId)) return false;
-    // Fit terminal to container before reading dimensions — ensures local
-    // terminal size matches what we report to the server PTY.
-    if (this.fitAddon) this.fitAddon.fit();
     const dims = this.getTerminalDimensions();
     if (!dims) return false;
     // Did the dimensions actually change since the last resize we sent? Callers

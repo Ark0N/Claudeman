@@ -1332,7 +1332,11 @@ class CodemanApp {
     this._redock(id);
   }
 
-  /** Clear all dashboard-side detached state/timers for a session. */
+  /** Clear all dashboard-side detached state/timers for a session, and take its
+   *  sizing back: the popup owned the pane while it was open, so the dashboard's
+   *  record of it is stale and the session it is showing needs re-measuring.
+   *  ⚠️ Not idempotent — each call re-asserts, so a path that redocks twice for
+   *  one close sends two SIGWINCHs. */
   _redock(id) {
     const t = this._detachWatchTimers.get(id);
     if (t) { clearInterval(t); this._detachWatchTimers.delete(id); }
@@ -1340,12 +1344,19 @@ class CodemanApp {
     this._detachOrphanStrikes.delete(id);
     this.detachedWindows.delete(id);
     this._markDetached(id, false);
-    // Sizing comes back with the session. While the popup owned it the dashboard
-    // sent no resizes, so the PTY still holds the popup's geometry; the session
-    // this window is actually showing has to be re-sized to this window, and
-    // `force` is required because the dimensions the dashboard last sent are
-    // the ones it is about to send again.
-    if (id === this.activeSessionId) {
+    // While the popup owned this session the dashboard sent no resizes, so
+    // `_lastResizeDims` — one value for the whole window — no longer describes
+    // the PTY, which the popup has been sizing. Clearing it makes the next
+    // sendResize report truthfully, on every redock path rather than only the
+    // active one: `selectSession` reads that answer to decide whether to wait
+    // for the TUI's redraw, and a false "unchanged" makes it fetch the frame
+    // before the redraw lands.
+    this._lastResizeDims = null;
+    // Sizing comes back with the session. `force` buys a guaranteed repaint for
+    // the case where popup and dashboard happened to agree on a size; the server
+    // already resizes on its own comparison against the real pane whenever the
+    // two differ.
+    if (this.sessions.has(id) && id === this.activeSessionId) {
       this.sendResize(id, { force: true })?.catch?.(() => {});
     }
   }
