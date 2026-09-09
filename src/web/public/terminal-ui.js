@@ -514,6 +514,10 @@ Object.assign(CodemanApp.prototype, {
     } else {
       this.fitAddon.fit();
     }
+    // That first fit measures whatever font the browser has painted with so far,
+    // which is not necessarily the terminal font. Start the wait now so the
+    // buffer load can hold for it.
+    this._terminalFontReady = this._awaitTerminalFont();
 
     // Register link provider for clickable file paths in Bash tool output
     this.registerFilePathLinkProvider();
@@ -4806,6 +4810,37 @@ Object.assign(CodemanApp.prototype, {
    * Prevents extremely narrow terminals that cause vertical text wrapping.
    * @returns {{cols: number, rows: number}|null}
    */
+  /**
+   * Resolve once the terminal's own font is loaded and measurable.
+   *
+   * A character cell measured against a fallback font has a different width and
+   * height from one measured against the terminal font, so a fit taken too early
+   * produces the wrong column and row count. The correction then arrives after
+   * the buffer has been replayed, and the CLI redraws a frame that no longer
+   * matches what the terminal is showing.
+   *
+   * `document.fonts.ready` is not enough on its own: it can resolve before the
+   * stylesheet declaring @font-face has even been parsed. `document.fonts.load`
+   * for each family in the stack is what actually requests the faces, so this
+   * asks for those first and only then waits for the document to go quiet.
+   * Every step is best-effort — a font that never loads must not block the
+   * terminal, so this always resolves.
+   */
+  async _awaitTerminalFont() {
+    try {
+      if (typeof document === 'undefined' || !document.fonts?.load) return;
+      const size = this.terminal?.options?.fontSize || 14;
+      const families = String(this.terminal?.options?.fontFamily || '')
+        .split(',')
+        .map((family) => family.trim())
+        .filter(Boolean);
+      await Promise.all(families.map((family) => document.fonts.load(`${size}px ${family}`).catch(() => {})));
+      await document.fonts.ready;
+    } catch {
+      /* font loading is unavailable or failed — fit against whatever is painted */
+    }
+  },
+
   getTerminalDimensions() {
     const MIN_COLS = 40;
     const MIN_ROWS = 10;
