@@ -851,6 +851,33 @@ describe('session-routes', () => {
       );
     });
 
+    it('full reload (?full=1) keeps every leading row so the restored cursor lands on the right line', async () => {
+      // The capture ends with an absolute cursor move, so its rows and the pane's
+      // rows must line up one for one. Three transforms used to run over it and
+      // each could delete a leading line: redraw-bloat stripping, the trim that
+      // cuts everything above the Claude banner, and a leading-whitespace strip.
+      // Any one of them shifted the frame up and left the caret a row off.
+      harness.ctx._session.mode = 'claude';
+      harness.ctx._session.terminalBuffer = '';
+      // A blank first row, then the banner — the shape a real pane has.
+      const rendered = ['', '\x1b[1mClaude Code v2.1.266', 'conversation', '\u276f ', '\x1b[4;3H'].join('\r\n');
+      (harness.ctx.mux as { captureActivePaneBuffer?: unknown }).captureActivePaneBuffer = vi.fn(
+        (_name: string, opts?: { fullHistory?: boolean }) => (opts?.fullHistory ? rendered : 'visible frame')
+      );
+
+      const res = await harness.app.inject({
+        method: 'GET',
+        url: `/api/sessions/${harness.ctx._sessionId}/terminal?full=1`,
+      });
+
+      expect(res.statusCode).toBe(200);
+      const body = JSON.parse(res.body);
+      expect(body.data.source).toBe('mux-full-history');
+      // The blank first row survives, so row N of the reply is row N of the pane.
+      expect(body.data.terminalBuffer.startsWith('\r\n')).toBe(true);
+      expect(body.data.terminalBuffer.split('\r\n')).toHaveLength(rendered.split('\r\n').length);
+    });
+
     it('full reload (?full=1) falls back to the byte history when the capture is unavailable', async () => {
       harness.ctx._session.mode = 'claude';
       harness.ctx._session.terminalBuffer = 'byte history survives';

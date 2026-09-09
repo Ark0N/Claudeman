@@ -3262,18 +3262,19 @@ export class TmuxManager extends EventEmitter implements TerminalMultiplexer {
         execOpts.maxBuffer =
           (opts?.maxCaptureBytes ?? DEFAULT_TERMINAL_BUFFER_MAX_BYTES) + FULL_HISTORY_CAPTURE_SLACK_BYTES;
       }
-      const buffer = execSync(`${this.tmux()} ${captureFlags} -t ${shellescape(target)}`, execOpts).replace(
-        /\n+$/g,
-        ''
-      );
+      const rawCapture = execSync(`${this.tmux()} ${captureFlags} -t ${shellescape(target)}`, execOpts);
+      // The visible path drops every trailing blank row, which is harmless there
+      // because it repaints each row at an absolute position afterwards. The
+      // full-history path replays linearly, so its trailing blank rows are the
+      // real bottom of the screen and dropping them would move every row up and
+      // leave the restored cursor pointing at the wrong line. Take off the last
+      // line terminator only.
+      const buffer = fullHistory ? rawCapture.replace(/\n$/, '') : rawCapture.replace(/\n+$/g, '');
       // Full-history spans many screens — return it as raw linear scrollback
       // rather than repainting rows at single-screen absolute positions. tmux
       // joins scrollback rows with a bare `\n`; normalize to `\r\n` so a fresh
       // xterm (convertEol:false) starts each replayed line at column 0 instead
       // of staircasing diagonally (COD-138).
-      if (fullHistory) {
-        return normalizeScrollbackEol(buffer);
-      }
       try {
         const cursor = execSync(
           `${this.tmux()} display-message -p -t ${shellescape(target)} '#{cursor_x} #{cursor_y} #{pane_width} #{pane_height}'`,
@@ -3283,6 +3284,20 @@ export class TmuxManager extends EventEmitter implements TerminalMultiplexer {
           }
         ).trim();
         const [cursorX, cursorY, cols, rows] = cursor.split(/\s+/).map((value) => parseInt(value, 10));
+        // Put the cursor back where the pane has it. A linear replay leaves it
+        // wherever the last character landed, which is the bottom-most row
+        // carrying text — the status line, for an agent CLI. The caret then sits
+        // there until the CLI's next redraw moves it, and every cursor-relative
+        // update the CLI sends until then is measured from the wrong row.
+        // Absolute addressing is safe because the replay ends with the pane's
+        // own last row at the bottom of the viewport.
+        if (fullHistory) {
+          const normalized = normalizeScrollbackEol(buffer);
+          if (Number.isFinite(cursorX) && Number.isFinite(cursorY) && cursorX >= 0 && cursorY >= 0) {
+            return `${normalized}\x1b[${cursorY + 1};${cursorX + 1}H`;
+          }
+          return normalized;
+        }
         if (
           Number.isFinite(cursorX) &&
           Number.isFinite(cursorY) &&
@@ -3297,6 +3312,7 @@ export class TmuxManager extends EventEmitter implements TerminalMultiplexer {
         }
       } catch (cursorErr) {
         console.error('[TmuxManager] Failed to query pane cursor after capture:', cursorErr);
+        if (fullHistory) return normalizeScrollbackEol(buffer);
       }
       // Cursor query failed or geometry was invalid, so we skip the absolute-
       // positioned snapshot repaint and fall back to the raw capture. Normalize
