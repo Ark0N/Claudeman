@@ -1340,6 +1340,14 @@ class CodemanApp {
     this._detachOrphanStrikes.delete(id);
     this.detachedWindows.delete(id);
     this._markDetached(id, false);
+    // Sizing comes back with the session. While the popup owned it the dashboard
+    // sent no resizes, so the PTY still holds the popup's geometry; the session
+    // this window is actually showing has to be re-sized to this window, and
+    // `force` is required because the dimensions the dashboard last sent are
+    // the ones it is about to send again.
+    if (id === this.activeSessionId) {
+      this.sendResize(id, { force: true })?.catch?.(() => {});
+    }
   }
 
   /** Defer a channel-driven redock briefly. A popup *reload* emits 'redocked'

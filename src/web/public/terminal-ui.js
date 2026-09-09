@@ -935,7 +935,10 @@ Object.assign(CodemanApp.prototype, {
         // causes Ink to re-render at the new row count, garbling terminal output.
         // Local fit() still runs so xterm knows the viewport size for scrolling.
         const keyboardUp = typeof KeyboardHandler !== 'undefined' && KeyboardHandler.keyboardVisible;
-        if (this.activeSessionId && !keyboardUp) {
+        // Same yield as sendResize: never resize a PTY whose session is showing
+        // in its own window. Dragging the dashboard's border must not reshape it.
+        const detachedElsewhere = !this.isSoloWindow && this.detachedSessions?.has(this.activeSessionId);
+        if (this.activeSessionId && !keyboardUp && !detachedElsewhere) {
           const dims = this.fitAddon.proposeDimensions();
           // Enforce minimum dimensions to prevent layout issues
           const cols = dims ? Math.max(dims.cols, MIN_COLS) : MIN_COLS;
@@ -4824,6 +4827,13 @@ Object.assign(CodemanApp.prototype, {
    * @returns {Promise<boolean>} Whether dimensions changed from the last send
    */
   async sendResize(sessionId, options = {}) {
+    // One PTY cannot hold two sizes. A detached session is owned by its own
+    // window, and the dashboard's terminal is narrower than that window because
+    // the session rail takes width the popup does not have — so both sizing it
+    // makes the CLI draw frames that fit neither, which garbles the popup. The
+    // dashboard yields; the solo window sizes what it alone displays.
+    // (_maybeRefetchFullHistory already stands aside for the same reason.)
+    if (!this.isSoloWindow && this.detachedSessions?.has(sessionId)) return false;
     // Fit terminal to container before reading dimensions — ensures local
     // terminal size matches what we report to the server PTY.
     if (this.fitAddon) this.fitAddon.fit();
