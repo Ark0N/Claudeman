@@ -878,6 +878,58 @@ describe('session-routes', () => {
       expect(body.data.terminalBuffer.split('\r\n')).toHaveLength(rendered.split('\r\n').length);
     });
 
+    it('full reload (?full=1) still strips the byte history when no capture came back', async () => {
+      // The row-preserving skips exist for a rendered pane. When the capture is
+      // unavailable the reply IS the byte stream — successive Ink frames, no row
+      // alignment to protect — so keying the skips on the query parameter rather
+      // than on the capture returned it unstripped, which is the whole reason
+      // stripInkRedrawBloat exists. A session with no mux takes this path on
+      // every first selection, not just during an outage.
+      harness.ctx._session.mode = 'claude';
+      // A VPA cluster the stripper will collapse: >= 10 sequences, spanning the
+      // 32KB minimum, with real content after it.
+      const frame = '\x1b[12d' + 'spinner frame '.repeat(240);
+      harness.ctx._session.terminalBuffer = frame.repeat(20) + 'REAL CONTENT AFTER THE BLOAT';
+      (harness.ctx.mux as { captureActivePaneBuffer?: unknown }).captureActivePaneBuffer = vi.fn(() => null);
+
+      const res = await harness.app.inject({
+        method: 'GET',
+        url: `/api/sessions/${harness.ctx._sessionId}/terminal?full=1`,
+      });
+
+      expect(res.statusCode).toBe(200);
+      const body = JSON.parse(res.body);
+      expect(body.data.source).toBe('history');
+      expect(body.data.terminalBuffer).toContain('REAL CONTENT AFTER THE BLOAT');
+      // Stripped, not passed through whole.
+      expect(body.data.terminalBuffer.length).toBeLessThan(harness.ctx._session.terminalBuffer.length);
+    });
+
+    it('full reload (?full=1) keeps the byte history when the capture is empty', async () => {
+      // Pins the contract the capture side relies on: an empty capture means
+      // "nothing to replay" and the byte history survives. capturePaneBuffer
+      // returns '' for an all-blank pane precisely to reach this branch, since
+      // retaining trailing blank rows and appending a cursor move would
+      // otherwise make a blank screen non-empty and replace the history with it.
+      // (The blank-pane decision itself is unit-tested on hasVisibleContent —
+      // capturePaneBuffer short-circuits under IS_TEST_MODE and cannot run here.)
+      harness.ctx._session.mode = 'claude';
+      harness.ctx._session.terminalBuffer = 'a real conversation worth keeping';
+      (harness.ctx.mux as { captureActivePaneBuffer?: unknown }).captureActivePaneBuffer = vi.fn(
+        (_name: string, opts?: { fullHistory?: boolean }) => (opts?.fullHistory ? '' : 'visible frame')
+      );
+
+      const res = await harness.app.inject({
+        method: 'GET',
+        url: `/api/sessions/${harness.ctx._sessionId}/terminal?full=1`,
+      });
+
+      expect(res.statusCode).toBe(200);
+      const body = JSON.parse(res.body);
+      expect(body.data.source).toBe('history');
+      expect(body.data.terminalBuffer).toContain('a real conversation worth keeping');
+    });
+
     it('full reload (?full=1) falls back to the byte history when the capture is unavailable', async () => {
       harness.ctx._session.mode = 'claude';
       harness.ctx._session.terminalBuffer = 'byte history survives';
